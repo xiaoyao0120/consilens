@@ -10,6 +10,10 @@ import picocli.CommandLine.Command;
     description = "AI-assisted configuration, explanation and diagnosis commands",
     mixinStandardHelpOptions = true,
     subcommands = {
+        AiPlanCommand.class,
+        AiRunCommand.class,
+        AiRepairCommand.class,
+        AiShellCommand.class,
         AiConfigCommand.class,
         AiExplainCommand.class,
         AiDiagnoseCommand.class,
