@@ -2,8 +2,12 @@ package com.consilens.cli.command;
 
 import com.consilens.cli.ai.AIBackendOptions;
 import com.consilens.cli.ai.AIConfigRequest;
+import com.consilens.ai.execution.model.ConfigGenerationRequest;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Shared options for AI commands that generate a Consilens config draft.
@@ -155,5 +159,80 @@ class AIConfigCliOptions {
                         .noLlm(noLlm)
                         .build())
                 .build();
+    }
+
+    ConfigGenerationRequest toConfigGenerationRequest(String sessionId) {
+        ConfigGenerationRequest.ConfigGenerationRequestBuilder builder = ConfigGenerationRequest.builder()
+                .sessionId(sessionId)
+                .goal(goal);
+        hints().forEach(builder::hint);
+        return builder.build();
+    }
+
+    boolean hasGenerationInput() {
+        return goal != null
+                || sourceType != null
+                || sourceUrl != null
+                || sourceTable != null
+                || sourceQuery != null
+                || targetType != null
+                || targetUrl != null
+                || targetTable != null
+                || targetQuery != null
+                || keys != null
+                || sourceKeys != null
+                || targetKeys != null
+                || fields != null
+                || sourceFields != null
+                || targetFields != null;
+    }
+
+    private List<String> hints() {
+        List<String> hints = new ArrayList<>();
+        addHint(hints, "backend", backend);
+        addHint(hints, "model", model);
+        addHint(hints, "baseUrl", baseUrl);
+        addHint(hints, "apiKey", apiKey);
+        addHint(hints, "timeout", timeout);
+        addHint(hints, "temperature", temperature);
+        addHint(hints, "maxTokens", maxTokens);
+        addHint(hints, "noLlm", noLlm);
+        addHint(hints, "sourceType", sourceType);
+        addHint(hints, "sourceUrl", sourceUrl);
+        addHint(hints, "sourceName", sourceName);
+        addHint(hints, "sourceTable", sourceTable);
+        addHint(hints, "sourceQuery", sourceQuery);
+        addHint(hints, "sourceUserEnv", sourceUserEnv);
+        addHint(hints, "sourcePasswordEnv", sourcePasswordEnv);
+        addHint(hints, "targetType", targetType);
+        addHint(hints, "targetUrl", targetUrl);
+        addHint(hints, "targetName", targetName);
+        addHint(hints, "targetTable", targetTable);
+        addHint(hints, "targetQuery", targetQuery);
+        addHint(hints, "targetUserEnv", targetUserEnv);
+        addHint(hints, "targetPasswordEnv", targetPasswordEnv);
+        addHint(hints, "keys", keys);
+        addHint(hints, "sourceKeys", sourceKeys);
+        addHint(hints, "targetKeys", targetKeys);
+        addHint(hints, "fields", fields);
+        addHint(hints, "sourceFields", sourceFields);
+        addHint(hints, "targetFields", targetFields);
+        addHint(hints, "strategyMode", strategyMode);
+        addHint(hints, "algorithm", algorithm);
+        addHint(hints, "bisectionFactor", bisectionFactor);
+        addHint(hints, "bisectionThreshold", bisectionThreshold);
+        addHint(hints, "batchSize", batchSize);
+        addHint(hints, "maxDifferences", maxDifferences);
+        return hints;
+    }
+
+    private void addHint(List<String> hints, String key, Object value) {
+        if (value == null) {
+            return;
+        }
+        if (value instanceof String && ((String) value).trim().isEmpty()) {
+            return;
+        }
+        hints.add(key + "=" + value);
     }
 }
