@@ -12,6 +12,8 @@ public final class AiRuntimeContextKeys {
     public static final String APPROVAL_MODE = "approvalMode";
     public static final String EVIDENCE_PATH = "evidencePath";
     public static final String ANALYZER = "analyzer";
+    public static final String CONFIG_PATH = "configPath";
+    public static final String INLINE_OUTPUT = "inlineOutput";
 
     private AiRuntimeContextKeys() {
     }

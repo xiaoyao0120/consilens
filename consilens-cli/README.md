@@ -108,16 +108,21 @@ consilens <command> [options]
 ### `ai`
 
 ```
-./bin/consilens-cli.sh ai config "compare orders" [选项]
-./bin/consilens-cli.sh ai explain -c my-config.yaml
+./bin/consilens-cli.sh ai config "compare orders" -o ai-config.yaml [选项]
 ./bin/consilens-cli.sh ai diff "compare orders" -o ai-diff.yaml [选项]
+./bin/consilens-cli.sh ai diff --execute --approve-execute "compare orders" [选项]
+./bin/consilens-cli.sh ai run --session ai-demo --approve-execute
+./bin/consilens-cli.sh ai repair --session ai-demo -o repaired.yaml
+./bin/consilens-cli.sh ai explain -c my-config.yaml
 ./bin/consilens-cli.sh ai diagnose --result diff-records.json --analyzer rulebased --output diagnose.md
+./bin/consilens-cli.sh ai memories --session ai-demo
+./bin/consilens-cli.sh ai shell --session ai-demo
 ./bin/consilens-cli.sh ai providers
 ./bin/consilens-cli.sh ai providers --format json
 ./bin/consilens-cli.sh ai doctor --format json
 ```
 
-`ai config` 和 `ai diff` 只生成并验证配置，真实对比仍通过 `diff -c <file>` 显式执行。`ai diagnose` 需要 `json` + `diff-record` 输出文件，只有统计摘要的 result JSON 不包含行级证据，无法诊断。诊断 analyzer 通过 SPI 加载，可使用 `--analyzer` 或 `CONSILENS_AI_ANALYZER` 指定，默认是 `rulebased`；使用 `--output` 可将诊断报告写入文件。`ai providers` 用于确认运行时 classpath 中实际发现了哪些 analyzer 和 LLM backend 插件，并支持 `--format json` 供 CI 和脚本读取。`ai doctor` 用于生产前置检查，默认离线检查 provider、analyzer/backend 创建和云后端密钥配置；需要真实连通性时显式加 `--online`。
+`ai config` 和 `ai diff -o` 用于生成并验证配置；需要直接执行闭环时可使用 `ai diff --execute` 或在已有 session 上使用 `ai run --session ... --approve-execute`。`ai repair` 会基于当前 session 的最新 diagnosis 重新生成修复后的配置，`ai memories` 用于查看持久化的非敏感运行记忆，`ai shell` 提供 `/plan`、`/run`、`/diagnose`、`/repair`、`/explain`、`/memories` 等交互命令。`ai diagnose` 需要 `json` + `diff-record` 输出文件，只有统计摘要的 result JSON 不包含行级证据，无法诊断。诊断 analyzer 通过 SPI 加载，可使用 `--analyzer` 或 `CONSILENS_AI_ANALYZER` 指定，默认是 `rulebased`；使用 `--output` 可将诊断报告写入文件。`ai providers` 用于确认运行时 classpath 中实际发现了哪些 analyzer 和 LLM backend 插件，并支持 `--format json` 供 CI 和脚本读取。`ai doctor` 用于生产前置检查，默认离线检查 provider、analyzer/backend 创建和云后端密钥配置；需要真实连通性时显式加 `--online`。
 
 ## 配置文件格式
 

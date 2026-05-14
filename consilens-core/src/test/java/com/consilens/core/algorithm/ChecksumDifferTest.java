@@ -23,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -174,7 +175,7 @@ class ChecksumDifferTest {
 
                         // When
                         CompletableFuture<DiffResult> future = differ.diffTables(segment1, segment2);
-                        DiffResult result = future.get();
+                        DiffResult result = future.get(5, TimeUnit.SECONDS);
 
                         // Then
                         assertNotNull(result);

@@ -50,17 +50,18 @@ public class RangeSegmentStrategy implements SegmentStrategy {
 
     @Override
     public CompletableFuture<List<TableSegment>> segment(TableSegment table, int maxSegments, Executor executor) {
-        return CompletableFuture.supplyAsync(() -> {
-            if (!supports(table)) {
-                throw new IllegalStateException("Table segment is not compatible with range segmentation");
-            }
+        if (!supports(table)) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("Table segment is not compatible with range segmentation"));
+        }
 
-            log.info("All key columns are numeric, using range-based segmentation");
-            List<TableSegment> segments = intelligentSegmenter.segmentTable(table, maxSegments, executor).join();
-            SegmentStatistics stats = intelligentSegmenter.getSegmentStatistics(segments);
-            log.info("Range-based segmentation completed: {}", stats.getSummary());
-            return segments;
-        }, executor);
+        log.info("All key columns are numeric, using range-based segmentation");
+        return intelligentSegmenter.segmentTable(table, maxSegments, executor)
+                .thenApply(segments -> {
+                    SegmentStatistics stats = intelligentSegmenter.getSegmentStatistics(segments);
+                    log.info("Range-based segmentation completed: {}", stats.getSummary());
+                    return segments;
+                });
     }
 
     private KeyVector extractKeyVector(Object keyObject) {

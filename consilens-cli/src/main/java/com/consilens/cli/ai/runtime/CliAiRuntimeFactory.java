@@ -24,13 +24,13 @@ public class CliAiRuntimeFactory {
         DefaultDiffCapability diffCapability = new DefaultDiffCapability(artifactStore, paths);
         DefaultDiagnoseCapability diagnoseCapability = new DefaultDiagnoseCapability(null);
         DefaultTaskRegistry taskRegistry = new DefaultTaskRegistry(
-                new PlanConfigTask(configCapability, sessionStore, artifactStore),
+                new PlanConfigTask(configCapability, sessionStore, artifactStore, memoryStore),
                 new RunDiffTask(configCapability, diffCapability, diagnoseCapability, new DefaultExecutionApprovalService(),
-                        sessionStore, artifactStore),
-                new DiagnoseTask(diagnoseCapability, sessionStore, artifactStore),
-                new RepairTask(sessionStore, artifactStore),
-                new ExplainTask(configCapability, sessionStore, artifactStore),
-                new DoctorTask(sessionStore, artifactStore)
+                        sessionStore, artifactStore, memoryStore),
+                new DiagnoseTask(diagnoseCapability, sessionStore, artifactStore, memoryStore),
+                new RepairTask(configCapability, sessionStore, artifactStore, memoryStore),
+                new ExplainTask(configCapability, sessionStore, artifactStore, memoryStore),
+                new DoctorTask(sessionStore, artifactStore, memoryStore)
         );
         return new AiConversationOrchestrator(new DefaultIntentRouter(), taskRegistry, sessionStore);
     }

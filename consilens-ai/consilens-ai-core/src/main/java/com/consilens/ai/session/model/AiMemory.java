@@ -18,7 +18,9 @@ public class AiMemory {
     String memoryId;
     String type;
     String content;
-    Instant createdAt;
+    String source;
+    @Builder.Default
+    Instant createdAt = Instant.EPOCH;
 
     @JsonPOJOBuilder(withPrefix = "")
     public static class AiMemoryBuilder {

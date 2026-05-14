@@ -1,20 +1,20 @@
 package com.consilens.cli.command;
 
-import com.consilens.ai.spi.AIAnalyzerManager;
-import com.consilens.cli.ai.AIDiagnoseService;
-import lombok.extern.slf4j.Slf4j;
+import com.consilens.ai.runtime.model.AiConsoleCommand;
+import com.consilens.ai.runtime.model.AiTaskContext;
+import com.consilens.ai.runtime.model.AiTurnResult;
+import com.consilens.ai.runtime.orchestrator.AiConversationRuntime;
+import com.consilens.cli.ai.runtime.AiRuntimeContextKeys;
+import com.consilens.cli.ai.runtime.CliAiRuntimeFactory;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.concurrent.Callable;
-import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Diagnoses existing diff evidence with deterministic rule-based analysis.
  */
-@Slf4j
 @Command(
     name = "diagnose",
     description = "Diagnose an existing diff result or diff-record JSON file",
@@ -24,7 +24,7 @@ public class AiDiagnoseCommand implements Callable<Integer> {
 
     private static final String DEFAULT_ANALYZER = "rulebased";
 
-    private final Function<String, AIDiagnoseService> diagnoseServiceFactory;
+    private final Supplier<AiConversationRuntime> runtimeSupplier;
 
     @Option(names = "--result", required = true, description = "Path to DiffResult JSON or diff-record JSON array")
     private String resultPath;
@@ -35,34 +35,31 @@ public class AiDiagnoseCommand implements Callable<Integer> {
     @Option(names = {"-o", "--output"}, description = "Write diagnosis report to a file instead of stdout")
     private String output;
 
+    @Option(names = "--session", description = "AI session ID to reuse")
+    private String sessionId;
+
     public AiDiagnoseCommand() {
-        this(name -> new AIDiagnoseService(AIAnalyzerManager.getInstance().create(name)));
+        this(() -> new CliAiRuntimeFactory().create());
     }
 
-    AiDiagnoseCommand(Function<String, AIDiagnoseService> diagnoseServiceFactory) {
-        this.diagnoseServiceFactory = diagnoseServiceFactory;
+    AiDiagnoseCommand(Supplier<AiConversationRuntime> runtimeSupplier) {
+        this.runtimeSupplier = runtimeSupplier;
     }
 
     @Override
     public Integer call() {
-        try {
-            String report = diagnoseServiceFactory.apply(resolveAnalyzer()).diagnose(resultPath);
-            if (output == null || output.isBlank()) {
-                System.out.print(report);
-            } else {
-                Path outputPath = Path.of(output).toAbsolutePath().normalize();
-                if (outputPath.getParent() != null) {
-                    Files.createDirectories(outputPath.getParent());
-                }
-                Files.writeString(outputPath, report);
-                System.out.println("[AI DIAGNOSE] report=" + outputPath);
-            }
-            return 0;
-        } catch (Exception e) {
-            log.error("AI diagnose failed", e);
-            System.err.println("[AI DIAGNOSE ERROR] " + e.getMessage());
-            return 1;
-        }
+        String effectiveSessionId = AiRuntimeCommandSupport.effectiveSessionId(sessionId);
+        AiTurnResult result = runtimeSupplier.get().executeCommand(
+                effectiveSessionId,
+                AiTaskContext.builder()
+                        .command(AiConsoleCommand.builder().name("diagnose").argument(resultPath).build())
+                        .attribute(AiRuntimeContextKeys.EVIDENCE_PATH, resultPath)
+                        .attribute(AiRuntimeContextKeys.ANALYZER, resolveAnalyzer())
+                        .attribute(AiRuntimeContextKeys.OUTPUT_PATH, output)
+                        .attribute(AiRuntimeContextKeys.INLINE_OUTPUT, output == null || output.isBlank())
+                        .build());
+        AiRuntimeCommandSupport.print(effectiveSessionId, result);
+        return AiRuntimeCommandSupport.exitCode(result);
     }
 
     private String resolveAnalyzer() {
