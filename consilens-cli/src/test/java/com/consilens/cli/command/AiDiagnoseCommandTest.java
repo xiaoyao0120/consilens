@@ -1,9 +1,9 @@
 package com.consilens.cli.command;
 
-import com.consilens.ai.model.AnalysisResult;
-import com.consilens.ai.spi.AIAnalyzer;
-import com.consilens.cli.ai.AIDiagnoseService;
-import com.consilens.core.diff.DiffResult;
+import com.consilens.ai.runtime.model.AiSessionSnapshot;
+import com.consilens.ai.runtime.model.AiTaskContext;
+import com.consilens.ai.runtime.model.AiTurnResult;
+import com.consilens.ai.runtime.orchestrator.AiConversationRuntime;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import picocli.CommandLine;
@@ -53,15 +53,26 @@ class AiDiagnoseCommandTest {
         AtomicReference<String> analyzer = new AtomicReference<>();
         AtomicReference<String> resultPath = new AtomicReference<>();
 
-        int exitCode = new CommandLine(new AiDiagnoseCommand(name -> {
-            analyzer.set(name);
-            return new AIDiagnoseService(new TestAnalyzer()) {
-                @Override
-                public String diagnose(String path) {
-                    resultPath.set(path);
-                    return "diagnosed";
-                }
-            };
+        int exitCode = new CommandLine(new AiDiagnoseCommand(() -> new AiConversationRuntime() {
+            @Override
+            public AiTurnResult handleUserInput(String sessionId, String input) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public AiTurnResult executeCommand(String sessionId, AiTaskContext taskContext) {
+                analyzer.set(taskContext.attribute("analyzer", String.class));
+                resultPath.set(taskContext.attribute("evidencePath", String.class));
+                return AiTurnResult.builder()
+                        .status(AiTurnResult.Status.COMPLETED)
+                        .message("diagnosed")
+                        .build();
+            }
+
+            @Override
+            public AiSessionSnapshot snapshot(String sessionId) {
+                throw new UnsupportedOperationException();
+            }
         })).execute("--result", "diff.json", "--analyzer", "custom");
 
         assertEquals(0, exitCode);
@@ -73,14 +84,25 @@ class AiDiagnoseCommandTest {
     void shouldUseRuleBasedAnalyzerByDefault() {
         AtomicReference<String> analyzer = new AtomicReference<>();
 
-        int exitCode = new CommandLine(new AiDiagnoseCommand(name -> {
-            analyzer.set(name);
-            return new AIDiagnoseService(new TestAnalyzer()) {
-                @Override
-                public String diagnose(String path) {
-                    return "diagnosed";
-                }
-            };
+        int exitCode = new CommandLine(new AiDiagnoseCommand(() -> new AiConversationRuntime() {
+            @Override
+            public AiTurnResult handleUserInput(String sessionId, String input) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public AiTurnResult executeCommand(String sessionId, AiTaskContext taskContext) {
+                analyzer.set(taskContext.attribute("analyzer", String.class));
+                return AiTurnResult.builder()
+                        .status(AiTurnResult.Status.COMPLETED)
+                        .message("diagnosed")
+                        .build();
+            }
+
+            @Override
+            public AiSessionSnapshot snapshot(String sessionId) {
+                throw new UnsupportedOperationException();
+            }
         })).execute("--result", "diff.json");
 
         assertEquals(0, exitCode);
@@ -91,38 +113,35 @@ class AiDiagnoseCommandTest {
     void shouldWriteDiagnosisReportToOutputFile() throws Exception {
         Path output = tempDir.resolve("reports/diagnose.md");
 
-        int exitCode = new CommandLine(new AiDiagnoseCommand(name -> new AIDiagnoseService(new TestAnalyzer()) {
+        int exitCode = new CommandLine(new AiDiagnoseCommand(() -> new AiConversationRuntime() {
             @Override
-            public String diagnose(String path) {
-                return "# report";
+            public AiTurnResult handleUserInput(String sessionId, String input) {
+                throw new UnsupportedOperationException();
+            }
+
+            @Override
+            public AiTurnResult executeCommand(String sessionId, AiTaskContext taskContext) {
+                try {
+                    Path requestedOutput = Path.of(taskContext.attribute("outputPath", String.class));
+                    Files.createDirectories(requestedOutput.getParent());
+                    Files.writeString(requestedOutput, "# report");
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+                return AiTurnResult.builder()
+                        .status(AiTurnResult.Status.COMPLETED)
+                        .message("diagnosed")
+                        .build();
+            }
+
+            @Override
+            public AiSessionSnapshot snapshot(String sessionId) {
+                throw new UnsupportedOperationException();
             }
         })).execute("--result", "diff.json", "--output", output.toString());
 
         assertEquals(0, exitCode);
         assertTrue(Files.exists(output));
         assertEquals("# report", Files.readString(output));
-    }
-
-    private static class TestAnalyzer implements AIAnalyzer {
-
-        @Override
-        public AnalysisResult analyze(DiffResult diffResult) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public String explainResult(DiffResult diffResult) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public String getName() {
-            return "test";
-        }
-
-        @Override
-        public boolean isAvailable() {
-            return true;
-        }
     }
 }

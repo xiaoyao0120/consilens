@@ -6,6 +6,7 @@ import com.consilens.ai.runtime.model.AiTurnResult;
 import com.consilens.ai.runtime.task.AiTask;
 import com.consilens.ai.runtime.task.AiTaskType;
 import com.consilens.ai.session.AiArtifactStore;
+import com.consilens.ai.session.AiMemoryStore;
 import com.consilens.ai.session.AiSessionStore;
 
 /**
@@ -14,7 +15,11 @@ import com.consilens.ai.session.AiSessionStore;
 public class DoctorTask extends AbstractAiTask implements AiTask {
 
     public DoctorTask(AiSessionStore sessionStore, AiArtifactStore artifactStore) {
-        super(sessionStore, artifactStore);
+        this(sessionStore, artifactStore, null);
+    }
+
+    public DoctorTask(AiSessionStore sessionStore, AiArtifactStore artifactStore, AiMemoryStore memoryStore) {
+        super(sessionStore, artifactStore, memoryStore);
     }
 
     @Override

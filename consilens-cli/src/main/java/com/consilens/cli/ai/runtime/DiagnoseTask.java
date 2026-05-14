@@ -9,9 +9,11 @@ import com.consilens.ai.runtime.model.AiTurnResult;
 import com.consilens.ai.runtime.task.AiTask;
 import com.consilens.ai.runtime.task.AiTaskType;
 import com.consilens.ai.session.AiArtifactStore;
+import com.consilens.ai.session.AiMemoryStore;
 import com.consilens.ai.session.AiSessionStore;
 import com.consilens.ai.session.model.ArtifactRef;
 import com.consilens.ai.session.model.ArtifactType;
+import com.consilens.cli.ai.DefaultDiagnoseCapability;
 
 import java.util.Map;
 
@@ -23,7 +25,14 @@ public class DiagnoseTask extends AbstractAiTask implements AiTask {
     private final DiagnoseCapability diagnoseCapability;
 
     public DiagnoseTask(DiagnoseCapability diagnoseCapability, AiSessionStore sessionStore, AiArtifactStore artifactStore) {
-        super(sessionStore, artifactStore);
+        this(diagnoseCapability, sessionStore, artifactStore, null);
+    }
+
+    public DiagnoseTask(DiagnoseCapability diagnoseCapability,
+                        AiSessionStore sessionStore,
+                        AiArtifactStore artifactStore,
+                        AiMemoryStore memoryStore) {
+        super(sessionStore, artifactStore, memoryStore);
         this.diagnoseCapability = diagnoseCapability;
     }
 
@@ -38,13 +47,15 @@ public class DiagnoseTask extends AbstractAiTask implements AiTask {
         if (evidenceRef == null) {
             return failure(type(), "No diff evidence found for diagnose.");
         }
-        DiagnoseReport report = diagnoseCapability.diagnose(evidenceRef);
+        DiagnoseCapability effectiveCapability = effectiveCapability(context);
+        DiagnoseReport report = effectiveCapability.diagnose(evidenceRef);
         String markdown = toMarkdown(report);
         ArtifactRef diagnosisArtifact = writeArtifact(
                 context.getSession().getSessionId(),
                 ArtifactType.DIAGNOSIS,
                 markdown,
                 Map.of("task", "diagnose", "evidenceArtifactId", evidenceRef.getArtifactId() == null ? "" : evidenceRef.getArtifactId()));
+        remember("diagnosis", report.getSummary(), "diagnose:" + context.getSession().getSessionId());
         writeOutput(outputPath(context), markdown);
         updateSession(context.getSession(), builder -> builder
                 .currentTask("diagnose")
@@ -54,11 +65,21 @@ public class DiagnoseTask extends AbstractAiTask implements AiTask {
                 .success(true)
                 .taskType(type())
                 .status(AiTurnResult.Status.COMPLETED)
-                .summary("Diagnosed latest diff evidence for session " + context.getSession().getSessionId()
+                .summary(inlineOutput(context)
+                        ? markdown
+                        : "Diagnosed latest diff evidence for session " + context.getSession().getSessionId()
                         + " diagnosis=" + diagnosisArtifact.getArtifactId()
                         + System.lineSeparator() + markdown)
                 .suggestedNextAction("repair")
                 .build();
+    }
+
+    private DiagnoseCapability effectiveCapability(AiTaskContext context) {
+        String analyzer = context.attribute(AiRuntimeContextKeys.ANALYZER, String.class);
+        if (analyzer == null || analyzer.isBlank()) {
+            return diagnoseCapability;
+        }
+        return new DefaultDiagnoseCapability(analyzer.trim());
     }
 
     private EvidenceRef resolveEvidence(AiTaskContext context) {

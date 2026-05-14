@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -41,7 +42,10 @@ public class FileAiMemoryStore implements AiMemoryStore {
         }
         try {
             return mapper.readValue(paths.memoriesFile().toFile(), new TypeReference<List<AiMemory>>() {
-            });
+            }).stream()
+                    .filter(Objects::nonNull)
+                    .map(this::normalize)
+                    .collect(Collectors.toList());
         } catch (IOException e) {
             throw new IllegalStateException("Failed to read AI memories", e);
         }
@@ -56,6 +60,7 @@ public class FileAiMemoryStore implements AiMemoryStore {
                 .memoryId("memory-" + UUID.randomUUID())
                 .type(candidate.getType())
                 .content(candidate.getContent().trim())
+                .source(candidate.getSource())
                 .createdAt(Instant.now())
                 .build();
         List<AiMemory> memories = new ArrayList<>(list());
@@ -78,5 +83,18 @@ public class FileAiMemoryStore implements AiMemoryStore {
         } catch (IOException e) {
             throw new IllegalStateException("Failed to write AI memories", e);
         }
+    }
+
+    private AiMemory normalize(AiMemory memory) {
+        if (memory.getCreatedAt() != null) {
+            return memory;
+        }
+        return AiMemory.builder()
+                .memoryId(memory.getMemoryId())
+                .type(memory.getType())
+                .content(memory.getContent())
+                .source(memory.getSource())
+                .createdAt(Instant.EPOCH)
+                .build();
     }
 }

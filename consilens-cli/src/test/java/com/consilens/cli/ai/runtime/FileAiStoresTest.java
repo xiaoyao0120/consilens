@@ -6,8 +6,11 @@ import com.consilens.ai.session.model.ArtifactType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -33,5 +36,19 @@ class FileAiStoresTest {
         assertEquals(artifact.getArtifactId(), artifactStore.latest("test-session", ArtifactType.CONFIG).orElseThrow().getArtifactId());
         assertArrayEquals("yaml".getBytes(StandardCharsets.UTF_8), artifactStore.read(artifact.getArtifactId()).orElseThrow());
         assertTrue(artifactStore.get(artifact.getArtifactId()).isPresent());
+    }
+
+    @Test
+    void shouldLoadLegacyMemoriesWithoutCreatedAt() throws Exception {
+        AiRuntimePaths paths = new AiRuntimePaths(tempDir.toString());
+        FileAiMemoryStore memoryStore = new FileAiMemoryStore(paths);
+        Files.createDirectories(paths.baseDir());
+        Files.writeString(paths.memoriesFile(),
+                "[{\"memoryId\":\"m1\",\"type\":\"goal\",\"content\":\"Compare users\",\"source\":\"plan:test-session\"}]");
+
+        List<com.consilens.ai.session.model.AiMemory> memories = memoryStore.list();
+
+        assertEquals(1, memories.size());
+        assertEquals(Instant.EPOCH, memories.get(0).getCreatedAt());
     }
 }

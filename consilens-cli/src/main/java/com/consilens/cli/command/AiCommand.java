@@ -14,6 +14,7 @@ import picocli.CommandLine.Command;
         AiRunCommand.class,
         AiRepairCommand.class,
         AiShellCommand.class,
+        AiMemoriesCommand.class,
         AiConfigCommand.class,
         AiExplainCommand.class,
         AiDiagnoseCommand.class,

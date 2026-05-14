@@ -1,86 +1,81 @@
 package com.consilens.cli.command;
 
-import com.consilens.ai.config.model.AIConfigIssue;
-import com.consilens.cli.ai.AIConfigResult;
-import com.consilens.cli.ai.AIConfigService;
-import lombok.extern.slf4j.Slf4j;
+import com.consilens.ai.runtime.approval.ApprovalMode;
+import com.consilens.ai.runtime.model.AiConsoleCommand;
+import com.consilens.ai.runtime.model.AiTaskContext;
+import com.consilens.ai.runtime.model.AiTurnResult;
+import com.consilens.ai.runtime.orchestrator.AiConversationRuntime;
+import com.consilens.cli.ai.runtime.AiRuntimeContextKeys;
+import com.consilens.cli.ai.runtime.CliAiRuntimeFactory;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Mixin;
 import picocli.CommandLine.Option;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.concurrent.Callable;
+import java.util.function.Supplier;
 
 /**
- * Safe AI diff entrypoint that generates a config, but does not execute real diff yet.
+ * AI diff entrypoint routed through the new runtime.
  */
-@Slf4j
 @Command(
     name = "diff",
-    description = "Generate a validated diff config from AI input without executing the real diff",
+    description = "Generate or execute a validated diff flow from AI input",
     mixinStandardHelpOptions = true
 )
 public class AiDiffCommand implements Callable<Integer> {
 
-    private final AIConfigService configService;
+    private final Supplier<AiConversationRuntime> runtimeSupplier;
 
     @Mixin
     private AIConfigCliOptions options = new AIConfigCliOptions();
 
-    @Option(names = {"-o", "--output"}, required = true, description = "Output YAML file")
+    @Option(names = {"-o", "--output"}, description = "Output YAML file")
     private String output;
 
-    @Option(names = "--execute", description = "Execute diff after generation. Not supported yet.")
+    @Option(names = "--execute", description = "Execute diff after generation through the new AI runtime")
     private boolean execute;
 
+    @Option(names = "--approve-execute", description = "Explicitly approve real diff execution when --execute is used")
+    private boolean approveExecute;
+
+    @Option(names = "--session", description = "AI session ID to reuse when --execute is used")
+    private String sessionId;
+
     public AiDiffCommand() {
-        this(new AIConfigService());
+        this(() -> new CliAiRuntimeFactory().create());
     }
 
-    AiDiffCommand(AIConfigService configService) {
-        this.configService = configService;
+    AiDiffCommand(Supplier<AiConversationRuntime> runtimeSupplier) {
+        this.runtimeSupplier = runtimeSupplier;
     }
 
     @Override
     public Integer call() {
+        String effectiveSessionId = AiRuntimeCommandSupport.effectiveSessionId(sessionId);
         if (execute) {
-            System.err.println("`consilens ai diff --execute` is not supported yet. Generate YAML first, then run `consilens diff -c <file>` explicitly.");
+            AiTurnResult result = runtimeSupplier.get().executeCommand(
+                    effectiveSessionId,
+                    AiTaskContext.builder()
+                            .command(AiConsoleCommand.builder().name("run").argument(options.goal).build())
+                            .attribute(AiRuntimeContextKeys.CONFIG_REQUEST, options.toConfigGenerationRequest(effectiveSessionId))
+                            .attribute(AiRuntimeContextKeys.APPROVE_EXECUTE, approveExecute)
+                            .attribute(AiRuntimeContextKeys.APPROVAL_MODE, ApprovalMode.EXPLICIT_FLAG)
+                            .build());
+            AiRuntimeCommandSupport.print(effectiveSessionId, result);
+            return AiRuntimeCommandSupport.exitCode(result);
+        }
+        if (output == null || output.isBlank()) {
+            System.err.println("`--output` is required unless `--execute` is used.");
             return 2;
         }
-        try {
-            AIConfigResult result = configService.generate(options.toRequest());
-            if (!result.isValid()) {
-                printIssues(result);
-                System.err.println("No file was written.");
-                return 1;
-            }
-            Path outputPath = Path.of(output).toAbsolutePath().normalize();
-            if (outputPath.getParent() != null) {
-                Files.createDirectories(outputPath.getParent());
-            }
-            Files.writeString(outputPath, result.getYaml());
-            System.out.println("[AI DIFF] generated=" + outputPath);
-            System.out.println("[AI DIFF] validation=passed");
-            System.out.println("Next:");
-            System.out.println("  consilens diff --dry-run -c " + outputPath);
-            System.out.println("  consilens diff -c " + outputPath);
-            return 0;
-        } catch (Exception e) {
-            log.error("AI diff config generation failed", e);
-            System.err.println("[AI DIFF ERROR] " + e.getMessage());
-            return 1;
-        }
-    }
-
-    private void printIssues(AIConfigResult result) {
-        System.err.println("[AI DIFF ERROR] validation failed");
-        if (result.getIssues() == null) {
-            return;
-        }
-        for (AIConfigIssue issue : result.getIssues()) {
-            System.err.printf("%s %s %s:%n  %s%n",
-                    issue.getSeverity(), issue.getCode(), issue.getPath(), issue.getMessage());
-        }
+        AiTurnResult result = runtimeSupplier.get().executeCommand(
+                effectiveSessionId,
+                AiTaskContext.builder()
+                        .command(AiConsoleCommand.builder().name("plan").argument(options.goal).build())
+                        .attribute(AiRuntimeContextKeys.CONFIG_REQUEST, options.toConfigGenerationRequest(effectiveSessionId))
+                        .attribute(AiRuntimeContextKeys.OUTPUT_PATH, output)
+                        .build());
+        AiRuntimeCommandSupport.print(effectiveSessionId, result);
+        return AiRuntimeCommandSupport.exitCode(result);
     }
 }

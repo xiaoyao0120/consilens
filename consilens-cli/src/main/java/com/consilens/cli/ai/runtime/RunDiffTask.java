@@ -18,6 +18,7 @@ import com.consilens.ai.runtime.model.AiTurnResult;
 import com.consilens.ai.runtime.task.AiTask;
 import com.consilens.ai.runtime.task.AiTaskType;
 import com.consilens.ai.session.AiArtifactStore;
+import com.consilens.ai.session.AiMemoryStore;
 import com.consilens.ai.session.AiSessionStore;
 import com.consilens.ai.session.model.AiSession;
 import com.consilens.ai.session.model.ArtifactRef;
@@ -41,7 +42,17 @@ public class RunDiffTask extends AbstractAiTask implements AiTask {
                        ExecutionApprovalService approvalService,
                        AiSessionStore sessionStore,
                        AiArtifactStore artifactStore) {
-        super(sessionStore, artifactStore);
+        this(configCapability, diffCapability, diagnoseCapability, approvalService, sessionStore, artifactStore, null);
+    }
+
+    public RunDiffTask(ConfigCapability configCapability,
+                       DiffCapability diffCapability,
+                       DiagnoseCapability diagnoseCapability,
+                       ExecutionApprovalService approvalService,
+                       AiSessionStore sessionStore,
+                       AiArtifactStore artifactStore,
+                       AiMemoryStore memoryStore) {
+        super(sessionStore, artifactStore, memoryStore);
         this.configCapability = configCapability;
         this.diffCapability = diffCapability;
         this.diagnoseCapability = diagnoseCapability;
@@ -110,6 +121,7 @@ public class RunDiffTask extends AbstractAiTask implements AiTask {
                 .latestRunArtifactId(executionReport.getResultArtifactId())
                 .latestDiagnosisArtifactId(diagnosisArtifact.getArtifactId())
                 .currentConfigArtifactId(configRef.getArtifactId()));
+        remember("diagnosis", diagnoseReport.getSummary(), "run:" + session.getSessionId());
 
         return AiTaskResult.builder()
                 .success(executionReport.isSuccess())
@@ -129,13 +141,17 @@ public class RunDiffTask extends AbstractAiTask implements AiTask {
     private ConfigRef resolveConfig(AiTaskContext context) {
         ConfigGenerationRequest request = configRequest(context).orElse(null);
         if (request != null) {
-            GeneratedConfig generated = configCapability.generate(request);
+            String originalGoal = request.getGoal();
+            ConfigGenerationRequest effectiveRequest = enrichWithMemories(request, context.getSession().getSessionId());
+            GeneratedConfig generated = configCapability.generate(effectiveRequest);
             ArtifactRef configArtifact = writeArtifact(
                     context.getSession().getSessionId(),
                     ArtifactType.CONFIG,
                     generated.getConfigRef().getContent(),
-                    Map.of("task", "run", "goal", request.getGoal() == null ? "" : request.getGoal()));
-            updateSession(context.getSession(), builder -> builder.currentConfigArtifactId(configArtifact.getArtifactId()));
+                    Map.of("task", "run", "goal", originalGoal == null ? "" : originalGoal));
+            updateSession(context.getSession(), builder -> builder
+                    .currentConfigArtifactId(configArtifact.getArtifactId())
+                    .title(originalGoal));
             return ConfigRef.builder()
                     .sessionId(context.getSession().getSessionId())
                     .artifactId(configArtifact.getArtifactId())
