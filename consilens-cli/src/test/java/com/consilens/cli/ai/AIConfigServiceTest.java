@@ -6,7 +6,6 @@ import com.consilens.ai.model.FunctionDefinition;
 import com.consilens.ai.model.LLMResponse;
 import com.consilens.ai.spi.LLMBackend;
 import com.consilens.cli.model.CliConfiguration;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -18,20 +17,40 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class AIConfigServiceTest {
 
     @Test
-    void shouldGenerateConfigFromStructuredLlmJsonWhenHintsAreMissing() {
-        String json = "{"
-                + "\"source\":{\"type\":\"mysql\",\"jdbcUrl\":\"jdbc:mysql://localhost:3306/source\","
-                + "\"usernameEnv\":\"MYSQL_USER\",\"passwordEnv\":\"MYSQL_PASSWORD\","
-                + "\"resourceType\":\"table\",\"resourceName\":\"users\"},"
-                + "\"target\":{\"type\":\"postgresql\",\"jdbcUrl\":\"jdbc:postgresql://localhost:5432/target\","
-                + "\"usernameEnv\":\"PG_USER\",\"passwordEnv\":\"PG_PASSWORD\","
-                + "\"resourceType\":\"table\",\"resourceName\":\"users\"},"
-                + "\"mapping\":{\"sourceKeys\":[\"id\"],\"targetKeys\":[\"id\"],"
-                + "\"sourceFields\":[\"name\"],\"targetFields\":[\"name\"]},"
-                + "\"strategy\":{\"mode\":\"checksum\",\"algorithm\":\"xor\"},"
-                + "\"result\":{\"sinkFormat\":\"console\",\"sinkType\":\"result\"}"
-                + "}";
-        AIConfigService service = serviceReturning(json);
+    void shouldGenerateConfigFromLlmYamlWhenHintsAreMissing() {
+        String yaml = "source:\n"
+                + "  type: mysql\n"
+                + "  name: source-mysql\n"
+                + "  connection:\n"
+                + "    url: jdbc:mysql://localhost:3306/source\n"
+                + "    username: ${env.MYSQL_USER}\n"
+                + "    password: ${env.MYSQL_PASSWORD}\n"
+                + "  resource:\n"
+                + "    type: table\n"
+                + "    name: users\n"
+                + "target:\n"
+                + "  type: postgresql\n"
+                + "  name: target-postgresql\n"
+                + "  connection:\n"
+                + "    url: jdbc:postgresql://localhost:5432/target\n"
+                + "    username: ${env.PG_USER}\n"
+                + "    password: ${env.PG_PASSWORD}\n"
+                + "  resource:\n"
+                + "    type: table\n"
+                + "    name: users\n"
+                + "comparison:\n"
+                + "  keys:\n"
+                + "    source:\n"
+                + "      - id\n"
+                + "    target:\n"
+                + "      - id\n"
+                + "strategy:\n"
+                + "  mode: checksum\n"
+                + "result:\n"
+                + "  sinks:\n"
+                + "    - format: console\n"
+                + "      type: result\n";
+        AIConfigService service = serviceReturning(yaml);
 
         AIConfigResult result = service.generate(AIConfigRequest.builder()
                 .goal("compare users")
@@ -59,12 +78,30 @@ class AIConfigServiceTest {
     }
 
     @Test
+    void shouldSurfaceActionableBackendFailure() {
+        AIConfigService service = new AIConfigService(
+                new com.consilens.ai.config.AIConfigDraftValidator(),
+                new AIConfigCompiler(),
+                new FailingBackendResolver(),
+                new com.consilens.ai.conversation.engine.ExampleTemplateStore());
+
+        AIConfigRequest request = AIConfigRequest.builder()
+                .goal("compare users")
+                .backendOptions(AIBackendOptions.builder().backend("openai").build())
+                .build();
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> service.generate(request));
+        assertTrue(error.getMessage().contains("consilens ai doctor"));
+        assertTrue(error.getMessage().contains("backend-defaults.json"));
+    }
+
+    @Test
     void shouldNotCallNoopLlmWhenBackendOptionIsMissing() {
         AIConfigService service = new AIConfigService(
                 new com.consilens.ai.config.AIConfigDraftValidator(),
                 new AIConfigCompiler(),
                 new StaticBackendResolver(new StaticBackend("not json")),
-                new ObjectMapper());
+                new com.consilens.ai.conversation.engine.ExampleTemplateStore());
 
         AIConfigResult result = service.generate(AIConfigRequest.builder()
                 .goal("compare users")
@@ -81,7 +118,7 @@ class AIConfigServiceTest {
                 new com.consilens.ai.config.AIConfigDraftValidator(),
                 new AIConfigCompiler(),
                 new StaticBackendResolver(new StaticBackend(response)),
-                new ObjectMapper());
+                new com.consilens.ai.conversation.engine.ExampleTemplateStore());
     }
 
     private static class StaticBackendResolver extends LLMBackendResolver {
@@ -94,6 +131,18 @@ class AIConfigServiceTest {
         @Override
         public LLMBackend resolve(AIBackendOptions options) {
             return backend;
+        }
+    }
+
+    private static class FailingBackendResolver extends LLMBackendResolver {
+        @Override
+        public LLMBackend resolve(AIBackendOptions options) {
+            throw new IllegalStateException("401 unauthorized");
+        }
+
+        @Override
+        public ResolvedBackendSettings resolveSettings(AIBackendOptions options) {
+            return ResolvedBackendSettings.builder().backend("openai").build();
         }
     }
 

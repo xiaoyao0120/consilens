@@ -66,6 +66,48 @@ mvn clean package -DskipTests -Prelease
 ./bin/consilens-cli.sh diff -c config.yaml
 ```
 
+### AI Chat 闭环
+
+如果你希望通过 chat/session 的方式完成 **配置生成 → 执行 → 结果判断 → 修复配置 → 再验证** 的闭环，当前正式入口是 `consilens-cli` 的 AI runtime：
+
+```bash
+./bin/consilens-cli.sh ai plan --session orders-loop "compare orders ..."
+./bin/consilens-cli.sh ai --session orders-loop --config orders-loop.yaml --backend openai
+```
+
+闭环中的 config、run result、diff evidence、diagnosis、run audit、repair plan 和非敏感 memories 都会绑定到同一个 `--session`。推荐先用 `ai plan` 或 `ai run` 带结构化参数创建第一版 session，或者直接用 `ai --config <path> --backend ...` 把已有配置导入交互会话；进入 `ai` 后可继续用自然语言或 `/plan`、`/use-config`、`/validate`、`/dry-run`、`/run`、`/diff`、`/analyze-last`、`/repair`、`/remember`、`/forget`、`/recover`、`/artifacts [type]`、`/artifact <id>`、`/explain`、`/memories` 持续迭代。`ai shell` 仍可用，但只是兼容别名。
+
+如果要让 OpenAI / DeepSeek / Ollama 等 backend 在 `ai plan`、`ai run`、`ai doctor`、`ai shell` 之间共享默认配置，建议把 backend/model/baseUrl/timeout 放在 `~/.consilens/ai/backend-defaults.json`（或 `$CONSILENS_AI_HOME/backend-defaults.json`），把密钥继续放在 `apiKeyEnv` 指向的环境变量里。
+
+更完整的使用文档见：
+
+- [consilens-cli/README.md](./consilens-cli/README.md) 中的 **AI Chat 闭环使用文档**
+- [consilens-ai/USAGE.md](./consilens-ai/USAGE.md) 中的 runtime closed-loop guide
+
+### 运维/值班最简步骤
+
+适合已经有 session 或者只想快速完成一轮修复验证：
+
+```bash
+# 1) 看运行时插件和后端是否正常
+./bin/consilens-cli.sh ai doctor
+
+# 2) 首次建 session（也可以换成已有 session）
+./bin/consilens-cli.sh ai plan --session orders-loop "compare orders ..." --dry-run
+
+# 3) 真正执行并自动拿到 diagnosis
+./bin/consilens-cli.sh ai run --session orders-loop --approve-execute
+
+# 4) 基于最新 diagnosis 重生配置
+./bin/consilens-cli.sh ai repair --session orders-loop -o orders-loop-repaired.yaml
+
+# 5) 再跑一轮确认修复是否收敛
+./bin/consilens-cli.sh ai run --session orders-loop --approve-execute
+
+# 6) 回看记忆和上下文
+./bin/consilens-cli.sh ai memories --session orders-loop
+```
+
 ### 最小配置示例
 
 ```yaml

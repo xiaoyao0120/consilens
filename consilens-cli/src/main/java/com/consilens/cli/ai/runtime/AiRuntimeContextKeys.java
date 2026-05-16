@@ -14,6 +14,9 @@ public final class AiRuntimeContextKeys {
     public static final String ANALYZER = "analyzer";
     public static final String CONFIG_PATH = "configPath";
     public static final String INLINE_OUTPUT = "inlineOutput";
+    public static final String MEMORY_TYPE = "memoryType";
+    public static final String MEMORY_CONTENT = "memoryContent";
+    public static final String MEMORY_ID = "memoryId";
 
     private AiRuntimeContextKeys() {
     }

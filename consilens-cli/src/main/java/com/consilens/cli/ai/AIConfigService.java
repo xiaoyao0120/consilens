@@ -7,36 +7,57 @@ import com.consilens.ai.config.model.DatasetDraft;
 import com.consilens.ai.config.model.MappingDraft;
 import com.consilens.ai.config.model.ResultDraft;
 import com.consilens.ai.config.model.StrategyDraft;
+import com.consilens.ai.conversation.engine.ExampleTemplate;
+import com.consilens.ai.conversation.engine.ExampleTemplateStore;
 import com.consilens.ai.spi.LLMBackend;
 import com.consilens.cli.model.CliConfiguration;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /**
  * Generates a validated Consilens CLI configuration from explicit hints and optional LLM output.
+ * When an {@link ExampleTemplateStore} is available, the best-matching example is used as a
+ * template in the LLM prompt so that generated configs follow the correct YAML schema.
  */
 public class AIConfigService {
 
     private final AIConfigDraftValidator validator;
     private final AIConfigCompiler compiler;
     private final LLMBackendResolver backendResolver;
-    private final ObjectMapper objectMapper;
+    private final ObjectMapper yamlMapper;
+    private final ExampleTemplateStore exampleTemplateStore;
 
     public AIConfigService() {
-        this(new AIConfigDraftValidator(), new AIConfigCompiler(), new LLMBackendResolver(), new ObjectMapper());
+        this(new AIConfigDraftValidator(), new AIConfigCompiler(), new LLMBackendResolver(),
+                new ExampleTemplateStore());
+    }
+
+    public AIConfigService(ExampleTemplateStore exampleTemplateStore) {
+        this(new AIConfigDraftValidator(), new AIConfigCompiler(), new LLMBackendResolver(),
+                exampleTemplateStore);
     }
 
     AIConfigService(AIConfigDraftValidator validator,
                     AIConfigCompiler compiler,
                     LLMBackendResolver backendResolver,
                     ObjectMapper objectMapper) {
+        this(validator, compiler, backendResolver, (ExampleTemplateStore) null);
+    }
+
+    AIConfigService(AIConfigDraftValidator validator,
+                    AIConfigCompiler compiler,
+                    LLMBackendResolver backendResolver,
+                    ExampleTemplateStore exampleTemplateStore) {
         this.validator = validator;
         this.compiler = compiler;
         this.backendResolver = backendResolver;
-        this.objectMapper = objectMapper;
+        this.exampleTemplateStore = exampleTemplateStore;
+        this.yamlMapper = new ObjectMapper(new YAMLFactory());
     }
 
     public AIConfigResult generate(AIConfigRequest request) {
@@ -49,8 +70,12 @@ public class AIConfigService {
                 && backendOptions != null
                 && !backendOptions.isNoLlm()
                 && !"noop".equalsIgnoreCase(backendName)) {
-            draft = mergeExplicitHints(request, generateDraftWithLlm(request));
-            issues = validator.validate(draft);
+            Optional<AIConfigResult> yamlResult = tryGenerateFromExample(request);
+            if (yamlResult.isPresent()) {
+                return yamlResult.get();
+            }
+            throw new IllegalArgumentException("AI config generation failed: no example template could be adapted. "
+                    + "Check your backend settings with `consilens ai doctor`, or provide more specific source/target details.");
         }
 
         if (validator.hasErrors(issues)) {
@@ -91,113 +116,123 @@ public class AIConfigService {
                 .build();
     }
 
-    private AIConfigDraft generateDraftWithLlm(AIConfigRequest request) {
-        LLMBackend backend = backendResolver.resolve(request.getBackendOptions());
-        String response = backend.complete(buildPrompt(request));
-        try {
-            return objectMapper.readValue(extractJson(response), AIConfigDraft.class);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("AI backend did not return a valid AIConfigDraft JSON: " + e.getMessage(), e);
+    /**
+     * Tries to generate a config by asking the LLM to adapt the best-matching example template.
+     * Returns empty only if no example store is available or if YAML cannot be parsed at all.
+     * Even if the generated config fails validation, the parsed draft is returned (valid=false + yaml)
+     * so callers can display it as a template for the user to fill in.
+     */
+    private Optional<AIConfigResult> tryGenerateFromExample(AIConfigRequest request) {
+        if (exampleTemplateStore == null || exampleTemplateStore.isEmpty()) {
+            return Optional.empty();
         }
+        String searchQuery = buildSearchQuery(request);
+        Optional<ExampleTemplate> example = exampleTemplateStore.findBestMatch(searchQuery);
+        if (example.isEmpty()) {
+            return Optional.empty();
+        }
+        LLMBackend backend;
+        String yaml;
+        try {
+            backend = backendResolver.resolve(request.getBackendOptions());
+            String response = backend.complete(buildYamlPrompt(request, example.get()));
+            yaml = extractYaml(response);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("AI backend failed. Check `consilens ai doctor`, backend-defaults.json, API key and base URL. Root cause: "
+                    + e.getMessage(), e);
+        }
+        CliConfiguration configuration;
+        try {
+            configuration = yamlMapper.readValue(yaml, CliConfiguration.class);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("AI backend returned YAML that could not be parsed as a valid Consilens configuration. "
+                    + "Root cause: " + e.getMessage(), e);
+        }
+        // Attempt validation; return draft even on failure so user can see and edit the template
+        List<AIConfigIssue> issues;
+        boolean valid;
+        try {
+            configuration.validate();
+            issues = List.of();
+            valid = true;
+        } catch (Exception e) {
+            issues = List.of(AIConfigIssue.builder()
+                    .severity(AIConfigIssue.Severity.WARNING)
+                    .path("configuration")
+                    .code("AI_CONFIG_TEMPLATE_DRAFT")
+                    .message("Draft template generated from example '" + example.get().getName()
+                            + "'. Please fill in connection URLs and credential env variables: " + e.getMessage())
+                    .build());
+            valid = false;
+        }
+        return Optional.of(AIConfigResult.builder()
+                .configuration(configuration)
+                .yaml(yaml)
+                .issues(issues)
+                .valid(valid)
+                .dryRunPassed(false)
+                .build());
     }
 
-    private String buildPrompt(AIConfigRequest request) {
-        return "Generate a Consilens AIConfigDraft JSON only.\n"
-                + "Do not output markdown.\n"
-                + "Never include plaintext passwords. Use usernameEnv and passwordEnv.\n"
-                + "Required JSON shape:\n"
-                + "{\n"
-                + "  \"source\": {\"type\":\"\",\"jdbcUrl\":\"\",\"usernameEnv\":\"\",\"passwordEnv\":\"\","
-                + "\"resourceType\":\"table\",\"resourceName\":\"\"},\n"
-                + "  \"target\": {\"type\":\"\",\"jdbcUrl\":\"\",\"usernameEnv\":\"\",\"passwordEnv\":\"\","
-                + "\"resourceType\":\"table\",\"resourceName\":\"\"},\n"
-                + "  \"mapping\": {\"sourceKeys\":[],\"targetKeys\":[],\"sourceFields\":[],\"targetFields\":[]},\n"
-                + "  \"strategy\": {\"mode\":\"checksum\",\"algorithm\":\"xor\"},\n"
-                + "  \"result\": {\"sinkFormat\":\"console\",\"sinkType\":\"result\"},\n"
-                + "  \"assumptions\": [],\n"
-                + "  \"warnings\": []\n"
-                + "}\n"
-                + "The compiler will also add a json diff-record evidence sink for diagnostics.\n"
-                + "User goal:\n"
-                + nullToEmpty(request.getGoal());
+    private String buildSearchQuery(AIConfigRequest request) {
+        StringBuilder sb = new StringBuilder();
+        if (request.getGoal() != null) sb.append(request.getGoal()).append(" ");
+        if (request.getSourceType() != null) sb.append(request.getSourceType()).append(" ");
+        if (request.getTargetType() != null) sb.append(request.getTargetType()).append(" ");
+        if (request.getSourceQuery() != null || request.getTargetQuery() != null) sb.append("sql ");
+        return sb.toString().trim();
     }
 
-    private String extractJson(String response) {
+    private String buildYamlPrompt(AIConfigRequest request, ExampleTemplate example) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("You are a Consilens configuration generator.\n");
+        sb.append("Generate a Consilens YAML configuration to compare data between two sources.\n");
+        sb.append("Output ONLY valid YAML. No markdown code blocks. No explanation.\n");
+        sb.append("Use ${env.VAR_NAME} for all credentials (never hardcode passwords).\n");
+        sb.append("\n");
+        sb.append("Use the following example as a template and adapt it to match the user's goal:\n");
+        sb.append("--- Example: ").append(example.getName()).append(" ---\n");
+        sb.append(example.getContent().trim()).append("\n");
+        sb.append("--- End of example ---\n");
+        sb.append("\n");
+        sb.append("User's comparison goal:\n");
+        sb.append(nullToEmpty(request.getGoal())).append("\n");
+        if (request.getSourceType() != null) sb.append("Source type: ").append(request.getSourceType()).append("\n");
+        if (request.getSourceUrl() != null) sb.append("Source URL: ").append(request.getSourceUrl()).append("\n");
+        if (request.getSourceTable() != null) sb.append("Source table: ").append(request.getSourceTable()).append("\n");
+        if (request.getSourceQuery() != null) sb.append("Source SQL: ").append(request.getSourceQuery()).append("\n");
+        if (request.getTargetType() != null) sb.append("Target type: ").append(request.getTargetType()).append("\n");
+        if (request.getTargetUrl() != null) sb.append("Target URL: ").append(request.getTargetUrl()).append("\n");
+        if (request.getTargetTable() != null) sb.append("Target table: ").append(request.getTargetTable()).append("\n");
+        if (request.getTargetQuery() != null) sb.append("Target SQL: ").append(request.getTargetQuery()).append("\n");
+        if (request.getKeys() != null) sb.append("Compare keys: ").append(request.getKeys()).append("\n");
+        if (request.getSourceKeys() != null) sb.append("Source keys: ").append(request.getSourceKeys()).append("\n");
+        if (request.getTargetKeys() != null) sb.append("Target keys: ").append(request.getTargetKeys()).append("\n");
+        sb.append("\n");
+        sb.append("Adapt the example YAML to match this goal. ");
+        sb.append("Fill in known values, keep ${env.VAR_NAME} placeholders for credentials.\n");
+        sb.append("Output ONLY the YAML, nothing else.");
+        return sb.toString();
+    }
+
+
+    /** Strips optional markdown code fences (```yaml ... ```) from LLM YAML output. */
+    private String extractYaml(String response) {
         if (response == null) {
             return "";
         }
         String trimmed = response.trim();
-        int start = trimmed.indexOf('{');
-        int end = trimmed.lastIndexOf('}');
-        if (start >= 0 && end >= start) {
-            return trimmed.substring(start, end + 1);
+        // Strip ```yaml ... ``` or ``` ... ``` fences
+        if (trimmed.startsWith("```")) {
+            int firstNewline = trimmed.indexOf('\n');
+            if (firstNewline >= 0) {
+                trimmed = trimmed.substring(firstNewline + 1);
+            }
+            if (trimmed.endsWith("```")) {
+                trimmed = trimmed.substring(0, trimmed.length() - 3).trim();
+            }
         }
         return trimmed;
-    }
-
-    private AIConfigDraft mergeExplicitHints(AIConfigRequest request, AIConfigDraft draft) {
-        AIConfigDraft explicit = buildDraftFromRequest(request);
-        if (draft == null) {
-            return explicit;
-        }
-        draft.setSource(mergeDataset(explicit.getSource(), draft.getSource()));
-        draft.setTarget(mergeDataset(explicit.getTarget(), draft.getTarget()));
-        draft.setMapping(mergeMapping(explicit.getMapping(), draft.getMapping()));
-        draft.setStrategy(mergeStrategy(explicit.getStrategy(), draft.getStrategy()));
-        if (draft.getResult() == null) {
-            draft.setResult(explicit.getResult());
-        }
-        return draft;
-    }
-
-    private DatasetDraft mergeDataset(DatasetDraft explicit, DatasetDraft generated) {
-        if (generated == null) {
-            return explicit;
-        }
-        generated.setType(first(explicit.getType(), generated.getType()));
-        generated.setName(first(explicit.getName(), generated.getName()));
-        generated.setJdbcUrl(first(explicit.getJdbcUrl(), generated.getJdbcUrl()));
-        generated.setUsernameEnv(first(explicit.getUsernameEnv(), generated.getUsernameEnv()));
-        generated.setPasswordEnv(first(explicit.getPasswordEnv(), generated.getPasswordEnv()));
-        generated.setResourceType(first(explicit.getResourceType(), generated.getResourceType()));
-        generated.setResourceName(first(explicit.getResourceName(), generated.getResourceName()));
-        generated.setQuery(first(explicit.getQuery(), generated.getQuery()));
-        return generated;
-    }
-
-    private MappingDraft mergeMapping(MappingDraft explicit, MappingDraft generated) {
-        if (generated == null) {
-            return explicit;
-        }
-        if (explicit.getSourceKeys() != null && !explicit.getSourceKeys().isEmpty()) {
-            generated.setSourceKeys(explicit.getSourceKeys());
-        }
-        if (explicit.getTargetKeys() != null && !explicit.getTargetKeys().isEmpty()) {
-            generated.setTargetKeys(explicit.getTargetKeys());
-        }
-        if (explicit.getSourceFields() != null && !explicit.getSourceFields().isEmpty()) {
-            generated.setSourceFields(explicit.getSourceFields());
-        }
-        if (explicit.getTargetFields() != null && !explicit.getTargetFields().isEmpty()) {
-            generated.setTargetFields(explicit.getTargetFields());
-        }
-        return generated;
-    }
-
-    private StrategyDraft mergeStrategy(StrategyDraft explicit, StrategyDraft generated) {
-        if (generated == null) {
-            return explicit;
-        }
-        generated.setMode(first(explicit.getMode(), generated.getMode()));
-        generated.setAlgorithm(first(explicit.getAlgorithm(), generated.getAlgorithm()));
-        generated.setBisectionFactor(explicit.getBisectionFactor() != null
-                ? explicit.getBisectionFactor() : generated.getBisectionFactor());
-        generated.setBisectionThreshold(explicit.getBisectionThreshold() != null
-                ? explicit.getBisectionThreshold() : generated.getBisectionThreshold());
-        generated.setBatchSize(explicit.getBatchSize() != null ? explicit.getBatchSize() : generated.getBatchSize());
-        generated.setMaxDifferences(explicit.getMaxDifferences() != null
-                ? explicit.getMaxDifferences() : generated.getMaxDifferences());
-        return generated;
     }
 
     private AIConfigDraft buildDraftFromRequest(AIConfigRequest request) {

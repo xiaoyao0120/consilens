@@ -9,15 +9,23 @@ import java.nio.file.Paths;
 public class AiRuntimePaths {
 
     private final Path baseDir;
+    private final Path installHome;
 
     public AiRuntimePaths() {
-        this(System.getenv("CONSILENS_AI_HOME"));
+        this(System.getenv("CONSILENS_AI_HOME"), System.getProperty("consilens.examples.dir"));
     }
 
     AiRuntimePaths(String configuredBaseDir) {
+        this(configuredBaseDir, null);
+    }
+
+    AiRuntimePaths(String configuredBaseDir, String examplesDir) {
         this.baseDir = configuredBaseDir == null || configuredBaseDir.trim().isEmpty()
                 ? Paths.get(System.getProperty("user.home"), ".consilens", "ai")
                 : Paths.get(configuredBaseDir).toAbsolutePath().normalize();
+        this.installHome = examplesDir == null || examplesDir.trim().isEmpty()
+                ? null
+                : Paths.get(examplesDir).toAbsolutePath().normalize();
     }
 
     public Path baseDir() {
@@ -34,6 +42,10 @@ public class AiRuntimePaths {
 
     public Path memoriesFile() {
         return baseDir.resolve("memories.json");
+    }
+
+    public Path backendDefaultsFile() {
+        return baseDir.resolve("backend-defaults.json");
     }
 
     public Path artifactIndexFile() {
@@ -54,5 +66,14 @@ public class AiRuntimePaths {
 
     public Path latestRunFile(String sessionId) {
         return sessionRunDir(sessionId).resolve("latest.json");
+    }
+
+    /**
+     * Returns the examples directory (sibling of {@code bin/} in the install layout),
+     * or {@code null} if {@code consilens.examples.dir} system property is not set.
+     * Can be overridden at startup via {@code CONSILENS_EXAMPLES_DIR} env var in {@code setenv.sh}.
+     */
+    public Path examplesDir() {
+        return installHome;
     }
 }

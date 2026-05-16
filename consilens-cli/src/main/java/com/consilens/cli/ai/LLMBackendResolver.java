@@ -2,10 +2,13 @@ package com.consilens.cli.ai;
 
 import com.consilens.ai.spi.LLMBackend;
 import com.consilens.ai.spi.LLMBackendManager;
+import com.consilens.cli.ai.runtime.AiRuntimePaths;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Resolves an LLM backend from CLI options and environment defaults.
@@ -13,35 +16,93 @@ import java.util.function.Function;
 public class LLMBackendResolver {
 
     private final Function<String, String> envProvider;
+    private final Supplier<Optional<AiBackendDefaults>> backendDefaultsProvider;
 
     public LLMBackendResolver() {
-        this(System::getenv);
+        this(System::getenv, new AiBackendDefaultsStore(new AiRuntimePaths())::load);
     }
 
-    LLMBackendResolver(Function<String, String> envProvider) {
+    public LLMBackendResolver(Function<String, String> envProvider) {
+        this(envProvider, () -> Optional.empty());
+    }
+
+    LLMBackendResolver(Function<String, String> envProvider,
+                       Supplier<Optional<AiBackendDefaults>> backendDefaultsProvider) {
         this.envProvider = envProvider;
+        this.backendDefaultsProvider = backendDefaultsProvider;
     }
 
     public LLMBackend resolve(AIBackendOptions options) {
-        AIBackendOptions effective = options == null ? AIBackendOptions.builder().build() : options;
-        String backend = resolveBackendName(effective);
+        ResolvedBackendSettings effective = resolveSettings(options);
         Map<String, Object> config = new LinkedHashMap<>();
-        put(config, "model", firstNonBlank(effective.getModel(), env("CONSILENS_AI_MODEL"), null));
-        put(config, "baseUrl", firstNonBlank(effective.getBaseUrl(), env("CONSILENS_AI_BASE_URL"), backendDefaultBaseUrl(backend)));
-        put(config, "apiKey", firstNonBlank(effective.getApiKey(), apiKeyEnv(backend), null));
-        put(config, "timeout", firstNonBlank(effective.getTimeout(), env("CONSILENS_AI_TIMEOUT"), null));
+        put(config, "model", effective.getModel());
+        put(config, "baseUrl", effective.getBaseUrl());
+        put(config, "apiKey", effective.getApiKey());
+        put(config, "timeout", effective.getTimeout());
         put(config, "temperature", effective.getTemperature());
         put(config, "maxTokens", effective.getMaxTokens());
         try {
-            return LLMBackendManager.getInstance().create(backend, config);
+            return LLMBackendManager.getInstance().create(effective.getBackend(), config);
         } catch (RuntimeException e) {
-            throw new IllegalArgumentException("Unknown or unavailable AI backend: " + backend, e);
+            throw new IllegalArgumentException("Unknown or unavailable AI backend: " + effective.getBackend(), e);
         }
     }
 
     public String resolveBackendName(AIBackendOptions options) {
+        return resolveSettings(options).getBackend();
+    }
+
+    public ResolvedBackendSettings resolveSettings(AIBackendOptions options) {
         AIBackendOptions effective = options == null ? AIBackendOptions.builder().backend(null).build() : options;
-        return firstNonBlank(effective.getBackend(), env("CONSILENS_AI_BACKEND"), "noop");
+        AiBackendDefaults defaults = backendDefaultsProvider.get().orElse(null);
+        AiBackendDefaults.BackendDefaults sharedDefaults = defaults == null ? null : defaults.getShared();
+        String backend = firstNonBlank(
+                effective.getBackend(),
+                env("CONSILENS_AI_BACKEND"),
+                defaults == null ? null : defaults.getDefaultBackend(),
+                "noop");
+        AiBackendDefaults.BackendDefaults backendDefaults = defaults == null ? null : defaults.defaultsFor(backend);
+
+        String configuredApiKeyEnv = firstNonBlank(
+                value(backendDefaults == null ? null : backendDefaults.getApiKeyEnv()),
+                value(sharedDefaults == null ? null : sharedDefaults.getApiKeyEnv()),
+                apiKeyEnvName(backend));
+        String envApiKey = configuredApiKeyEnv == null ? null : env(configuredApiKeyEnv);
+        String profileApiKey = firstNonBlank(
+                value(backendDefaults == null ? null : backendDefaults.getApiKey()),
+                value(sharedDefaults == null ? null : sharedDefaults.getApiKey()));
+
+        return ResolvedBackendSettings.builder()
+                .backend(backend)
+                .model(firstNonBlank(
+                        effective.getModel(),
+                        env("CONSILENS_AI_MODEL"),
+                        value(backendDefaults == null ? null : backendDefaults.getModel()),
+                        value(sharedDefaults == null ? null : sharedDefaults.getModel())))
+                .baseUrl(firstNonBlank(
+                        effective.getBaseUrl(),
+                        env("CONSILENS_AI_BASE_URL"),
+                        value(backendDefaults == null ? null : backendDefaults.getBaseUrl()),
+                        value(sharedDefaults == null ? null : sharedDefaults.getBaseUrl()),
+                        backendDefaultBaseUrl(backend)))
+                .apiKey(firstNonBlank(effective.getApiKey(), envApiKey, profileApiKey))
+                .apiKeySource(apiKeySource(effective.getApiKey(), configuredApiKeyEnv, envApiKey, profileApiKey))
+                .timeout(firstNonBlank(
+                        effective.getTimeout(),
+                        env("CONSILENS_AI_TIMEOUT"),
+                        value(backendDefaults == null ? null : backendDefaults.getTimeout()),
+                        value(sharedDefaults == null ? null : sharedDefaults.getTimeout())))
+                .temperature(firstNonNull(
+                        effective.getTemperature(),
+                        doubleEnv("CONSILENS_AI_TEMPERATURE"),
+                        backendDefaults == null ? null : backendDefaults.getTemperature(),
+                        sharedDefaults == null ? null : sharedDefaults.getTemperature()))
+                .maxTokens(firstNonNull(
+                        effective.getMaxTokens(),
+                        integerEnv("CONSILENS_AI_MAX_TOKENS"),
+                        backendDefaults == null ? null : backendDefaults.getMaxTokens(),
+                        sharedDefaults == null ? null : sharedDefaults.getMaxTokens()))
+                .build();
     }
 
     private String backendDefaultBaseUrl(String backend) {
@@ -51,12 +112,12 @@ public class LLMBackendResolver {
         return null;
     }
 
-    private String apiKeyEnv(String backend) {
+    private String apiKeyEnvName(String backend) {
         if ("openai".equalsIgnoreCase(backend)) {
-            return env("OPENAI_API_KEY");
+            return "OPENAI_API_KEY";
         }
         if ("deepseek".equalsIgnoreCase(backend)) {
-            return env("DEEPSEEK_API_KEY");
+            return "DEEPSEEK_API_KEY";
         }
         return null;
     }
@@ -71,19 +132,68 @@ public class LLMBackendResolver {
         return envProvider.apply(name);
     }
 
-    private String firstNonBlank(String first, String second) {
-        return firstNonBlank(first, second, null);
+    private String value(String value) {
+        return value;
     }
 
-    private String firstNonBlank(String first, String second, String third) {
-        if (first != null && !first.trim().isEmpty()) {
-            return first.trim();
+    private String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
         }
-        if (second != null && !second.trim().isEmpty()) {
-            return second.trim();
+        for (String value : values) {
+            if (value != null && !value.trim().isEmpty()) {
+                return value.trim();
+            }
         }
-        if (third != null && !third.trim().isEmpty()) {
-            return third.trim();
+        return null;
+    }
+
+    @SafeVarargs
+    private final <T> T firstNonNull(T... values) {
+        if (values == null) {
+            return null;
+        }
+        for (T value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private Double doubleEnv(String name) {
+        String value = env(name);
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private Integer integerEnv(String name) {
+        String value = env(name);
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private String apiKeySource(String explicitApiKey, String envName, String envApiKey, String profileApiKey) {
+        if (explicitApiKey != null && !explicitApiKey.trim().isEmpty()) {
+            return "--api-key";
+        }
+        if (envApiKey != null && !envApiKey.trim().isEmpty()) {
+            return envName;
+        }
+        if (profileApiKey != null && !profileApiKey.trim().isEmpty()) {
+            return "backend-defaults.json";
         }
         return null;
     }

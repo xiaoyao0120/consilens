@@ -17,12 +17,17 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
  * File-backed memory store for non-sensitive AI memories.
  */
 public class FileAiMemoryStore implements AiMemoryStore {
+
+    private static final Pattern SECRET_PATTERN = Pattern.compile(
+            "(?i)(password\\s*[:=]|passwd\\s*[:=]|token\\s*[:=]|api[_ -]?key\\s*[:=]|secret\\s*[:=]|authorization\\s*:|bearer\\s+)");
+    private static final Pattern JDBC_CREDENTIAL_PATTERN = Pattern.compile("(?i)jdbc:[^\\s]+://[^\\s/@:]+:[^\\s/@]+@");
 
     private final AiRuntimePaths paths;
     private final ObjectMapper mapper;
@@ -54,6 +59,9 @@ public class FileAiMemoryStore implements AiMemoryStore {
     @Override
     public synchronized Optional<AiMemory> add(AiMemoryCandidate candidate) {
         if (candidate == null || candidate.getContent() == null || candidate.getContent().trim().isEmpty()) {
+            return Optional.empty();
+        }
+        if (containsSensitiveContent(candidate.getContent())) {
             return Optional.empty();
         }
         AiMemory memory = AiMemory.builder()
@@ -96,5 +104,10 @@ public class FileAiMemoryStore implements AiMemoryStore {
                 .source(memory.getSource())
                 .createdAt(Instant.EPOCH)
                 .build();
+    }
+
+    private boolean containsSensitiveContent(String content) {
+        String trimmed = content == null ? "" : content.trim();
+        return SECRET_PATTERN.matcher(trimmed).find() || JDBC_CREDENTIAL_PATTERN.matcher(trimmed).find();
     }
 }

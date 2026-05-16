@@ -1,12 +1,15 @@
 # Consilens AI Module
 
-Consilens AI is an intelligent data consistency assistant that combines natural language processing with database comparison and repair capabilities.
+Consilens AI is the AI/runtime layer for Consilens. It combines natural-language intent parsing,
+session-scoped runtime orchestration, diff diagnosis, and repair-driven config regeneration on top
+of the deterministic Consilens engine.
 
 ## Features
 
-- 🤖 **Natural Language Interface**: Understand your data consistency queries in plain English (and other languages)
-- 🔍 **Smart Diff Analysis**: Compare database tables and identify inconsistencies with pattern detection
-- 🛠️ **Automated Repair**: Generate SQL statements to fix data inconsistencies
+- 🤖 **Natural Language Interface**: Understand comparison and repair goals in plain language
+- 🔁 **Closed-Loop Runtime**: Generate config, execute diff, diagnose, repair config, and rerun within one session
+- 🔍 **Smart Diff Analysis**: Identify inconsistencies and root-cause patterns from diff evidence
+- 🛠️ **Repair-Driven Config Regeneration**: Rebuild better Consilens YAML from the latest diagnosis
 - 🔌 **Pluggable Architecture**: Extensible tool system and LLM backend support
 - 🧠 **Pattern Detection**: Identify common root causes like timezone mismatches, encoding issues, and data truncation
 - 📊 **Schema Discovery**: Automatically discover and document database table schemas
@@ -28,79 +31,87 @@ mvn clean install -pl consilens-ai -am
 
 ### Basic Usage
 
-Production-oriented CLI entrypoint:
+Production entrypoint: the session runtime in `consilens-cli`.
+
+Minimal closed-loop demo:
 
 ```bash
-consilens ai config "compare mysql users with postgresql users by id" \
+consilens ai doctor
+
+consilens ai plan \
+  --session demo-orders \
+  "compare mysql orders with postgresql orders by order_id" \
   --no-llm \
   --source-type mysql \
-  --source-url jdbc:mysql://localhost:3306/mydb \
-  --source-table users \
+  --source-url jdbc:mysql://127.0.0.1:3306/shop \
+  --source-table orders \
   --source-user-env MYSQL_USER \
   --source-password-env MYSQL_PASSWORD \
   --target-type postgresql \
-  --target-url jdbc:postgresql://localhost:5432/mydb \
-  --target-table users \
+  --target-url jdbc:postgresql://127.0.0.1:5432/shop \
+  --target-table orders \
   --target-user-env PG_USER \
   --target-password-env PG_PASSWORD \
-  --keys id \
-  --fields name,email,status \
-  --output diff.yaml
+  --keys order_id \
+  --fields status,amount,updated_at \
+  --dry-run \
+  -o demo-orders.yaml
 
-consilens ai explain -c diff.yaml
-consilens diff --dry-run -c diff.yaml
-consilens diff -c diff.yaml
-consilens ai diagnose --result diff-records.json --analyzer rulebased --output diagnose.md
-consilens ai providers
-consilens ai providers --format json
-consilens ai doctor --format json
+consilens ai run --session demo-orders --approve-execute
+consilens ai repair --session demo-orders -o demo-orders-repaired.yaml
+consilens ai run --session demo-orders --approve-execute
+consilens ai --session demo-orders
 ```
 
-The CLI path generates canonical Consilens YAML and validates it with the existing engine model. AI does not execute a real diff directly.
-`ai diagnose` reads row-level diff evidence from a `json` `diff-record` sink; stats-only result files are not enough for pattern analysis.
+External diff-record diagnosis demo:
+
+```bash
+consilens diff -c demo-orders.yaml
+
+consilens ai diagnose \
+  --session demo-orders \
+  --result ./diff-records.json \
+  --analyzer rulebased \
+  --output demo-diagnose.md
+
+consilens ai repair --session demo-orders -o demo-orders-repaired.yaml
+consilens ai run --session demo-orders --approve-execute
+```
+
+The runtime can execute a real diff, but only with explicit approval. `ai diagnose` reads
+row-level diff evidence; stats-only result files are not enough for pattern analysis.
 The analyzer is loaded via SPI. Use `--analyzer <name>` or `CONSILENS_AI_ANALYZER`; the default is `rulebased`.
 Use `--output` to persist the diagnosis report; otherwise it is printed to stdout.
 Use `ai providers` to verify which analyzer and LLM backend plugins are visible on the runtime classpath; `--format json` is available for CI checks and scripts.
 Use `ai doctor` as a production preflight check for SPI discovery, selected analyzer/backend wiring and required API key configuration. It is offline by default; add `--online` only when the deployment environment should verify backend reachability.
+For persistent backend defaults, use `~/.consilens/ai/backend-defaults.json` (or `$CONSILENS_AI_HOME/backend-defaults.json`) and keep secrets in `apiKeyEnv`-referenced environment variables instead of hardcoding them into command lines.
 
-SDK/chat usage:
+For the full workflow, see:
+
+- [`consilens-cli/README.md`](../consilens-cli/README.md) - Chinese closed-loop guide and operator runbook
+- [`USAGE.md`](./USAGE.md) - detailed runtime closed-loop guide
+
+SDK/runtime notes:
 
 ```java
-// Initialize components
-SessionContext session = SessionContext.builder()
-    .conversation(new ConversationContext())
-    .backend(new OllamaBackend("http://localhost:11434"))
-    .analyzer(new RuleBasedAnalyzer())
-    .build();
-
-// Set up tools
+// The supported orchestration entrypoint is the AI runtime in consilens-cli.
+// ai-core keeps reusable primitives such as conversation context, tool registry,
+// intent parsing, runtime models, draft validation and SPI interfaces.
+ConversationContext conversation = new ConversationContext();
 ToolRegistry tools = new ToolRegistry();
 tools.register(new DiffTool());
 tools.register(new AnalyzeTool());
-tools.register(new RepairGenerateTool());
 tools.register(new SchemaDiscoveryTool());
-tools.register(new ConfigGenerateTool());
 
-// Create chat engine
-ChatEngine engine = new ChatEngine(
-    session.getBackend(),
-    tools,
-    session.getAnalyzer()
-);
-
-// Have a conversation
-String response = engine.chat(
-    "Compare my production and staging users table",
-    session.getConversation()
-);
-System.out.println(response);
+Intent intent = new IntentParser().parse("Compare my production and staging users table");
+System.out.println(intent); // DIFF_TABLE
 ```
 
 ## Module Structure
 
 ```
 consilens-ai/
-├── consilens-ai-core/          # Chat engine, intent parsing, system prompts
+├── consilens-ai-core/          # Intent parsing, runtime models, session abstractions
 ├── consilens-ai-analyzer/      # Pattern detection engine
 │   ├── consilens-ai-analyzer-api/
 │   └── consilens-ai-analyzer-plugins/consilens-ai-analyzer-rulebased/
@@ -131,7 +142,11 @@ Analyzes a diff result to identify patterns, root causes, and repair suggestions
 **Example**: "What patterns do you see in the differences?"
 
 ### RepairGenerateTool
-Generates SQL statements to fix data inconsistencies.
+Generates SQL suggestions for a diff result as a low-level SDK tool.
+
+This is **not** the default production repair loop. The production CLI/runtime flow uses
+`ai repair` to regenerate Consilens configuration from the latest diagnosis and then
+re-validates it with `ai run`.
 
 **Example**: "Generate SQL to fix these mismatches on the target side"
 
@@ -197,7 +212,7 @@ context.registerConnection("prod",
 
 - **Input Validation**: All user inputs are sanitized to prevent prompt injection
 - **Password Protection**: Credentials are marked transient and never logged
-- **SQL Safety**: Generated SQL is presented for review before execution
+- **Explicit Execution Approval**: Real diff execution in the runtime requires explicit approval
 - **Audit Trail**: Tool operations are logged for compliance
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed security considerations.
@@ -228,7 +243,7 @@ To add a custom tool:
 
 1. Implement the `Tool` interface
 2. Register via `ToolRegistry.register(tool)`
-3. Update system prompt in `SystemPromptBuilder` to mention the new tool
+3. Wire the tool into the runtime or command layer that should expose it
 
 To add a new analyzer:
 

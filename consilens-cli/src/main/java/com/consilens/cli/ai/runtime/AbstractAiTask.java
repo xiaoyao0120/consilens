@@ -3,6 +3,7 @@ package com.consilens.cli.ai.runtime;
 import com.consilens.ai.execution.model.ConfigGenerationRequest;
 import com.consilens.ai.execution.model.ConfigRef;
 import com.consilens.ai.runtime.model.AiTaskContext;
+import com.consilens.ai.runtime.model.AiTaskEvent;
 import com.consilens.ai.runtime.model.AiTaskResult;
 import com.consilens.ai.runtime.model.AiTurnResult;
 import com.consilens.ai.session.AiArtifactStore;
@@ -165,12 +166,55 @@ abstract class AbstractAiTask {
     }
 
     protected AiTaskResult failure(com.consilens.ai.runtime.task.AiTaskType type, String message) {
+        return failure(type, message, List.of());
+    }
+
+    protected AiTaskResult failure(com.consilens.ai.runtime.task.AiTaskType type, String message, List<AiTaskEvent> events) {
         return AiTaskResult.builder()
                 .success(false)
                 .taskType(type)
                 .status(AiTurnResult.Status.FAILED)
                 .summary(message)
                 .suggestedNextAction(type.name())
+                .events(events)
+                .build();
+    }
+
+    protected AiTaskEvent event(String stage, String status, String message) {
+        return AiTaskEvent.builder()
+                .stage(stage)
+                .status(status)
+                .message(message)
+                .build();
+    }
+
+    protected AiTaskEvent event(String stage, String status, String message, ArtifactRef artifact) {
+        if (artifact == null) {
+            return event(stage, status, message);
+        }
+        return AiTaskEvent.builder()
+                .stage(stage)
+                .status(status)
+                .message(message)
+                .artifactId(artifact.getArtifactId())
+                .artifactType(artifact.getType() == null ? null : artifact.getType().name())
+                .metadata(artifact.getMetadata())
+                .build();
+    }
+
+    protected AiTaskEvent event(String stage,
+                                String status,
+                                String message,
+                                String artifactId,
+                                ArtifactType artifactType,
+                                Map<String, String> metadata) {
+        return AiTaskEvent.builder()
+                .stage(stage)
+                .status(status)
+                .message(message)
+                .artifactId(artifactId)
+                .artifactType(artifactType == null ? null : artifactType.name())
+                .metadata(metadata)
                 .build();
     }
 }

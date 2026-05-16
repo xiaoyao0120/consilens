@@ -1,6 +1,8 @@
 package com.consilens.ai.runtime.orchestrator;
 
+import com.consilens.ai.execution.model.ConfigGenerationRequest;
 import com.consilens.ai.runtime.intent.AiIntent;
+import com.consilens.ai.runtime.intent.CompareIntentHintExtractor;
 import com.consilens.ai.runtime.intent.IntentRouter;
 import com.consilens.ai.runtime.model.AiSessionSnapshot;
 import com.consilens.ai.runtime.model.AiTaskContext;
@@ -18,6 +20,8 @@ import java.util.Optional;
  */
 public class AiConversationOrchestrator implements AiConversationRuntime {
 
+    private static final String CONFIG_REQUEST_KEY = "configRequest";
+
     private final IntentRouter intentRouter;
     private final TaskRegistry taskRegistry;
     private final AiSessionStore sessionStore;
@@ -34,7 +38,16 @@ public class AiConversationOrchestrator implements AiConversationRuntime {
     public AiTurnResult handleUserInput(String sessionId, String input) {
         AiSession session = loadOrCreate(sessionId);
         AiIntent intent = intentRouter.route(session, input);
-        return dispatch(map(intent), AiTaskContext.builder().session(session).userInput(input).build());
+        AiTaskContext.AiTaskContextBuilder builder = AiTaskContext.builder()
+                .session(session)
+                .userInput(input);
+        if (input != null && !input.isBlank()) {
+            if (intent == AiIntent.PLAN_CONFIG || intent == AiIntent.MODIFY_CONFIG || intent == AiIntent.RUN_DIFF) {
+                builder.attribute(CONFIG_REQUEST_KEY,
+                        CompareIntentHintExtractor.enrich(session.getSessionId(), input.trim(), null));
+            }
+        }
+        return dispatch(map(intent), builder.build());
     }
 
     @Override
@@ -96,12 +109,23 @@ public class AiConversationOrchestrator implements AiConversationRuntime {
         switch (commandName.trim().toLowerCase()) {
             case "plan":
                 return AiTaskType.PLAN_CONFIG;
+            case "validate":
+                return AiTaskType.VALIDATE;
+            case "check":
+            case "dry-run":
+                return AiTaskType.DRY_RUN;
             case "run":
+            case "diff":
                 return AiTaskType.RUN_DIFF;
             case "diagnose":
+            case "analyze-last":
                 return AiTaskType.DIAGNOSE;
             case "repair":
                 return AiTaskType.REPAIR;
+            case "remember":
+                return AiTaskType.MEMORY_ADD;
+            case "forget":
+                return AiTaskType.MEMORY_REMOVE;
             case "explain":
                 return AiTaskType.EXPLAIN;
             case "doctor":

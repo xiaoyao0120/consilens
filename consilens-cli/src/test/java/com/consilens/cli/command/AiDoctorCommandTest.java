@@ -8,6 +8,7 @@ import com.consilens.ai.model.LLMResponse;
 import com.consilens.ai.spi.AIAnalyzer;
 import com.consilens.ai.spi.LLMBackend;
 import com.consilens.cli.ai.AIBackendOptions;
+import com.consilens.cli.ai.ResolvedBackendSettings;
 import com.consilens.core.diff.DiffResult;
 import org.junit.jupiter.api.Test;
 import picocli.CommandLine;
@@ -16,6 +17,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -141,6 +143,33 @@ class AiDoctorCommandTest {
 
         assertEquals(0, exitCode);
         assertFalse(availabilityCalled.get());
+    }
+
+    @Test
+    void shouldAcceptApiKeyFromBackendDefaults() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        CommandLine commandLine = commandLine(new AiDoctorCommand(
+                () -> Set.of("rulebased"),
+                () -> Set.of("openai"),
+                TestAnalyzer::new,
+                options -> new TestBackend("openai", "gpt-test", true),
+                options -> "openai",
+                options -> ResolvedBackendSettings.builder()
+                        .backend("openai")
+                        .model("gpt-test")
+                        .apiKey("defaults-key")
+                        .apiKeySource("backend-defaults.json")
+                        .build(),
+                name -> null,
+                () -> Path.of("/tmp/backend-defaults.json"),
+                new com.fasterxml.jackson.databind.ObjectMapper()), out, new ByteArrayOutputStream());
+
+        int exitCode = commandLine.execute("--backend", "openai");
+
+        assertEquals(0, exitCode);
+        String output = out.toString(StandardCharsets.UTF_8);
+        assertTrue(output.contains("credentials: PASS"));
+        assertTrue(output.contains("backend-defaults.json"));
     }
 
     private CommandLine commandLine(AiDoctorCommand command, ByteArrayOutputStream out, ByteArrayOutputStream err) {

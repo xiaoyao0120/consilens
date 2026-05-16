@@ -23,6 +23,13 @@ public class DefaultToolProvider implements ToolProvider {
     @Override
     public List<Tool> getTools() {
         return Arrays.asList(
+                new PlannerConfigSchemaTool(),
+                new PlannerExtractCompareHintsTool(),
+                new PlannerSessionStateTool(),
+                new PlannerCurrentConfigTool(),
+                new PlannerMemoryFactsTool(),
+                new PlannerListConnectorsTool(),
+                new PlannerDescribeConnectorTool(),
                 new DiffTool(),
                 new AnalyzeTool(),
                 new ConfigGenerateTool(),

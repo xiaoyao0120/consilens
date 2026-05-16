@@ -4,6 +4,7 @@ import com.consilens.ai.execution.DiagnoseCapability;
 import com.consilens.ai.execution.model.DiagnoseReport;
 import com.consilens.ai.execution.model.EvidenceRef;
 import com.consilens.ai.runtime.model.AiTaskContext;
+import com.consilens.ai.runtime.model.AiTaskEvent;
 import com.consilens.ai.runtime.model.AiTaskResult;
 import com.consilens.ai.runtime.model.AiTurnResult;
 import com.consilens.ai.runtime.task.AiTask;
@@ -16,6 +17,7 @@ import com.consilens.ai.session.model.ArtifactType;
 import com.consilens.cli.ai.DefaultDiagnoseCapability;
 
 import java.util.Map;
+import java.util.List;
 
 /**
  * Diagnoses the latest diff evidence for a session.
@@ -45,7 +47,8 @@ public class DiagnoseTask extends AbstractAiTask implements AiTask {
     public AiTaskResult execute(AiTaskContext context) {
         EvidenceRef evidenceRef = resolveEvidence(context);
         if (evidenceRef == null) {
-            return failure(type(), "No diff evidence found for diagnose.");
+            return failure(type(), "No diff evidence found for diagnose.",
+                    List.of(event("diagnose", "failed", "No diff evidence found for diagnose.")));
         }
         DiagnoseCapability effectiveCapability = effectiveCapability(context);
         DiagnoseReport report = effectiveCapability.diagnose(evidenceRef);
@@ -71,6 +74,7 @@ public class DiagnoseTask extends AbstractAiTask implements AiTask {
                         + " diagnosis=" + diagnosisArtifact.getArtifactId()
                         + System.lineSeparator() + markdown)
                 .suggestedNextAction("repair")
+                .events(List.of(event("diagnose", "completed", report.getSummary(), diagnosisArtifact)))
                 .build();
     }
 

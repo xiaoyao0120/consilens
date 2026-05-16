@@ -5,6 +5,8 @@ import com.consilens.ai.spi.AIAnalyzer;
 import lombok.Builder;
 import lombok.Data;
 
+import java.util.Map;
+
 /**
  * Context passed to each tool invocation.
  */
@@ -17,4 +19,7 @@ public class ToolContext {
 
     /** The AI analyzer available for this session. */
     private AIAnalyzer analyzer;
+
+    /** Optional planner/runtime attributes available to tools. */
+    private Map<String, Object> attributes;
 }

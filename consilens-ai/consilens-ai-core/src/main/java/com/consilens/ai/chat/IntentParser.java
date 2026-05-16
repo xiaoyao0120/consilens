@@ -14,13 +14,13 @@ import java.util.Locale;
 public class IntentParser {
 
     private static final List<String> DIFF_KEYWORDS = Arrays.asList(
-            "diff", "compare", "比较", "对比", "check", "verify", "sync check"
+            "diff", "compare", "比较", "对比", "比对", "check", "verify", "sync check"
     );
     private static final List<String> EXPLAIN_KEYWORDS = Arrays.asList(
             "explain", "why", "what", "告诉我", "解释", "分析", "analyze", "analyse", "reason", "cause"
     );
     private static final List<String> REPAIR_KEYWORDS = Arrays.asList(
-            "repair", "fix", "修复", "修正", "sql", "generate sql", "patch", "correct"
+            "repair", "fix", "修复", "修正", "repair sql", "fix sql", "generate sql", "rollback sql", "patch", "correct"
     );
     private static final List<String> SCHEMA_KEYWORDS = Arrays.asList(
             "schema", "structure", "columns", "fields", "表结构", "discover", "show table"

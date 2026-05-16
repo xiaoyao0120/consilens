@@ -16,7 +16,7 @@ import picocli.CommandLine.Command;
  * <ul>
  *   <li>{@code diff} - Perform data comparison between databases</li>
  *   <li>{@code config} - Configuration management (generate, validate)</li>
- *   <li>{@code ai} - AI-assisted configuration and explanation</li>
+ *   <li>{@code ai} - AI runtime, config generation, diagnosis and repair loop</li>
  * </ul>
  */
 @Slf4j

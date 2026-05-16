@@ -33,7 +33,9 @@ public class DoctorTask extends AbstractAiTask implements AiTask {
         String summary = "Session " + context.getSession().getSessionId()
                 + " status=" + context.getSession().getStatus()
                 + " currentTask=" + context.getSession().getCurrentTask()
-                + " artifacts=" + artifacts;
+                + " artifacts=" + artifacts
+                + System.lineSeparator()
+                + "Describe a comparison goal in natural language, or use /check, /run, /config, /sessions, /resume, /new.";
         return AiTaskResult.builder()
                 .success(true)
                 .taskType(type())

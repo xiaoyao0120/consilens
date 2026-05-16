@@ -6,7 +6,10 @@ import com.consilens.ai.spi.AIAnalyzerManager;
 import com.consilens.ai.spi.LLMBackend;
 import com.consilens.ai.spi.LLMBackendManager;
 import com.consilens.cli.ai.AIBackendOptions;
+import com.consilens.cli.ai.AiBackendDefaultsStore;
 import com.consilens.cli.ai.LLMBackendResolver;
+import com.consilens.cli.ai.ResolvedBackendSettings;
+import com.consilens.cli.ai.runtime.AiRuntimePaths;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
@@ -14,6 +17,8 @@ import picocli.CommandLine.Option;
 import picocli.CommandLine.Spec;
 
 import java.io.PrintWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -41,13 +46,15 @@ public class AiDoctorCommand implements Callable<Integer> {
     private final Function<String, AIAnalyzer> analyzerFactory;
     private final Function<AIBackendOptions, LLMBackend> backendFactory;
     private final Function<AIBackendOptions, String> backendNameResolver;
+    private final Function<AIBackendOptions, ResolvedBackendSettings> backendSettingsResolver;
     private final Function<String, String> envProvider;
+    private final Supplier<Path> backendDefaultsLocationSupplier;
     private final ObjectMapper jsonMapper;
 
     @Option(names = "--analyzer", description = "Analyzer provider name. Defaults to CONSILENS_AI_ANALYZER or rulebased")
     private String analyzer;
 
-    @Option(names = "--backend", description = "AI backend: noop, ollama, openai, deepseek. Defaults to CONSILENS_AI_BACKEND or noop")
+    @Option(names = "--backend", description = "AI backend: noop, ollama, openai, deepseek. Defaults to CLI/env/backend-defaults.json or noop")
     private String backend;
 
     @Option(names = "--model", description = "AI model name")
@@ -84,7 +91,9 @@ public class AiDoctorCommand implements Callable<Integer> {
                 name -> AIAnalyzerManager.getInstance().create(name),
                 AiDoctorCommand::resolveBackend,
                 AiDoctorCommand::resolveBackendName,
+                AiDoctorCommand::resolveBackendSettings,
                 System::getenv,
+                () -> new AiBackendDefaultsStore(new AiRuntimePaths()).location(),
                 new ObjectMapper()
         );
     }
@@ -96,12 +105,34 @@ public class AiDoctorCommand implements Callable<Integer> {
                     Function<AIBackendOptions, String> backendNameResolver,
                     Function<String, String> envProvider,
                     ObjectMapper jsonMapper) {
+        this(analyzerNames,
+                backendNames,
+                analyzerFactory,
+                backendFactory,
+                backendNameResolver,
+                new LLMBackendResolver(envProvider)::resolveSettings,
+                envProvider,
+                () -> new AiBackendDefaultsStore(new AiRuntimePaths()).location(),
+                jsonMapper);
+    }
+
+    AiDoctorCommand(Supplier<Set<String>> analyzerNames,
+                    Supplier<Set<String>> backendNames,
+                    Function<String, AIAnalyzer> analyzerFactory,
+                    Function<AIBackendOptions, LLMBackend> backendFactory,
+                    Function<AIBackendOptions, String> backendNameResolver,
+                    Function<AIBackendOptions, ResolvedBackendSettings> backendSettingsResolver,
+                    Function<String, String> envProvider,
+                    Supplier<Path> backendDefaultsLocationSupplier,
+                    ObjectMapper jsonMapper) {
         this.analyzerNames = analyzerNames;
         this.backendNames = backendNames;
         this.analyzerFactory = analyzerFactory;
         this.backendFactory = backendFactory;
         this.backendNameResolver = backendNameResolver;
+        this.backendSettingsResolver = backendSettingsResolver;
         this.envProvider = envProvider;
+        this.backendDefaultsLocationSupplier = backendDefaultsLocationSupplier;
         this.jsonMapper = jsonMapper;
     }
 
@@ -138,7 +169,8 @@ public class AiDoctorCommand implements Callable<Integer> {
                 backends.isEmpty() ? "No LLM backend providers discovered" : "Discovered: " + String.join(", ", backends));
 
         AIBackendOptions backendOptions = backendOptions();
-        String selectedBackend = backendNameResolver.apply(backendOptions);
+        ResolvedBackendSettings resolvedSettings = backendSettingsResolver.apply(backendOptions);
+        String selectedBackend = resolvedSettings.getBackend();
         LLMBackend selected = null;
         if (!backends.contains(selectedBackend)) {
             report.add("llmBackend", "FAIL", "LLM backend not discovered: " + selectedBackend);
@@ -146,7 +178,9 @@ public class AiDoctorCommand implements Callable<Integer> {
             selected = checkBackend(report, selectedBackend, backendOptions);
         }
 
-        boolean credentialsOk = checkCredentials(report, selectedBackend);
+        report.add("backendDefaults", Files.exists(backendDefaultsLocationSupplier.get()) ? "PASS" : "SKIP",
+                "Defaults file: " + backendDefaultsLocationSupplier.get());
+        boolean credentialsOk = checkCredentials(report, selectedBackend, resolvedSettings);
         checkOnlineAvailability(report, selectedBackend, selected, credentialsOk);
         return report;
     }
@@ -182,7 +216,7 @@ public class AiDoctorCommand implements Callable<Integer> {
         }
     }
 
-    private boolean checkCredentials(DoctorReport report, String selectedBackend) {
+    private boolean checkCredentials(DoctorReport report, String selectedBackend, ResolvedBackendSettings resolvedSettings) {
         String envName = requiredApiKeyEnv(selectedBackend);
         if (envName == null) {
             if ("noop".equalsIgnoreCase(selectedBackend)) {
@@ -192,11 +226,11 @@ public class AiDoctorCommand implements Callable<Integer> {
             }
             return true;
         }
-        if (hasText(apiKey) || hasText(envProvider.apply(envName))) {
-            report.add("credentials", "PASS", "API key configured via --api-key or " + envName);
+        if (resolvedSettings != null && resolvedSettings.hasApiKey()) {
+            report.add("credentials", "PASS", "API key configured via " + resolvedSettings.getApiKeySource());
             return true;
         }
-        report.add("credentials", "FAIL", envName + " or --api-key is required for backend " + selectedBackend);
+        report.add("credentials", "FAIL", envName + ", backend-defaults.json or --api-key is required for backend " + selectedBackend);
         return false;
     }
 
@@ -287,6 +321,10 @@ public class AiDoctorCommand implements Callable<Integer> {
 
     private static String resolveBackendName(AIBackendOptions options) {
         return new LLMBackendResolver().resolveBackendName(options);
+    }
+
+    private static ResolvedBackendSettings resolveBackendSettings(AIBackendOptions options) {
+        return new LLMBackendResolver().resolveSettings(options);
     }
 
     private static class DoctorReport {

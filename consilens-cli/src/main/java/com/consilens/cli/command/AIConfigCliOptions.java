@@ -17,16 +17,16 @@ class AIConfigCliOptions {
     @Parameters(index = "0", arity = "0..1", description = "Natural language diff goal")
     String goal;
 
-    @Option(names = "--backend", description = "AI backend: noop, ollama, openai, deepseek. Defaults to CONSILENS_AI_BACKEND or noop")
+    @Option(names = "--backend", description = "AI backend: noop, ollama, openai, deepseek. Defaults to CLI/env/backend-defaults.json or noop")
     String backend;
 
-    @Option(names = "--model", description = "AI model name")
+    @Option(names = "--model", description = "AI model name (CLI > env > backend-defaults.json)")
     String model;
 
-    @Option(names = "--base-url", description = "AI backend base URL")
+    @Option(names = "--base-url", description = "AI backend base URL (CLI > env > backend-defaults.json)")
     String baseUrl;
 
-    @Option(names = "--api-key", description = "AI backend API key")
+    @Option(names = "--api-key", description = "AI backend API key (CLI > env/backend-defaults.json)")
     String apiKey;
 
     @Option(names = "--timeout", description = "AI backend timeout")

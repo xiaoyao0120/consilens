@@ -1,6 +1,7 @@
 package com.consilens.cli.ai;
 
 import com.consilens.ai.config.model.AIConfigIssue;
+import com.consilens.ai.conversation.engine.ExampleTemplateStore;
 import com.consilens.ai.execution.ConfigCapability;
 import com.consilens.ai.execution.model.ConfigGenerationRequest;
 import com.consilens.ai.execution.model.ConfigRef;
@@ -37,6 +38,10 @@ public class DefaultConfigCapability implements ConfigCapability {
         this(new AIConfigService(), new ConfigurationManager(), new DiffService(), new AIExplainService());
     }
 
+    public DefaultConfigCapability(ExampleTemplateStore exampleTemplateStore) {
+        this(new AIConfigService(exampleTemplateStore), new ConfigurationManager(), new DiffService(), new AIExplainService());
+    }
+
     DefaultConfigCapability(AIConfigService aiConfigService,
                             ConfigurationManager configurationManager,
                             DiffService diffService,
@@ -51,7 +56,8 @@ public class DefaultConfigCapability implements ConfigCapability {
     @Override
     public GeneratedConfig generate(ConfigGenerationRequest request) {
         AIConfigResult result = aiConfigService.generate(toRequest(request));
-        if (!result.isValid()) {
+        // If we have a draft YAML (even invalid), return it as a template for the user to complete
+        if (!result.isValid() && result.getYaml() == null) {
             throw new IllegalArgumentException("AI config generation failed: " + summarizeIssues(result.getIssues()));
         }
         Map<String, String> hints = hintMap(request);
@@ -66,6 +72,13 @@ public class DefaultConfigCapability implements ConfigCapability {
         envHint(hints, "targetPasswordEnv").ifPresent(builder::requiredEnv);
         if (result.getDraft() != null && result.getDraft().getAssumptions() != null) {
             result.getDraft().getAssumptions().forEach(builder::assumption);
+        }
+        // Surface draft-template warnings as assumptions so callers can display them
+        if (result.getIssues() != null) {
+            result.getIssues().stream()
+                    .filter(i -> i.getSeverity() == com.consilens.ai.config.model.AIConfigIssue.Severity.WARNING)
+                    .map(i -> i.getMessage())
+                    .forEach(builder::assumption);
         }
         return builder.build();
     }
