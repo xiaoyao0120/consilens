@@ -8,7 +8,7 @@ import java.time.Duration;
 public class DeepSeekBackend extends AbstractOpenAICompatibleBackend {
 
     private static final String DEFAULT_BASE_URL = "https://api.deepseek.com";
-    private static final String DEFAULT_MODEL = "deepseek-chat";
+    private static final String DEFAULT_MODEL = "deepseek-v4-flash";
 
     public DeepSeekBackend() {
         this(DEFAULT_BASE_URL, DEFAULT_MODEL, System.getenv("DEEPSEEK_API_KEY"));

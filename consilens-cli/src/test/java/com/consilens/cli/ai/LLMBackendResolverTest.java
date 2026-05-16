@@ -4,6 +4,7 @@ import com.consilens.ai.spi.LLMBackend;
 import org.junit.jupiter.api.Test;
 
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -75,5 +76,31 @@ class LLMBackendResolverTest {
         String backend = envResolver.resolveBackendName(AIBackendOptions.builder().backend(null).build());
 
         assertEquals("openai", backend);
+    }
+
+    @Test
+    void shouldResolveBackendNameAndSettingsFromDefaultsFile() {
+        AiBackendDefaults defaults = AiBackendDefaults.builder()
+                .defaultBackend("openai")
+                .shared(AiBackendDefaults.BackendDefaults.builder()
+                        .timeout("20s")
+                        .build())
+                .backends(Map.of("openai", AiBackendDefaults.BackendDefaults.builder()
+                        .model("gpt-4.1-mini")
+                        .baseUrl("https://api.openai.com/v1")
+                        .apiKeyEnv("TEAM_OPENAI_KEY")
+                        .build()))
+                .build();
+        Map<String, String> env = Map.of("TEAM_OPENAI_KEY", "team-key");
+        LLMBackendResolver envResolver = new LLMBackendResolver(env::get, () -> Optional.of(defaults));
+
+        ResolvedBackendSettings settings = envResolver.resolveSettings(AIBackendOptions.builder().backend(null).build());
+
+        assertEquals("openai", settings.getBackend());
+        assertEquals("gpt-4.1-mini", settings.getModel());
+        assertEquals("https://api.openai.com/v1", settings.getBaseUrl());
+        assertEquals("team-key", settings.getApiKey());
+        assertEquals("TEAM_OPENAI_KEY", settings.getApiKeySource());
+        assertEquals("20s", settings.getTimeout());
     }
 }

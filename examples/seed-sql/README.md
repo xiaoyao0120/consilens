@@ -32,6 +32,8 @@ This directory contains repeatable seed scripts for the current Consilens exampl
 - `examples/mysql-to-doris-partitioned-checksum.yaml`
 - `examples/performance-test-mysql-vs-starrocks.yaml`
 - `examples/large-table-mysql-to-starrocks.yaml`
+- `examples/ai-chat-closed-loop-demo.sh`
+- `examples/ai-external-diff-record-demo.sh`
 
 The scripts also include `dt`, `deleted`, and result database setup needed by the partition/filter and sink scenarios already present in the examples. The row count is intentionally 10000 for repeatable local smoke coverage; the performance example comments still describe larger production-scale workloads.
 

@@ -4,6 +4,8 @@ import com.consilens.ai.runtime.task.AiTaskType;
 import lombok.Builder;
 import lombok.Value;
 
+import java.util.List;
+
 /**
  * Result returned by a runtime task execution.
  */
@@ -16,4 +18,5 @@ public class AiTaskResult {
     AiTurnResult.Status status;
     String summary;
     String suggestedNextAction;
+    List<AiTaskEvent> events;
 }

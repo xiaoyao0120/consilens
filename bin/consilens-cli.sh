@@ -139,7 +139,11 @@ load_setenv
 CLASSPATH=$(build_classpath)
 
 # Execute CLI application with all arguments
-java $JAVA_OPTS -cp "$CLASSPATH" com.consilens.cli.ConsilensCliApplication "$@"
+# Default examples dir to $APP_HOME/examples unless overridden in setenv.sh
+if [ -z "$CONSILENS_EXAMPLES_DIR" ]; then
+    CONSILENS_EXAMPLES_DIR="$APP_HOME/examples"
+fi
+java $JAVA_OPTS -Dconsilens.examples.dir="$CONSILENS_EXAMPLES_DIR" -cp "$CLASSPATH" com.consilens.cli.ConsilensCliApplication "$@"
 
 # Capture and return the exit code
 EXIT_CODE=$?

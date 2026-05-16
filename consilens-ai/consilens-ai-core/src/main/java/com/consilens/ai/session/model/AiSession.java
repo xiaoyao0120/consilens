@@ -19,12 +19,17 @@ public class AiSession {
     Instant createdAt;
     Instant updatedAt;
     String title;
+    String summary;
+    String currentObjective;
     String status;
     String currentTask;
     String currentConfigArtifactId;
     String latestRunArtifactId;
     String latestDiagnosisArtifactId;
+    String latestAuditArtifactId;
     String latestApprovalId;
+    PendingQuestionState pendingQuestion;
+    PendingApprovalState pendingApproval;
 
     @JsonPOJOBuilder(withPrefix = "")
     public static class AiSessionBuilder {

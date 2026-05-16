@@ -100,5 +100,10 @@ JAVA_OPTS="$JAVA_OPTS -Djava.net.useSystemProxies=false"
 # will be automatically discovered. You can override it here if needed.
 # JAVA_OPTS="$JAVA_OPTS -Dlog4j.configurationFile=${APP_HOME}/conf/log4j2.xml"
 
+# AI Examples directory
+# By default the launcher uses $APP_HOME/examples (sibling of bin/).
+# Override here to load templates from a custom location.
+# export CONSILENS_EXAMPLES_DIR="/path/to/your/examples"
+
 # Export JAVA_OPTS so it's available to the launcher script
 export JAVA_OPTS

@@ -71,7 +71,9 @@ public class DefaultDiffCapability implements DiffCapability {
                     configRef.getSessionId(),
                     ArtifactType.DIFF_RESULT,
                     resultJson.getBytes(StandardCharsets.UTF_8),
-                    Map.of("runId", runId, "kind", "diff-result"));
+                    Map.of("runId", runId,
+                            "kind", "diff-result",
+                            "configArtifactId", configRef.getArtifactId() == null ? "" : configRef.getArtifactId()));
 
             byte[] evidenceBytes = Files.exists(evidencePath)
                     ? Files.readAllBytes(evidencePath)
@@ -80,7 +82,10 @@ public class DefaultDiffCapability implements DiffCapability {
                     configRef.getSessionId(),
                     ArtifactType.DIFF_EVIDENCE,
                     evidenceBytes,
-                    Map.of("runId", runId, "kind", "diff-evidence"));
+                    Map.of("runId", runId,
+                            "kind", "diff-evidence",
+                            "configArtifactId", configRef.getArtifactId() == null ? "" : configRef.getArtifactId(),
+                            "resultArtifactId", resultArtifact.getArtifactId()));
 
             LatestDiffPointer pointer = LatestDiffPointer.builder()
                     .sessionId(configRef.getSessionId())

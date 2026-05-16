@@ -1,42 +1,295 @@
-# Consilens AI Module Usage Guide
+# Consilens AI Runtime Usage Guide
 
-## Quick Start
+This guide documents the **current supported closed-loop flow** for Consilens AI.
 
-### Production CLI Flow
+The production path is the session-based runtime exposed by `consilens-cli`, not the
+older in-process chat engine. The runtime keeps config, run result, diff evidence,
+diagnosis, repair artifacts and non-sensitive memories under the same session so the
+workflow can iterate end-to-end.
+
+## Closed Loop at a Glance
+
+The supported loop is:
+
+1. Generate a config from chat goal + explicit hints
+2. Validate it and optionally dry-run it
+3. Execute the real diff with explicit approval
+4. Produce diagnosis from the resulting evidence
+5. Regenerate a repaired config from the latest diagnosis
+6. Re-run the diff until the config converges
+
+`ai repair` regenerates **configuration**, not repair SQL.
+
+## Recommended Workflow
+
+Use two layers together:
+
+1. **Bootstrap the session with `ai plan` or `ai run` and explicit flags**
+2. **Continue the loop in `ai --session ...`**
+
+That gives you both:
+
+- deterministic connector/key/field inputs on the first turn
+- a chat-style workflow for explain / diagnose / repair / rerun
+
+## 1. Preflight Checks
+
+Verify discovered plugins and backend/analyzer wiring:
 
 ```bash
-consilens ai config "compare users from mysql to postgresql by id" \
-  --no-llm \
+consilens ai providers
+consilens ai doctor
+consilens ai --session orders-loop --config ./orders-loop.yaml --backend openai
+```
+
+Optional backend defaults:
+
+```bash
+export CONSILENS_AI_BACKEND=openai
+export OPENAI_API_KEY=...
+```
+
+For a production-friendly persistent default, put backend settings in
+`~/.consilens/ai/backend-defaults.json` (or `$CONSILENS_AI_HOME/backend-defaults.json`):
+
+```json
+{
+  "defaultBackend": "openai",
+  "shared": {
+    "timeout": "30s",
+    "temperature": 0.1
+  },
+  "backends": {
+    "openai": {
+      "model": "gpt-4.1-mini",
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY"
+    },
+    "deepseek": {
+      "model": "deepseek-chat",
+      "baseUrl": "https://api.deepseek.com",
+      "apiKeyEnv": "DEEPSEEK_API_KEY"
+    },
+    "ollama": {
+      "model": "qwen2.5:14b",
+      "baseUrl": "http://localhost:11434"
+    }
+  }
+}
+```
+
+Supported backend selection comes from CLI flags or environment defaults:
+
+- `--backend openai|deepseek|ollama|noop`
+- `CONSILENS_AI_BACKEND`
+- `CONSILENS_AI_MODEL`
+- `CONSILENS_AI_BASE_URL`
+- `CONSILENS_AI_TIMEOUT`
+- `CONSILENS_AI_TEMPERATURE`
+- `CONSILENS_AI_MAX_TOKENS`
+
+Use `--no-llm` if you want config generation to rely only on explicit CLI hints.
+
+The interactive entrypoints `consilens ai` and `consilens ai shell` also accept the
+same startup flags, so you can bootstrap a live session directly with:
+
+```bash
+consilens ai \
+  --session orders-loop \
+  --config ./orders-loop.yaml \
+  --backend openai \
+  --base-url https://api.openai.com/v1
+```
+
+By default, `consilens ai` / `consilens ai shell` validates backend, base URL and
+API key before entering the REPL. If any of them cannot be resolved from CLI flags,
+environment variables, or `backend-defaults.json`, the shell exits early instead of
+opening a broken chat session. Only source/target/key-style business details are left
+for the clarification loop. When the first natural-language turn already looks
+complete enough, the shell upgrades it into a direct `plan` using the same startup
+backend settings.
+
+## 2. Create the First Session Config
+
+Recommended bootstrap:
+
+```bash
+consilens ai plan \
+  --session orders-loop \
+  "compare mysql orders with postgresql orders by order_id" \
   --source-type mysql \
-  --source-url jdbc:mysql://localhost:3306/mydb \
-  --source-table users \
+  --source-url jdbc:mysql://mysql-prod:3306/shop \
+  --source-table orders \
   --source-user-env MYSQL_USER \
   --source-password-env MYSQL_PASSWORD \
   --target-type postgresql \
-  --target-url jdbc:postgresql://localhost:5432/mydb \
-  --target-table users \
+  --target-url jdbc:postgresql://pg-staging:5432/shop \
+  --target-table orders \
   --target-user-env PG_USER \
   --target-password-env PG_PASSWORD \
-  --keys id \
-  --fields name,email,status \
-  --output diff.yaml
-
-consilens ai explain -c diff.yaml
-consilens diff --dry-run -c diff.yaml
-consilens diff -c diff.yaml
-consilens ai diagnose --result diff-records.json --analyzer rulebased --output diagnose.md
-consilens ai providers
-consilens ai providers --format json
-consilens ai doctor --format json
+  --keys order_id \
+  --fields status,amount,updated_at \
+  --strategy-mode checksum \
+  --algorithm xor \
+  --dry-run \
+  -o orders-loop.yaml
 ```
 
-For cloud LLMs, set `--backend openai` with `OPENAI_API_KEY`, or `--backend deepseek` with `DEEPSEEK_API_KEY`. `CONSILENS_AI_BACKEND`, `CONSILENS_AI_MODEL`, `CONSILENS_AI_BASE_URL` and `CONSILENS_AI_TIMEOUT` can provide environment defaults. The AI command produces structured configuration; real diff execution still goes through the existing deterministic engine.
+This creates a session-scoped config artifact, validates it, optionally dry-runs it,
+and sets it as the current config for the session.
 
-`ai diagnose` requires diff evidence, not only summary statistics. Configure a `json` `diff-record` sink before running `consilens diff`:
-The analyzer is selected via SPI with `--analyzer <name>` or `CONSILENS_AI_ANALYZER`; default: `rulebased`.
-Use `--output` to write the report to a file; omit it to print to stdout.
-Use `ai providers` to verify discovered analyzer and LLM backend providers before enabling a production task. Add `--format json` for CI checks and scripts.
-Use `ai doctor` for production preflight checks. It verifies provider discovery, selected analyzer/backend creation and required API key configuration without network calls by default; add `--online` to verify backend reachability.
+If you already want the runtime to execute the first loop immediately:
+
+```bash
+consilens ai run --session orders-loop --approve-execute \
+  "compare mysql orders with postgresql orders by order_id" \
+  --source-type mysql \
+  --source-url jdbc:mysql://mysql-prod:3306/shop \
+  --source-table orders \
+  --target-type postgresql \
+  --target-url jdbc:postgresql://pg-staging:5432/shop \
+  --target-table orders \
+  --keys order_id \
+  --fields status,amount,updated_at
+```
+
+## 3. Continue in Chat Mode
+
+```bash
+consilens ai --session orders-loop
+```
+
+Supported interactive commands:
+
+```text
+/plan <goal>
+/use-config <path>
+/validate [path]
+/dry-run [path]
+/run [--approve-execute] <goal>
+/diff [--approve-execute]
+/analyze-last
+/approve execute
+/deny
+/diagnose [path]
+/repair
+/remember <type> <content>
+/forget <memory-id>
+/recover
+/artifacts [type]
+/artifact <id>
+/explain [path]
+/snapshot
+/memories
+/help
+/exit
+```
+
+Plain text input is also accepted, but it currently goes through keyword-based intent
+routing. For production loops, prefer explicit slash commands.
+
+If the shell or client process is interrupted, use `/recover` or
+`GET /api/conversation/sessions/{sessionId}/recovery` to rebuild the current loop state from the
+persisted session snapshot plus the latest diagnosis/run-audit artifacts. Recovery summaries include
+artifact paths and will recommend `validate` instead of `run` when the session is still in
+`needs_attention` after loading or editing a config.
+
+## 4. Example Closed Loop Transcript
+
+```text
+consilens ai> /snapshot
+session=orders-loop config=<config-artifact> latestRun=<latest-run-or-null>
+
+consilens ai> /explain
+[AI RUNTIME] session=orders-loop
+... explanation of the current config and runtime risks ...
+
+consilens ai> /run
+Pending approval created. Use `/approve execute` or `/deny`.
+[AI RUNTIME] session=orders-loop
+Diff execution requires explicit approval. Re-run with --approve-execute.
+
+consilens ai> /approve execute
+[AI RUNTIME] session=orders-loop
+Run completed for session orders-loop ...
+Diagnosis: ...
+Repair Hints:
+- ...
+
+consilens ai> /repair
+[AI RUNTIME] session=orders-loop
+Created repair plan <repair-artifact> and regenerated config <new-config-artifact>
+
+consilens ai> /explain
+[AI RUNTIME] session=orders-loop
+... explanation of the repaired current config ...
+
+consilens ai> /run --approve-execute
+[AI RUNTIME] session=orders-loop
+Run completed for session orders-loop ...
+
+consilens ai> /memories
+# Session Memories
+- [goal] ...
+- [diagnosis] ...
+- [repair] ...
+```
+
+## 5. Command Semantics in the Loop
+
+| Command | Meaning | Typical moment |
+| --- | --- | --- |
+| `/plan <goal>` | Generate and validate a new current config for the session | First config or goal rewrite |
+| `/run [--approve-execute] [goal]` | Validate, dry-run, execute diff and immediately produce diagnosis | Verify whether the current config is good enough |
+| `/approve execute` | Approve the previously pending real diff execution | After reviewing the dry-run / approval prompt |
+| `/diagnose [path]` | Diagnose latest session evidence, or an explicit external result path | Re-run diagnosis or switch analyzer |
+| `/repair` | Regenerate config and repair plan from the latest diagnosis | After a run produced diagnosis and repair hints |
+| `/explain [path]` | Explain the current config or an explicit config file | Review a repaired config before re-running |
+| `/snapshot` | Show current config and latest run pointers | Inspect session state |
+| `/memories` | Show recent non-sensitive runtime memories | Understand what the runtime remembered from previous iterations |
+
+## 6. Session Rules
+
+1. **`--session` is the loop key**  
+   Keep the same session ID across `ai plan`, `ai run`, `ai repair`, `ai explain`
+   and `ai shell` if you want them to share artifacts and memories.
+
+2. **`ai run` without a new goal reuses the current config**  
+   This is the normal path when you want to verify a repaired config.
+
+3. **`ai run` with a goal or hints regenerates the current config first**  
+   Useful when you want to adjust the config and execute in one step.
+
+4. **`ai repair` works from the latest diagnosis artifact**  
+   If the session has no diagnosis, repair cannot proceed.
+
+## 7. Diagnosing External Results
+
+If you stay inside the runtime loop, `ai run` already produces diagnosis from its own
+diff evidence. You only need `ai diagnose --result ...` when:
+
+1. the result was produced outside the current session
+2. you want to rerun diagnosis with a chosen analyzer or output path
+
+Example:
+
+```bash
+consilens ai diagnose \
+  --session orders-loop \
+  --result ./diff-records.json \
+  --analyzer rulebased \
+  --output diagnose.md
+```
+
+The input must contain row-level diff evidence:
+
+- a JSON array of diff records, or
+- an object containing a `differences` array
+
+A stats-only `result` JSON file is not enough.
+
+If the result comes from plain `consilens diff`, make sure the config includes a
+`json` + `diff-record` sink:
 
 ```yaml
 result:
@@ -50,356 +303,25 @@ result:
         pretty: true
 ```
 
-### Basic Conversation
+## 8. Equivalent Non-Interactive Loop
 
-```java
-// Create a session context
-SessionContext session = SessionContext.builder()
-    .conversation(new ConversationContext())
-    .backend(new OllamaBackend("http://localhost:11434"))
-    .analyzer(new RuleBasedAnalyzer())
-    .build();
-
-// Create the chat engine
-ToolRegistry toolRegistry = new ToolRegistry();
-toolRegistry.register(new DiffTool());
-toolRegistry.register(new AnalyzeTool());
-toolRegistry.register(new SchemaDiscoveryTool());
-
-ChatEngine engine = new ChatEngine(
-    session.getBackend(),
-    toolRegistry,
-    session.getAnalyzer()
-);
-
-// Have a conversation
-String response = engine.chat(
-    "Compare my production and staging databases", 
-    session.getConversation()
-);
-System.out.println(response);
-```
-
-Cloud backend examples:
-
-```java
-LLMBackend openai = new OpenAIBackend(
-    "https://api.openai.com/v1",
-    "gpt-4.1-mini",
-    System.getenv("OPENAI_API_KEY")
-);
-
-LLMBackend deepseek = new DeepSeekBackend(
-    "https://api.deepseek.com",
-    "deepseek-chat",
-    System.getenv("DEEPSEEK_API_KEY")
-);
-```
-
-## Common Use Cases
-
-### 1. Compare Two Database Tables
-
-```
-User: "Compare the 'users' table between production and staging"
-
-SDK/demo response: The AI will:
-1. Ask for connection details (URLs, credentials)
-2. Execute the diff using DiffTool
-3. Report the number of differences found
-4. Store the diff result for further analysis
-```
-
-For production CLI usage, prefer `consilens ai config` followed by `consilens diff --dry-run` and `consilens diff`.
-
-**Tool Input Schema** (DiffTool):
-```json
-{
-  "source_url": "jdbc:mysql://prod-server:3306/db",
-  "source_username": "user",
-  "source_password": "password",
-  "source_table": "public.users",
-  "target_url": "jdbc:mysql://staging-server:3306/db",
-  "target_username": "user",
-  "target_password": "password",
-  "target_table": "public.users",
-  "primary_keys": "id",
-  "limit": 10000
-}
-```
-
-### 2. Analyze Diff Results
-
-```
-User: "What patterns do you see in the differences?"
-
-Response: The AI will:
-1. Use the latest diff result
-2. Run pattern analysis (AnalyzeTool)
-3. Identify root causes:
-   - Encoding mismatches
-   - Timezone or time drift issues
-   - Null handling differences
-   - Data truncation
-4. Provide explanations and recommendations
-```
-
-Production CLI:
+You can run the same session loop without entering the shell:
 
 ```bash
-consilens ai diagnose --result diff-records.json --analyzer rulebased --output diagnose.md
+consilens ai plan --session orders-loop "compare orders ..."
+consilens ai explain --session orders-loop -c orders-loop.yaml
+consilens ai run --session orders-loop --approve-execute
+consilens ai repair --session orders-loop -o orders-loop-repaired.yaml
+consilens ai run --session orders-loop --approve-execute
+consilens ai memories --session orders-loop
 ```
 
-The input must be either a JSON array of diff records or an object containing a `differences` array. A stats-only `result` JSON file is rejected because it does not contain row-level evidence.
+## 9. Boundaries of the Current Design
 
-### 3. Generate Repair SQL
-
-```
-User: "Generate SQL to fix these differences on the target side"
-
-Response: The AI will:
-1. Load the diff result
-2. Generate appropriate SQL statements:
-   - INSERT for missing rows
-   - UPDATE for mismatched data
-   - DELETE for extra rows
-3. Present the SQL for review before executing
-```
-
-**Important**: Always review generated SQL before executing in production!
-
-### 4. Discover Table Schema
-
-```
-User: "Show me the schema of the 'orders' table"
-
-Response: The AI will:
-1. Connect to the specified database
-2. Fetch column definitions, types, sizes
-3. Identify primary and foreign keys
-4. Present a formatted table with the schema
-```
-
-**Tool Input Schema** (SchemaDiscoveryTool):
-```json
-{
-  "url": "jdbc:mysql://localhost:3306/db",
-  "username": "user",
-  "password": "password",
-  "schema": "public",
-  "table": "orders"
-}
-```
-
-### 5. Generate Configuration
-
-```
-User: "Generate a Consilens config for comparing these tables"
-
-Response: The AI will:
-1. Collect the database connection details
-2. Generate a YAML configuration template
-3. Present it for customization and use
-```
-
-## Advanced Features
-
-### Multi-Turn Conversations
-
-The AI maintains conversation context across multiple turns:
-
-```
-User (Turn 1): "Compare db1.users with db2.users on id"
-AI: [Runs diff, stores result]
-
-User (Turn 2): "What caused these mismatches?"
-AI: [Uses stored result from Turn 1 to analyze]
-
-User (Turn 3): "Generate repair SQL"
-AI: [Uses the same result to generate SQL]
-```
-
-### Connection Caching
-
-Register connections to avoid re-entering credentials:
-
-```java
-ConversationContext context = new ConversationContext();
-context.registerConnection("prod", ConnectionInfo.builder()
-    .type("mysql")
-    .url("jdbc:mysql://prod-server:3306/db")
-    .username("user")
-    .password("password")
-    .build());
-
-// Later, the AI can reference this connection
-String response = engine.chat(
-    "Compare the users table in 'prod' connection with staging",
-    context
-);
-```
-
-### Custom Tool Integration
-
-Implement the `Tool` interface to add custom capabilities:
-
-```java
-public class MyReportTool implements Tool {
-    @Override
-    public String getName() {
-        return "generate_report";
-    }
-    
-    @Override
-    public String getDescription() {
-        return "Generate a difference report in custom format";
-    }
-    
-    @Override
-    public JsonNode getInputSchema() {
-        // Define input parameters
-    }
-    
-    @Override
-    public ToolResult execute(JsonNode input, ToolContext context) {
-        DiffResult diff = context.getConversation()
-            .getLatestDiffResult()
-            .orElse(null);
-        
-        if (diff == null) {
-            return ToolResult.failure("No diff result found");
-        }
-        
-        // Generate report
-        String report = generateReport(diff);
-        return ToolResult.success(report);
-    }
-    
-    @Override
-    public boolean isReadOnly() {
-        return true;
-    }
-}
-```
-
-### Fallback Mode (No LLM)
-
-If an LLM backend is not available, the system falls back to rule-based responses:
-
-```java
-ChatEngine engine = new ChatEngine(
-    new NoopBackend(),  // No actual LLM
-    toolRegistry,
-    analyzer
-);
-
-// Still works, but with predefined responses
-String response = engine.chat("Compare tables", context);
-// Returns: "To compare tables, provide JDBC URLs, credentials, and table names..."
-```
-
-## Error Handling
-
-### Tool Execution Failures
-
-The AI gracefully handles tool failures:
-
-```
-User: "Compare with invalid connection"
-
-Response (if connection fails):
-"Tool execution error: Unable to connect to the database. 
-Please verify the URL, username, and password."
-```
-
-### LLM Failures
-
-Automatic retry with exponential backoff:
-- First attempt: Immediate
-- Retry 1: After 1 second
-- Retry 2: After 2 seconds
-- After 3 failures: Returns user-friendly error
-
-### Input Validation
-
-The system validates and sanitizes all inputs:
-- Truncates messages longer than 10,000 characters
-- Removes code fence markers to prevent prompt injection
-- Filters null bytes
-- Validates required parameters in tool schemas
-
-## Performance Tips
-
-1. **Set Reasonable Limits**: Use the `limit` parameter in DiffTool to fetch fewer rows:
-   ```
-   "limit": 1000  // Instead of default 10,000
-   ```
-
-2. **Use Schema Caching**: Cache schema information to avoid repeated JDBC introspection
-
-3. **Batch Operations**: Group multiple comparisons into a single conversation rather than separate calls
-
-4. **Monitor Tool Execution Time**: 
-   - DiffTool is I/O bound (database queries)
-   - Set timeouts for JDBC connections
-   - Consider connection pooling for many tools
-
-## Security Reminders
-
-1. **Never Share Credentials**: Passwords are transient and never logged, but:
-   - Don't share conversation logs containing database credentials
-   - Use environment variables or secure vaults for passwords
-
-2. **Review Generated SQL**: Always review and test repair SQL before executing:
-   ```sql
-   -- Review this before running in production!
-   UPDATE users SET email = 'new@example.com' WHERE id = 123;
-   ```
-
-3. **Least Privilege**: Use database users with minimal required permissions:
-   - DiffTool needs only SELECT
-   - RepairGenerateTool only generates SQL (doesn't execute)
-   - Execution is manual and auditable
-
-4. **Audit Trail**: Enable database query logging to track:
-   - When comparisons are performed
-   - What tables are accessed
-   - Who makes repairs
-
-## Troubleshooting
-
-### "No LLM backend is configured"
-The system is running in fallback mode. Either:
-- Start an Ollama server: `ollama serve`
-- Configure an OllamaBackend with correct URL
-- Set `OPENAI_API_KEY` and configure OpenAIBackend
-- Set `DEEPSEEK_API_KEY` and configure DeepSeekBackend
-- Or intentionally use NoopBackend for rule-based only
-
-### "Unknown tool: consilens_diff"
-The tool isn't registered. Ensure:
-```java
-toolRegistry.register(new DiffTool());
-```
-
-### "Tool execution error: java.sql.SQLException"
-Database connection failed. Verify:
-- JDBC URL format is correct
-- Credentials are correct
-- Firewall allows connection
-- Database server is running
-
-### "Input message truncated"
-Your message was longer than 10,000 characters. Break it into smaller requests.
-
-## Multilingual Support
-
-The system supports multiple languages in user input:
-
-```
-English: "Compare the two tables"
-Chinese: "比较这两个表"
-Spanish: "Compara las dos tablas"
-```
-
-Intent parsing and generated responses adapt to the language used.
+- The supported orchestration entrypoint is the runtime in `consilens-cli`
+- Intent parsing is keyword-based and best used as a convenience layer, not as the
+  only control surface for production loops
+- Repair is config regeneration plus a repair-plan artifact
+- Actual diff execution still uses the deterministic Consilens engine
+- Analyzer and backend providers are loaded via SPI and should be checked with
+  `ai providers` / `ai doctor`

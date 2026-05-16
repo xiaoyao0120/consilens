@@ -4,6 +4,7 @@ import com.consilens.ai.execution.ConfigCapability;
 import com.consilens.ai.execution.model.ConfigGenerationRequest;
 import com.consilens.ai.execution.model.GeneratedConfig;
 import com.consilens.ai.runtime.model.AiTaskContext;
+import com.consilens.ai.runtime.model.AiTaskEvent;
 import com.consilens.ai.runtime.model.AiTaskResult;
 import com.consilens.ai.runtime.model.AiTurnResult;
 import com.consilens.ai.runtime.task.AiTask;
@@ -14,13 +15,17 @@ import com.consilens.ai.session.AiSessionStore;
 import com.consilens.ai.session.model.ArtifactRef;
 import com.consilens.ai.session.model.ArtifactType;
 import com.consilens.cli.model.CliConfiguration;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Produces a repair plan artifact and a next-round repaired config artifact.
@@ -50,16 +55,21 @@ public class RepairTask extends AbstractAiTask implements AiTask {
 
     @Override
     public AiTaskResult execute(AiTaskContext context) {
+        List<AiTaskEvent> events = new ArrayList<>();
         ArtifactRef diagnosisArtifact = artifactStore.latest(context.getSession().getSessionId(), ArtifactType.DIAGNOSIS).orElse(null);
         if (diagnosisArtifact == null) {
-            return failure(type(), "No diagnosis artifact found for repair.");
+            return failure(type(), "No diagnosis artifact found for repair.",
+                    List.of(event("load-failure-context", "failed", "No diagnosis artifact found for repair.")));
         }
         ArtifactRef currentConfigArtifact = context.getSession().getCurrentConfigArtifactId() == null
                 ? null
                 : artifactStore.get(context.getSession().getCurrentConfigArtifactId()).orElse(null);
         if (currentConfigArtifact == null) {
-            return failure(type(), "No current config artifact found for repair.");
+            return failure(type(), "No current config artifact found for repair.",
+                    List.of(event("load-failure-context", "failed", "No current config artifact found for repair.")));
         }
+        events.add(event("load-failure-context", "completed",
+                "Loaded diagnosis " + diagnosisArtifact.getArtifactId() + " and config " + currentConfigArtifact.getArtifactId()));
         String diagnosis = artifactStore.read(diagnosisArtifact.getArtifactId())
                 .map(bytes -> new String(bytes, StandardCharsets.UTF_8))
                 .orElse("Diagnosis artifact content unavailable.");
@@ -74,19 +84,36 @@ public class RepairTask extends AbstractAiTask implements AiTask {
                 context.getSession().getSessionId(),
                 ArtifactType.CONFIG,
                 repaired.getConfigRef().getContent(),
-                Map.of("task", "repair", "sourceConfigArtifactId", currentConfigArtifact.getArtifactId()));
+                Map.of("task", "repair",
+                        "sourceConfigArtifactId", currentConfigArtifact.getArtifactId(),
+                        "diagnosisArtifactId", diagnosisArtifact.getArtifactId()));
+        events.add(event("generate-patch", "completed",
+                "Generated repaired config " + repairedConfigArtifact.getArtifactId(), repairedConfigArtifact));
+        List<String> changedSections = changedSections(currentConfig, repaired.getConfigRef().getContent());
 
         StringBuilder patch = new StringBuilder()
                 .append("# AI Repair Plan").append(System.lineSeparator()).append(System.lineSeparator())
+                .append("Status: READY_FOR_RETRY").append(System.lineSeparator())
                 .append("Session: ").append(context.getSession().getSessionId()).append(System.lineSeparator())
                 .append("Diagnosis: ").append(diagnosisArtifact.getArtifactId()).append(System.lineSeparator());
         patch.append("Current Config: ").append(currentConfigArtifact.getArtifactId()).append(System.lineSeparator());
         patch.append("Repaired Config: ").append(repairedConfigArtifact.getArtifactId()).append(System.lineSeparator());
+        patch.append("Changed Sections: ").append(changedSections.isEmpty() ? "(unknown)" : String.join(", ", changedSections))
+                .append(System.lineSeparator());
+        patch.append("Next Action: RUN_AGAIN").append(System.lineSeparator());
+        if (!changedSections.isEmpty()) {
+            patch.append(System.lineSeparator())
+                    .append("Changes:").append(System.lineSeparator());
+            for (String section : changedSections) {
+                patch.append(renderSectionChange(section, currentConfig, repaired.getConfigRef().getContent()));
+            }
+        }
         patch.append(System.lineSeparator())
                 .append("Recommended repair loop:").append(System.lineSeparator())
                 .append("1. Review the regenerated config artifact and diagnosis below.").append(System.lineSeparator())
-                .append("2. If needed, refine keys, fields, normalization, or connector hints.").append(System.lineSeparator())
-                .append("3. Re-run `consilens ai run --session ").append(context.getSession().getSessionId())
+                .append("2. Run `/validate` or `/dry-run` if you want an explicit preflight on the repaired config.").append(System.lineSeparator())
+                .append("3. If needed, refine keys, fields, normalization, or connector hints.").append(System.lineSeparator())
+                .append("4. Re-run `consilens ai run --session ").append(context.getSession().getSessionId())
                 .append(" --approve-execute` to verify the fix.").append(System.lineSeparator())
                 .append(System.lineSeparator())
                 .append(diagnosis);
@@ -94,7 +121,12 @@ public class RepairTask extends AbstractAiTask implements AiTask {
                 context.getSession().getSessionId(),
                 ArtifactType.REPAIR_PATCH,
                 patch.toString(),
-                Map.of("task", "repair", "diagnosisArtifactId", diagnosisArtifact.getArtifactId()));
+                Map.of("task", "repair",
+                        "diagnosisArtifactId", diagnosisArtifact.getArtifactId(),
+                        "sourceConfigArtifactId", currentConfigArtifact.getArtifactId(),
+                        "repairedConfigArtifactId", repairedConfigArtifact.getArtifactId()));
+        events.add(event("ready-for-retry", "completed",
+                "Prepared repair patch " + patchArtifact.getArtifactId(), patchArtifact));
         writeOutput(outputPath(context), repaired.getConfigRef().getContent());
         updateSession(context.getSession(), builder -> builder
                 .currentTask("repair")
@@ -105,10 +137,14 @@ public class RepairTask extends AbstractAiTask implements AiTask {
                 .success(true)
                 .taskType(type())
                 .status(AiTurnResult.Status.COMPLETED)
-                .summary("Created repair plan " + patchArtifact.getArtifactId()
-                        + " and regenerated config " + repairedConfigArtifact.getArtifactId()
+                .summary("Repair status: READY_FOR_RETRY"
+                        + System.lineSeparator() + "patch=" + patchArtifact.getArtifactId()
+                        + System.lineSeparator() + "repairedConfig=" + repairedConfigArtifact.getArtifactId()
+                        + System.lineSeparator() + "changedSections="
+                        + (changedSections.isEmpty() ? "(unknown)" : String.join(", ", changedSections))
                         + System.lineSeparator() + patch)
                 .suggestedNextAction("run")
+                .events(events)
                 .build();
     }
 
@@ -187,5 +223,80 @@ public class RepairTask extends AbstractAiTask implements AiTask {
             return trimmed.substring("${env.".length(), trimmed.length() - 1);
         }
         return trimmed;
+    }
+
+    private List<String> changedSections(String currentConfig, String repairedConfig) {
+        try {
+            JsonNode current = yamlMapper.readTree(currentConfig);
+            JsonNode repaired = yamlMapper.readTree(repairedConfig);
+            Set<String> keys = new LinkedHashSet<>();
+            collectKeys(keys, current);
+            collectKeys(keys, repaired);
+            List<String> changed = new ArrayList<>();
+            for (String key : keys) {
+                JsonNode left = current == null ? null : current.get(key);
+                JsonNode right = repaired == null ? null : repaired.get(key);
+                if (left == null && right == null) {
+                    continue;
+                }
+                if (left == null || right == null || !left.equals(right)) {
+                    changed.add(key);
+                }
+            }
+            return changed;
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private void collectKeys(Set<String> keys, JsonNode node) {
+        if (node == null || !node.isObject()) {
+            return;
+        }
+        Iterator<String> fieldNames = node.fieldNames();
+        while (fieldNames.hasNext()) {
+            keys.add(fieldNames.next());
+        }
+    }
+
+    private String renderSectionChange(String section, String currentConfig, String repairedConfig) {
+        try {
+            JsonNode current = yamlMapper.readTree(currentConfig);
+            JsonNode repaired = yamlMapper.readTree(repairedConfig);
+            JsonNode before = current == null ? null : current.get(section);
+            JsonNode after = repaired == null ? null : repaired.get(section);
+            StringBuilder builder = new StringBuilder();
+            builder.append("- ").append(section).append(System.lineSeparator());
+            builder.append("  Before:").append(System.lineSeparator());
+            builder.append(indentSection(before)).append(System.lineSeparator());
+            builder.append("  After:").append(System.lineSeparator());
+            builder.append(indentSection(after)).append(System.lineSeparator());
+            return builder.toString();
+        } catch (Exception e) {
+            return "- " + section + System.lineSeparator()
+                    + "  Before:" + System.lineSeparator()
+                    + "    (unavailable)" + System.lineSeparator()
+                    + "  After:" + System.lineSeparator()
+                    + "    (unavailable)" + System.lineSeparator();
+        }
+    }
+
+    private String indentSection(JsonNode node) {
+        try {
+            if (node == null || node.isMissingNode() || node.isNull()) {
+                return "    (none)";
+            }
+            String yaml = yamlMapper.writeValueAsString(node).trim();
+            StringBuilder builder = new StringBuilder();
+            for (String line : yaml.split("\\R")) {
+                builder.append("    ").append(line).append(System.lineSeparator());
+            }
+            if (builder.length() > 0) {
+                builder.setLength(builder.length() - System.lineSeparator().length());
+            }
+            return builder.toString();
+        } catch (Exception e) {
+            return "    (unavailable)";
+        }
     }
 }

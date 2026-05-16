@@ -10,6 +10,7 @@ public enum ArtifactType {
     DIFF_RESULT,
     DIFF_EVIDENCE,
     DIAGNOSIS,
+    RUN_AUDIT,
     REPAIR_PATCH,
     APPROVAL
 }
