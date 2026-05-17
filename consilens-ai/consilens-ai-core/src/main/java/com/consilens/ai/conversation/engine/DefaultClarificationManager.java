@@ -181,7 +181,7 @@ public class DefaultClarificationManager implements ClarificationManager {
             return;
         }
         String value = rawValue.trim();
-        if (!value.isBlank()) {
+        if (!value.isBlank() && !values.containsKey(key)) {
             values.put(key, value);
         }
     }

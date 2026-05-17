@@ -20,14 +20,37 @@ import com.consilens.ai.session.model.PendingApprovalState;
 import com.consilens.ai.session.model.PendingQuestionState;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
  * Default stateful conversation engine backed by the existing task runtime.
  */
 public class DefaultConversationEngine implements ConversationEngine {
+
+    private static final Set<String> SUPPORTED_CONNECTORS = Set.of(
+            "mysql", "postgresql", "oracle", "sqlserver", "presto",
+            "clickhouse", "trino", "tidb", "starrocks", "doris");
+    private static final Pattern SOURCE_TYPE_PATTERN = Pattern.compile("(?i)\\bsourceType\\s*[:=]\\s*([a-zA-Z0-9_-]+)");
+    private static final Pattern TARGET_TYPE_PATTERN = Pattern.compile("(?i)\\btargetType\\s*[:=]\\s*([a-zA-Z0-9_-]+)");
+    private static final Pattern SOURCE_TABLE_PATTERN = Pattern.compile("(?i)\\bsourceTable\\s*[:=]\\s*([^\\n,]+)");
+    private static final Pattern TARGET_TABLE_PATTERN = Pattern.compile("(?i)\\btargetTable\\s*[:=]\\s*([^\\n,]+)");
+    private static final Pattern SOURCE_QUERY_PATTERN = Pattern.compile("(?i)\\bsourceQuery\\s*[:=]\\s*(.+)");
+    private static final Pattern TARGET_QUERY_PATTERN = Pattern.compile("(?i)\\btargetQuery\\s*[:=]\\s*(.+)");
+    private static final Pattern KEYS_PATTERN = Pattern.compile("(?i)\\bkeys\\s*[:=]\\s*([a-zA-Z0-9_,]+)");
+    private static final Pattern SOURCE_KEYS_PATTERN = Pattern.compile("(?i)\\bsourceKeys\\s*[:=]\\s*([a-zA-Z0-9_,]+)");
+    private static final Pattern TARGET_KEYS_PATTERN = Pattern.compile("(?i)\\btargetKeys\\s*[:=]\\s*([a-zA-Z0-9_,]+)");
+    private static final Pattern YAML_SOURCE_TYPE_PATTERN = Pattern.compile("(?is)source\\s*:\\s*.*?\\btype\\s*:\\s*([a-zA-Z0-9_-]+)");
+    private static final Pattern YAML_TARGET_TYPE_PATTERN = Pattern.compile("(?is)target\\s*:\\s*.*?\\btype\\s*:\\s*([a-zA-Z0-9_-]+)");
+    private static final Pattern YAML_SOURCE_RESOURCE_PATTERN = Pattern.compile("(?is)source\\s*:\\s*.*?resource\\s*:\\s*.*?\\b(name|path|query)\\s*:");
+    private static final Pattern YAML_TARGET_RESOURCE_PATTERN = Pattern.compile("(?is)target\\s*:\\s*.*?resource\\s*:\\s*.*?\\b(name|path|query)\\s*:");
+    private static final Pattern YAML_KEYS_PATTERN = Pattern.compile("(?is)comparison\\s*:\\s*.*?keys\\s*:\\s*.*?-\\s*[^\\n]+");
+    private static final String VALIDATION_MARKER = "\n\n[输入校验]\n";
 
     private final AiSessionStore sessionStore;
     private final TurnPlanner turnPlanner;
@@ -88,6 +111,21 @@ public class DefaultConversationEngine implements ConversationEngine {
 
         String effectiveInput = input == null ? "" : input.trim();
         if (session.getPendingQuestion() != null) {
+            if (isStructuredClarificationInput(effectiveInput)) {
+                List<String> violations = validateClarificationAnswer(session.getPendingQuestion(), effectiveInput);
+                if (!violations.isEmpty()) {
+                    String baseQuestion = stripValidationBlock(session.getPendingQuestion().getQuestion());
+                    PendingQuestionState refreshed = session.getPendingQuestion().toBuilder()
+                            .question(baseQuestion + VALIDATION_MARKER + String.join("\n", violations))
+                            .build();
+                    session = updateSession(session, session.toBuilder()
+                            .pendingQuestion(refreshed)
+                            .status("awaiting_clarification")
+                            .updatedAt(Instant.now())
+                            .build());
+                    return questionResponse(session, refreshed);
+                }
+            }
             effectiveInput = clarificationManager.merge(session.getPendingQuestion(), effectiveInput);
             session = updateSession(session, session.toBuilder()
                     .pendingQuestion(null)
@@ -267,6 +305,185 @@ public class DefaultConversationEngine implements ConversationEngine {
                 .suggestedNextStep(nextStep("answer_question", "Answer the clarification to continue."))
                 .session(snapshot(session))
                 .build();
+    }
+
+    private String stripValidationBlock(String question) {
+        if (question == null || question.isBlank()) {
+            return "";
+        }
+        int idx = question.indexOf(VALIDATION_MARKER);
+        return idx < 0 ? question : question.substring(0, idx);
+    }
+
+    private List<String> validateClarificationAnswer(PendingQuestionState pendingQuestion, String answer) {
+        List<String> violations = new ArrayList<>();
+        String text = answer == null ? "" : answer.trim();
+        if (text.isEmpty()) {
+            violations.add("- 输入不能为空，请按模板填写本轮字段。");
+            return violations;
+        }
+        if (pendingQuestion == null || pendingQuestion.getExpectedKeys() == null || pendingQuestion.getExpectedKeys().isEmpty()) {
+            return violations;
+        }
+        for (String rawKey : pendingQuestion.getExpectedKeys()) {
+            String key = canonicalKey(rawKey);
+            if (key == null) {
+                continue;
+            }
+            switch (key) {
+                case "sourceType":
+                    validateConnector(text, true, violations);
+                    break;
+                case "targetType":
+                    validateConnector(text, false, violations);
+                    break;
+                case "sourceResource":
+                    if (!hasSourceResource(text)) {
+                        violations.add("- 请填写 `sourceTable=...` 或 `sourceQuery=...`（二选一）。");
+                    }
+                    break;
+                case "targetResource":
+                    if (!hasTargetResource(text)) {
+                        violations.add("- 请填写 `targetTable=...` 或 `targetQuery=...`（二选一）。");
+                    }
+                    break;
+                case "keys":
+                    if (!hasKeys(text)) {
+                        violations.add("- 请填写 `keys=...`（多列用逗号，如 `keys=order_id,user_id`）。");
+                    }
+                    break;
+                case "sourceKeys":
+                    if (!hasPattern(SOURCE_KEYS_PATTERN, text)) {
+                        violations.add("- 请填写 `sourceKeys=...`。");
+                    }
+                    break;
+                case "targetKeys":
+                    if (!hasPattern(TARGET_KEYS_PATTERN, text)) {
+                        violations.add("- 请填写 `targetKeys=...`。");
+                    }
+                    break;
+                default:
+                    if (!text.toLowerCase().contains(key.toLowerCase())) {
+                        violations.add("- 缺少字段 `" + rawKey + "`，请按 `key=value` 形式补充。");
+                    }
+                    break;
+            }
+        }
+        return deduplicate(violations);
+    }
+
+    private boolean isStructuredClarificationInput(String input) {
+        if (input == null) {
+            return false;
+        }
+        String text = input.trim();
+        if (text.isEmpty()) {
+            return false;
+        }
+        return text.contains("=")
+                || text.contains("source:")
+                || text.contains("target:")
+                || text.contains("comparison:")
+                || text.contains("\n- ");
+    }
+
+    private void validateConnector(String text, boolean source, List<String> violations) {
+        Pattern pattern = source ? SOURCE_TYPE_PATTERN : TARGET_TYPE_PATTERN;
+        Pattern yamlPattern = source ? YAML_SOURCE_TYPE_PATTERN : YAML_TARGET_TYPE_PATTERN;
+        String label = source ? "sourceType" : "targetType";
+        String value = firstMatch(pattern, text);
+        if (value == null) {
+            value = firstMatch(yamlPattern, text);
+        }
+        if (value == null || value.isBlank()) {
+            violations.add("- 请填写 `" + label + "=...`，例如 `" + label + "=mysql`。");
+            return;
+        }
+        String normalized = value.trim().toLowerCase();
+        if (!SUPPORTED_CONNECTORS.contains(normalized)) {
+            violations.add("- `" + label + "` 不在支持列表："
+                    + String.join(", ", SUPPORTED_CONNECTORS) + "。");
+        }
+    }
+
+    private boolean hasSourceResource(String text) {
+        return hasPattern(SOURCE_TABLE_PATTERN, text)
+                || hasPattern(SOURCE_QUERY_PATTERN, text)
+                || hasPattern(YAML_SOURCE_RESOURCE_PATTERN, text);
+    }
+
+    private boolean hasTargetResource(String text) {
+        return hasPattern(TARGET_TABLE_PATTERN, text)
+                || hasPattern(TARGET_QUERY_PATTERN, text)
+                || hasPattern(YAML_TARGET_RESOURCE_PATTERN, text);
+    }
+
+    private boolean hasKeys(String text) {
+        return hasPattern(KEYS_PATTERN, text)
+                || hasPattern(SOURCE_KEYS_PATTERN, text)
+                || hasPattern(TARGET_KEYS_PATTERN, text)
+                || hasPattern(YAML_KEYS_PATTERN, text);
+    }
+
+    private boolean hasPattern(Pattern pattern, String text) {
+        if (pattern == null || text == null) {
+            return false;
+        }
+        return pattern.matcher(text).find();
+    }
+
+    private String firstMatch(Pattern pattern, String text) {
+        if (pattern == null || text == null) {
+            return null;
+        }
+        Matcher matcher = pattern.matcher(text);
+        if (!matcher.find()) {
+            return null;
+        }
+        return matcher.groupCount() >= 1 ? matcher.group(1) : null;
+    }
+
+    private List<String> deduplicate(List<String> violations) {
+        if (violations == null || violations.isEmpty()) {
+            return List.of();
+        }
+        List<String> dedup = new ArrayList<>();
+        for (String violation : violations) {
+            if (violation != null && !dedup.contains(violation)) {
+                dedup.add(violation);
+            }
+        }
+        return dedup;
+    }
+
+    private String canonicalKey(String rawKey) {
+        if (rawKey == null || rawKey.isBlank()) {
+            return null;
+        }
+        String key = rawKey.toLowerCase().replace("_", "").replace("-", "").trim();
+        switch (key) {
+            case "sourcetype":
+                return "sourceType";
+            case "targettype":
+                return "targetType";
+            case "sourcetable":
+            case "sourcequery":
+            case "sourceresource":
+                return "sourceResource";
+            case "targettable":
+            case "targetquery":
+            case "targetresource":
+                return "targetResource";
+            case "keys":
+            case "key":
+                return "keys";
+            case "sourcekeys":
+                return "sourceKeys";
+            case "targetkeys":
+                return "targetKeys";
+            default:
+                return rawKey;
+        }
     }
 
     private ConversationResponse approvalResponse(AiSession session, String prompt) {
