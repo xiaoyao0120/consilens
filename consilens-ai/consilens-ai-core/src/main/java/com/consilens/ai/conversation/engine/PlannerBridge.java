@@ -152,8 +152,9 @@ public class PlannerBridge {
     }
 
     private String withInputTemplate(String question, List<String> missingSlots) {
+        String conciseQuestion = conciseQuestion(question);
         if (missingSlots == null || missingSlots.isEmpty()) {
-            return question + "\n\n请尽量按 `key=value` 格式回答，例如：`keys=id`。";
+            return conciseQuestion + "\n\n请尽量按 `key=value` 格式回答，例如：`keys=id`。";
         }
         Set<String> normalized = new LinkedHashSet<>();
         for (String slot : missingSlots) {
@@ -161,16 +162,35 @@ public class PlannerBridge {
                 normalized.add(slot.trim());
             }
         }
-        StringBuilder builder = new StringBuilder(question)
-                .append("\n\n请按以下格式回复（可复制后直接填写）：\n")
+        StringBuilder builder = new StringBuilder(conciseQuestion)
+                .append("\n\n【向导】").append(stepTitle(missingSlots)).append("\n")
+                .append("请按以下格式回复（可复制后直接填写）：\n")
                 .append("```text\n");
         for (String slot : normalized) {
             builder.append(slotTemplate(slot)).append("\n");
         }
         builder.append("```\n")
+                .append("输入规则：\n")
+                .append(validationRules(normalized))
                 .append("你可以先填当前这一组，其他项留空，系统会继续追问下一组。\n")
                 .append("示例：sourceType=mysql, targetType=postgresql, sourceTable=orders_detail, targetTable=orders_summary, keys=order_id");
         return builder.toString();
+    }
+
+    private String conciseQuestion(String question) {
+        if (question == null || question.isBlank()) {
+            return "我还需要一些关键信息来继续。";
+        }
+        String text = question.trim();
+        int marker = text.indexOf("缺失的关键信息");
+        if (marker > 0) {
+            text = text.substring(0, marker).trim();
+        }
+        int nextParagraph = text.indexOf("\n\n");
+        if (nextParagraph > 0) {
+            return text.substring(0, nextParagraph).trim();
+        }
+        return text;
     }
 
     private List<String> stepSlots(List<String> missingSlots) {
@@ -211,10 +231,10 @@ public class PlannerBridge {
     private String slotTemplate(String slot) {
         String key = slot.toLowerCase(Locale.ROOT).replace("_", "").replace("-", "").trim();
         if ("sourcetype".equals(key)) {
-            return "sourceType=mysql";
+            return "sourceType=mysql  # 可选: " + connectorOptions();
         }
         if ("targettype".equals(key)) {
-            return "targetType=postgresql";
+            return "targetType=postgresql  # 可选: " + connectorOptions();
         }
         if ("sourcetable".equals(key) || "sourceresource".equals(key)) {
             return "sourceTable=orders_detail  # 或 sourceQuery=SELECT ...";
@@ -238,6 +258,70 @@ public class PlannerBridge {
             return "targetKeys=order_id";
         }
         return slot + "=<value>";
+    }
+
+    private String stepTitle(List<String> missingSlots) {
+        if (missingSlots == null || missingSlots.isEmpty()) {
+            return "补充必要信息";
+        }
+        String first = missingSlots.get(0);
+        String key = first == null ? "" : first.toLowerCase(Locale.ROOT).replace("_", "").replace("-", "").trim();
+        if (key.startsWith("source")) {
+            return "第 1 步：填写源端信息";
+        }
+        if (key.startsWith("target")) {
+            return "第 2 步：填写目标端信息";
+        }
+        if (key.contains("key")) {
+            return "第 3 步：填写比对主键";
+        }
+        return "补充必要信息";
+    }
+
+    private String validationRules(Set<String> slots) {
+        StringBuilder rules = new StringBuilder();
+        boolean hasSourceType = hasSlot(slots, "sourceType");
+        boolean hasTargetType = hasSlot(slots, "targetType");
+        boolean hasSourceResource = hasSlot(slots, "sourceTable") || hasSlot(slots, "sourceResource") || hasSlot(slots, "sourceQuery");
+        boolean hasTargetResource = hasSlot(slots, "targetTable") || hasSlot(slots, "targetResource") || hasSlot(slots, "targetQuery");
+        boolean hasKeys = hasSlot(slots, "keys") || hasSlot(slots, "sourceKeys") || hasSlot(slots, "targetKeys");
+        if (hasSourceType || hasTargetType) {
+            rules.append("- connector 必须从支持列表中选择，例如: ").append(connectorOptions()).append("\n");
+        }
+        if (hasSourceResource) {
+            rules.append("- sourceTable 与 sourceQuery 二选一，不要同时填写。\n");
+        }
+        if (hasTargetResource) {
+            rules.append("- targetTable 与 targetQuery 二选一，不要同时填写。\n");
+        }
+        if (hasKeys) {
+            rules.append("- keys 必填；多列请用英文逗号分隔，例如 `keys=order_id,user_id`。\n");
+        }
+        if (rules.length() == 0) {
+            rules.append("- 建议使用 `key=value`，每行一个字段。\n");
+        }
+        return rules.toString();
+    }
+
+    private boolean hasSlot(Set<String> slots, String expected) {
+        if (slots == null || slots.isEmpty() || expected == null) {
+            return false;
+        }
+        String target = expected.toLowerCase(Locale.ROOT).replace("_", "").replace("-", "").trim();
+        for (String slot : slots) {
+            if (slot == null) {
+                continue;
+            }
+            String key = slot.toLowerCase(Locale.ROOT).replace("_", "").replace("-", "").trim();
+            if (target.equals(key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String connectorOptions() {
+        return "mysql, postgresql, oracle, sqlserver, clickhouse, trino, tidb, starrocks, doris, presto";
     }
 
     private boolean isTemplateRequest(String rawInput) {

@@ -32,6 +32,7 @@ class PlannerBridgeTest {
 
         assertEquals(TurnDecision.Type.QUESTION, decision.getType());
         assertTrue(decision.getQuestion().getQuestion().contains("sourceType=mysql"));
+        assertTrue(decision.getQuestion().getQuestion().contains("输入规则"));
         assertTrue(decision.getQuestion().getQuestion().contains("继续追问下一组"));
         assertTrue(decision.getQuestion().getExpectedKeys().contains("sourceType"));
     }

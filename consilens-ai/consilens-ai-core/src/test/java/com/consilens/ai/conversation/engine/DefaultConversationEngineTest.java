@@ -150,11 +150,52 @@ class DefaultConversationEngineTest {
         assertEquals(ConversationResponse.Type.QUESTION, question.getType());
         assertNotNull(sessionStore.load("session-2").orElseThrow().getPendingQuestion());
 
-        ConversationResponse answer = engine.handleUserTurn("session-2", "order_id");
+        ConversationResponse answer = engine.handleUserTurn("session-2", "keys=order_id");
 
         assertEquals(ConversationResponse.Type.MESSAGE, answer.getType());
-        assertTrue(answer.getMessage().contains("keys: order_id"));
+        assertTrue(answer.getMessage().contains("keys=order_id"));
         assertNull(sessionStore.load("session-2").orElseThrow().getPendingQuestion());
+    }
+
+    @Test
+    void shouldKeepQuestionWhenClarificationFormatIsInvalid() {
+        InMemorySessionStore sessionStore = new InMemorySessionStore();
+        DefaultConversationEngine engine = new DefaultConversationEngine(
+                sessionStore,
+                context -> {
+                    if ("compare".equals(context.getRawInput())) {
+                        return TurnDecision.builder()
+                                .type(TurnDecision.Type.QUESTION)
+                                .question(QuestionSpec.builder()
+                                        .question("Need keys")
+                                        .originalRequest("compare")
+                                        .expectedKey("keys")
+                                        .blocking(true)
+                                        .build())
+                                .build();
+                    }
+                    return TurnDecision.builder()
+                            .type(TurnDecision.Type.MESSAGE)
+                            .message("ok")
+                            .build();
+                },
+                new DefaultClarificationManager(),
+                new DefaultApprovalManager(),
+                plan -> AiTaskResult.builder()
+                        .success(true)
+                        .taskType(AiTaskType.PLAN_CONFIG)
+                        .status(AiTurnResult.Status.COMPLETED)
+                        .summary(plan.getCommandArgument())
+                        .suggestedNextAction("run")
+                        .build());
+
+        ConversationResponse question = engine.handleUserTurn("session-invalid", "compare");
+        assertEquals(ConversationResponse.Type.QUESTION, question.getType());
+
+        ConversationResponse invalid = engine.handleUserTurn("session-invalid", "keys=");
+        assertEquals(ConversationResponse.Type.QUESTION, invalid.getType());
+        assertTrue(invalid.getMessage().contains("[输入校验]"));
+        assertNotNull(sessionStore.load("session-invalid").orElseThrow().getPendingQuestion());
     }
 
     @Test
