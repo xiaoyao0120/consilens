@@ -3,6 +3,8 @@ package com.consilens.cli;
 import com.consilens.cli.command.AiCommand;
 import com.consilens.cli.command.ConfigCommand;
 import com.consilens.cli.command.DiffCommand;
+import com.consilens.cli.command.McpCommand;
+import com.consilens.cli.command.SkillsCommand;
 
 import lombok.extern.slf4j.Slf4j;
 import picocli.CommandLine;
@@ -28,7 +30,9 @@ import picocli.CommandLine.Command;
 	    subcommands = {
 	        DiffCommand.class,
 	        ConfigCommand.class,
-	        AiCommand.class
+	        AiCommand.class,
+	        McpCommand.class,
+	        SkillsCommand.class
 	    }
 	)
 public class ConsilensCliApplication implements Runnable {

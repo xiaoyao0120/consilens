@@ -28,8 +28,7 @@ import java.util.function.Supplier;
         AiDiagnoseCommand.class,
         AiDiffCommand.class,
         AiProvidersCommand.class,
-        AiDoctorCommand.class,
-        AiApiCommand.class
+        AiDoctorCommand.class
     }
 )
 public class AiCommand implements Callable<Integer> {

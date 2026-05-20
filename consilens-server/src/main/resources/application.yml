@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: consilens-server
+  datasource:
+    url: jdbc:h2:mem:consilens_server;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  sql:
+    init:
+      mode: never
+
+mybatis-plus:
+  type-enums-package: com.consilens.server.domain.enumtype
+
+server:
+  port: 18080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+consilens:
+  server:
+    node:
+      heartbeat-interval-seconds: 2
+      expire-seconds: 30
+      topology-refresh-seconds: 3
+    scheduler:
+      enabled: true
+      command-poll-interval-ms: 1000
+      claim-lease-seconds: 15
+      execute-threads: 2
+      execute-queue-capacity: 1024
+      recovery-batch-size: 64
+      max-retry-count: 3
+    artifact:
+      storage-type: local-file
+      local-base-dir: ./.consilens-server/artifacts
+    database:
+      allow-embedded: false
