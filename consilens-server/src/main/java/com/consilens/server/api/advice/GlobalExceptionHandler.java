@@ -1,6 +1,7 @@
 package com.consilens.server.api.advice;
 
 import com.consilens.server.api.dto.ApiResponse;
+import com.consilens.server.domain.exception.ArtifactIntegrityException;
 import com.consilens.server.domain.exception.ConflictException;
 import com.consilens.server.domain.exception.InvalidInputException;
 import com.consilens.server.domain.exception.ResourceNotFoundException;
@@ -56,6 +57,15 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.error(exception.getMessage(), exception.getErrorCode(),
                         TraceIdSupport.getOrCreateTraceId(request)));
+    }
+
+    @ExceptionHandler(ArtifactIntegrityException.class)
+    public ResponseEntity<ApiResponse<Void>> handleArtifactIntegrity(ArtifactIntegrityException exception,
+                                                                     HttpServletRequest request) {
+        String traceId = TraceIdSupport.getOrCreateTraceId(request);
+        log.error("Artifact integrity check failed, traceId={}", traceId, exception);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResponse.error("Artifact content integrity check failed", exception.getErrorCode(), traceId));
     }
 
     @ExceptionHandler({

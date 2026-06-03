@@ -161,6 +161,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     public List<TaskEntity> listByExecuteNodeAndStatuses(String executeNodeKey,
                                                          Collection<TaskStatus> statuses,
                                                          int limit) {
+        if (limit <= 0 || statuses == null || statuses.isEmpty()) {
+            return List.of();
+        }
         return list(new QueryWrapper<TaskEntity>().lambda()
                 .eq(TaskEntity::getExecuteNodeKey, executeNodeKey)
                 .in(TaskEntity::getStatus, statuses)
@@ -172,6 +175,9 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     public List<TaskEntity> listByStatusesExcludingExecuteNodes(Collection<TaskStatus> statuses,
                                                                Set<String> executeNodeKeys,
                                                                int limit) {
+        if (limit <= 0 || statuses == null || statuses.isEmpty()) {
+            return List.of();
+        }
         QueryWrapper<TaskEntity> wrapper = new QueryWrapper<>();
         wrapper.lambda()
                 .in(TaskEntity::getStatus, statuses)

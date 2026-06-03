@@ -17,12 +17,26 @@ jobs:
           java-version: '11'
           distribution: 'temurin'
           cache: maven
+      - name: Capture JDK 11
+        run: echo "JAVA11_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+      - name: Capture JDK 17
+        run: echo "JAVA17_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
 
       - name: Build Release Package
-        run: mvn clean package -DskipTests -Prelease -B
+        run: JAVA17_HOME="$JAVA17_HOME" JAVA_HOME="$JAVA11_HOME" scripts/release/release-check.sh
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: consilens-dist/target/consilens-*.tar.gz
+          files: |
+            consilens-dist/target/consilens-*.tar.gz
+            consilens-server/target/consilens-server-*.jar
+            consilens-mcp/target/consilens-mcp-*.jar
           generate_release_notes: true

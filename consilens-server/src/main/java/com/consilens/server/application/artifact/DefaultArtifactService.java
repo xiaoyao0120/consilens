@@ -3,12 +3,14 @@ package com.consilens.server.application.artifact;
 import com.consilens.server.api.dto.ArtifactContentDto;
 import com.consilens.server.api.dto.ArtifactRefDto;
 import com.consilens.server.domain.enumtype.ArtifactKind;
+import com.consilens.server.domain.exception.ArtifactIntegrityException;
 import com.consilens.server.domain.exception.ResourceNotFoundException;
 import com.consilens.server.domain.model.ArtifactRecord;
 import com.consilens.server.domain.model.TaskExecutionContext;
 import com.consilens.server.domain.repository.ArtifactRepository;
 import com.consilens.server.infrastructure.storage.ArtifactContentStore;
 import com.consilens.server.infrastructure.storage.StoredArtifactContent;
+import com.consilens.server.support.hash.Sha256Support;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
@@ -46,6 +48,7 @@ public class DefaultArtifactService implements ArtifactService {
         ArtifactRecord record = artifactRepository.findById(artifactId)
                 .orElseThrow(() -> new ResourceNotFoundException("Artifact not found: " + artifactId));
         byte[] content = artifactContentStore.read(record.getStorageUri());
+        verifyChecksum(record, content);
         return ArtifactContentDto.builder()
                 .artifactId(record.getId())
                 .artifactType(record.getArtifactType().name())
@@ -137,6 +140,16 @@ public class DefaultArtifactService implements ArtifactService {
     private void putIfPresent(Map<String, Object> metadata, String key, Object value) {
         if (value != null) {
             metadata.putIfAbsent(key, value);
+        }
+    }
+
+    private void verifyChecksum(ArtifactRecord record, byte[] content) {
+        if (record.getSha256() == null || record.getSha256().isBlank()) {
+            return;
+        }
+        String actual = Sha256Support.hex(content);
+        if (!record.getSha256().equalsIgnoreCase(actual)) {
+            throw new ArtifactIntegrityException("Artifact content checksum mismatch: " + record.getId());
         }
     }
 }

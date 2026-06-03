@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 
 @Component
 public class LocalFileArtifactContentStore implements ArtifactContentStore {
@@ -20,13 +21,18 @@ public class LocalFileArtifactContentStore implements ArtifactContentStore {
     @Override
     public StoredArtifactContent write(String artifactId, ArtifactKind artifactKind, String format, byte[] content) {
         try {
-            Path baseDir = Path.of(properties.getArtifact().getLocalBaseDir());
+            validateContentSize(content.length);
+            String safeArtifactId = safeArtifactId(artifactId);
+            Path baseDir = baseDir();
             Files.createDirectories(baseDir);
-            Path file = baseDir.resolve(artifactId + extension(format));
-            Files.write(file, content);
+            Path file = baseDir.resolve(safeArtifactId + extension(format)).normalize();
+            if (!file.startsWith(baseDir)) {
+                throw new IllegalArgumentException("Artifact path escapes local storage directory");
+            }
+            Files.write(file, content, StandardOpenOption.CREATE_NEW);
             return StoredArtifactContent.builder()
                     .storageType("LOCAL_FILE")
-                    .storageUri(file.toAbsolutePath().toString())
+                    .storageUri(file.toString())
                     .sha256(Sha256Support.hex(content))
                     .build();
         } catch (Exception exception) {
@@ -37,10 +43,27 @@ public class LocalFileArtifactContentStore implements ArtifactContentStore {
     @Override
     public byte[] read(String storageUri) {
         try {
-            return Files.readAllBytes(Path.of(storageUri));
+            Path baseDir = baseDir().toRealPath();
+            Path file = Path.of(storageUri).toAbsolutePath().normalize().toRealPath();
+            if (!file.startsWith(baseDir)) {
+                throw new IllegalArgumentException("Artifact path escapes local storage directory");
+            }
+            validateContentSize(Files.size(file));
+            return Files.readAllBytes(file);
         } catch (Exception exception) {
             throw new IllegalStateException("Failed to read artifact content from " + storageUri, exception);
         }
+    }
+
+    private Path baseDir() {
+        return Path.of(properties.getArtifact().getLocalBaseDir()).toAbsolutePath().normalize();
+    }
+
+    private String safeArtifactId(String artifactId) {
+        if (artifactId == null || !artifactId.matches("[A-Za-z0-9_-]{1,128}")) {
+            throw new IllegalArgumentException("Invalid artifact id");
+        }
+        return artifactId;
     }
 
     private String extension(String format) {
@@ -52,5 +75,13 @@ public class LocalFileArtifactContentStore implements ArtifactContentStore {
             return ".bin";
         }
         return "." + normalized;
+    }
+
+    private void validateContentSize(long contentSize) {
+        long maxContentBytes = properties.getArtifact().getMaxContentBytes();
+        if (contentSize > maxContentBytes) {
+            throw new IllegalArgumentException("Artifact content exceeds max size: " + contentSize
+                    + " > " + maxContentBytes);
+        }
     }
 }

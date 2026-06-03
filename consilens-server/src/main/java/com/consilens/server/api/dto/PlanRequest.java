@@ -6,6 +6,7 @@ import javax.validation.Valid;
 import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotEmpty;
 import javax.validation.constraints.NotNull;
+import javax.validation.constraints.Size;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,6 +15,7 @@ import java.util.Map;
 public class PlanRequest {
 
     @NotBlank
+    @Size(max = 512)
     private String goal;
 
     @Valid
@@ -25,6 +27,7 @@ public class PlanRequest {
     private Endpoint target;
 
     @NotEmpty
+    @Size(max = 64)
     private List<String> keys;
 
     private Map<String, Object> hints = new LinkedHashMap<>();
@@ -32,7 +35,9 @@ public class PlanRequest {
     @Data
     public static class Endpoint {
         @NotBlank
+        @Size(max = 64)
         private String type;
+        @Size(max = 256)
         private String table;
         private String query;
     }

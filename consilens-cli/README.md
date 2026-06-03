@@ -119,36 +119,13 @@ consilens <command> [options]
 ./bin/consilens-cli.sh ai memories --session ai-demo
 ./bin/consilens-cli.sh ai --session ai-demo
 ./bin/consilens-cli.sh ai shell --session ai-demo
-./bin/consilens-cli.sh ai api --host 127.0.0.1 --port 8088
 ./bin/consilens-cli.sh ai providers
 ./bin/consilens-cli.sh ai providers --format json
 ./bin/consilens-cli.sh ai doctor --format json
 ./bin/consilens-cli.sh ai --session orders-loop --config orders-loop.yaml --backend openai
 ```
 
-当前正式的 runtime 闭环入口是 `ai`、`ai plan` 和 `ai run`；`ai shell` 保留为兼容别名，`ai config` / `ai diff` 保留为更轻量的生成与执行包装。`ai` / `ai shell` 现在可直接接收 `--config`、`--backend`、`--model`、`--base-url`、`--api-key`、`--timeout`、`--temperature`、`--max-tokens`、`--no-llm` 作为会话启动参数：如果传入 `--config`，启动时会先把现有配置装载进 session 并立即校验；默认模式下，`consilens ai` / `ai shell` 会在进入对话框前强校验 backend、base-url、api-key，缺任一项且又无法从 `backend-defaults.json` / 环境变量解析出来时会直接拒绝进入 REPL；只有 source/target/keys 等业务信息允许留到 chat clarification 阶段继续补齐。当自然语言已经足够完整时，同一批 startup backend 参数会自动注入到启动阶段的 plan 请求里。`ai repair` 会基于当前 session 的最新 diagnosis 重新生成修复后的配置，`ai memories` 用于查看持久化的非敏感运行记忆，交互模式支持自然语言输入以及 `/plan`、`/use-config <path>`、`/validate`、`/dry-run`、`/run`、`/diff`、`/analyze-last`、`/diagnose`、`/repair`、`/remember`、`/forget`、`/recover`、`/artifacts [type]`、`/artifact <id>`、`/explain`、`/sessions`、`/resume`、`/new`、`/config`、`/save <path>`、`/memories` 等命令。`ai api` 用于启动 HTTP Conversation API 适配层，供外部 agent 通过 `/api/conversation/sessions/...` 或 `/api/v1/conversation/sessions/...` 端点进行会话式配置构建、执行与修复，并额外提供 Bearer token 鉴权、memory 管理、artifact 查询、artifact raw 下载以及基于真实 runtime events 的 `text/event-stream` 命令流输出。`ai diagnose` 需要 `json` + `diff-record` 输出文件，只有统计摘要的 result JSON 不包含行级证据，无法诊断。诊断 analyzer 通过 SPI 加载，可使用 `--analyzer` 或 `CONSILENS_AI_ANALYZER` 指定，默认是 `rulebased`；使用 `--output` 可将诊断报告写入文件。`ai providers` 用于确认运行时 classpath 中实际发现了哪些 analyzer 和 LLM backend 插件，并支持 `--format json` 供 CI 和脚本读取。`ai doctor` 用于生产前置检查，默认离线检查 provider、analyzer/backend 创建和云后端密钥配置。
-
-`ai api` 常用端点：
-- `GET /health`
-- `POST /api/conversation/sessions`
-- `GET /api/conversation/sessions`
-- `GET /api/conversation/sessions/{sessionId}`
-- `POST /api/conversation/sessions/{sessionId}/turn`
-- `POST /api/conversation/sessions/{sessionId}/clarification`
-- `POST /api/conversation/sessions/{sessionId}/command`
-- `POST /api/conversation/sessions/{sessionId}/command/stream`
-- `POST /api/conversation/sessions/{sessionId}/approve`
-- `POST /api/conversation/sessions/{sessionId}/deny`
-- `GET /api/conversation/sessions/{sessionId}/recovery`
-- `GET /api/conversation/sessions/{sessionId}/config`
-- `POST /api/conversation/sessions/{sessionId}/config`
-- `POST /api/conversation/sessions/{sessionId}/config/save`
-- `GET /api/conversation/sessions/{sessionId}/memory`
-- `POST /api/conversation/sessions/{sessionId}/memory`
-- `DELETE /api/conversation/sessions/{sessionId}/memory/{memoryId}`
-- `GET /api/conversation/sessions/{sessionId}/artifacts`
-- `GET /api/conversation/artifacts/{artifactId}`
-- `GET /api/conversation/artifacts/{artifactId}/raw`
+当前正式的 runtime 闭环入口是 `ai`、`ai plan` 和 `ai run`；`ai shell` 保留为兼容别名，`ai config` / `ai diff` 保留为更轻量的生成与执行包装。`ai` / `ai shell` 现在可直接接收 `--config`、`--backend`、`--model`、`--base-url`、`--api-key`、`--timeout`、`--temperature`、`--max-tokens`、`--no-llm` 作为会话启动参数：如果传入 `--config`，启动时会先把现有配置装载进 session 并立即校验；默认模式下，`consilens ai` / `ai shell` 会在进入对话框前强校验 backend、base-url、api-key，缺任一项且又无法从 `backend-defaults.json` / 环境变量解析出来时会直接拒绝进入 REPL；只有 source/target/keys 等业务信息允许留到 chat clarification 阶段继续补齐。当自然语言已经足够完整时，同一批 startup backend 参数会自动注入到启动阶段的 plan 请求里。`ai repair` 会基于当前 session 的最新 diagnosis 重新生成修复后的配置，`ai memories` 用于查看持久化的非敏感运行记忆，交互模式支持自然语言输入以及 `/plan`、`/use-config <path>`、`/validate`、`/dry-run`、`/run`、`/diff`、`/analyze-last`、`/diagnose`、`/repair`、`/remember`、`/forget`、`/recover`、`/artifacts [type]`、`/artifact <id>`、`/explain`、`/sessions`、`/resume`、`/new`、`/config`、`/save <path>`、`/memories` 等命令。HTTP API 由 `consilens-server` 提供；MCP 入口由独立的 `consilens-mcp` 模块提供；Skills 以 `agent-skills/*/SKILL.md` 分发给 Agent 使用。CLI 不再承载 apiserver 或 MCP/Skills runtime。`ai diagnose` 需要 `json` + `diff-record` 输出文件，只有统计摘要的 result JSON 不包含行级证据，无法诊断。诊断 analyzer 通过 SPI 加载，可使用 `--analyzer` 或 `CONSILENS_AI_ANALYZER` 指定，默认是 `rulebased`；使用 `--output` 可将诊断报告写入文件。`ai providers` 用于确认运行时 classpath 中实际发现了哪些 analyzer 和 LLM backend 插件，并支持 `--format json` 供 CI 和脚本读取。`ai doctor` 用于生产前置检查，默认离线检查 provider、analyzer/backend 创建和云后端密钥配置。
 
 LLM backend 的生产默认值建议统一放在 `~/.consilens/ai/backend-defaults.json`（或 `$CONSILENS_AI_HOME/backend-defaults.json`），这样 `ai plan` / `ai run` / `ai doctor` / `ai shell` 会共享同一份 backend、model、baseUrl、timeout 等默认配置；API key 推荐只在该文件里写 `apiKeyEnv`，真正的密钥继续通过环境变量注入。
 

@@ -70,9 +70,6 @@ public class RunTaskRecoveryService {
         Set<String> aliveNodeKeys = serverNodeQueryService.listAliveNodes().stream()
                 .map(ServerNodeRecord::getNodeKey)
                 .collect(Collectors.toSet());
-        if (aliveNodeKeys.isEmpty()) {
-            return;
-        }
         taskRepository.listByStatusesExcludingExecuteNodes(RECOVERABLE_STATUSES,
                         aliveNodeKeys,
                         properties.getScheduler().getRecoveryBatchSize())

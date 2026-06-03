@@ -7,13 +7,19 @@ on:
       - main
     paths:
       - '.github/workflows/ci.yml'
+      - 'agent-skills/**'
+      - 'consilens-ai/**'
       - 'consilens-cli/**'
       - 'consilens-common/**'
       - 'consilens-connector/**'
       - 'consilens-core/**'
+      - 'consilens-mcp/**'
       - 'consilens-performance/**'
+      - 'consilens-server/**'
+      - 'consilens-sink/**'
       - 'consilens-spi/**'
       - 'consilens-dist/**'
+      - 'scripts/**'
       - 'pom.xml'
   pull_request:
 
@@ -26,7 +32,7 @@ jobs:
     name: CI-Path-Filter
     runs-on: ubuntu-latest
     outputs:
-      not-ignore: true
+      not-ignore: ${{ steps.filter.outputs.not-ignore }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@b2feaf19c27470162a626bd6fa8438ae5b263721
@@ -46,28 +52,47 @@ jobs:
         java: [ '11' ]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           submodules: true
       - name: Set up JDK ${{ matrix.java }}
-        uses: actions/setup-java@v2
+        uses: actions/setup-java@v4
         with:
           java-version: ${{ matrix.java }}
-          distribution: 'adopt'
-      - uses: actions/cache@v3
+          distribution: 'temurin'
+          cache: maven
+      - name: Test on JDK ${{ matrix.java }}
+        run: ./mvnw -B test
+
+  mcp:
+    name: CI-MCP
+    needs: paths-filter
+    if: ${{ (needs.paths-filter.outputs.not-ignore == 'true') || (github.event_name == 'push') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
         with:
-          path: ~/.m2/repository
-          key: ${{ runner.os }}-maven
-      - name: Build and Package on ${{ matrix.java }}
+          submodules: true
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+      - name: Package MCP on JDK 17
+        run: ./mvnw -B -Pconsilens-mcp -pl consilens-mcp package
+      - name: Smoke MCP jar
         run: |
-          ./mvnw -B clean package -DskipTests -DskipITs \
-               -Dspotless.skip=true \
+          jar="$(ls -t consilens-mcp/target/consilens-mcp-*.jar | grep -v -- '-original\.jar$' | head -1)"
+          test -n "$jar"
+          java -jar "$jar" --version
 
   result:
     name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [ build, paths-filter ]
+    needs: [ build, mcp, paths-filter ]
     if: always()
     steps:
       - name: Status
@@ -78,5 +103,9 @@ jobs:
           fi
           if [[ '${{ needs.build.result }}' != 'success' ]]; then
             echo "Build Failed!"
+            exit 1
+          fi
+          if [[ '${{ needs.mcp.result }}' != 'success' ]]; then
+            echo "MCP Build Failed!"
             exit 1
           fi

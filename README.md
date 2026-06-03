@@ -57,7 +57,15 @@ checksum 比对
 ### 构建
 
 ```bash
-mvn clean package -DskipTests -Prelease
+./mvnw test
+./mvnw -Prelease -pl consilens-dist -am package -DskipTests
+JAVA_HOME=$(/usr/libexec/java_home -v 17) ./mvnw -Pconsilens-mcp -pl consilens-mcp package
+```
+
+完整发布门禁可以直接运行：
+
+```bash
+scripts/release/release-check.sh
 ```
 
 ### 执行

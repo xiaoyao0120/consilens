@@ -1,14 +1,8 @@
 spring:
   application:
     name: consilens-server
-  datasource:
-    url: jdbc:h2:mem:consilens_server;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-  sql:
-    init:
-      mode: never
+  profiles:
+    default: local
 
 mybatis-plus:
   type-enums-package: com.consilens.server.domain.enumtype
@@ -25,6 +19,7 @@ management:
 consilens:
   server:
     node:
+      node-key:
       heartbeat-interval-seconds: 2
       expire-seconds: 30
       topology-refresh-seconds: 3
@@ -39,5 +34,6 @@ consilens:
     artifact:
       storage-type: local-file
       local-base-dir: ./.consilens-server/artifacts
-    database:
-      allow-embedded: false
+      max-content-bytes: 52428800
+    api:
+      max-request-body-bytes: 10485760

@@ -16,12 +16,14 @@ import com.consilens.server.application.capability.SynchronousCapabilityService;
 import com.consilens.server.application.task.RunTaskQueryService;
 import com.consilens.server.application.task.RunTaskSubmissionService;
 import com.consilens.server.domain.enumtype.ArtifactKind;
+import com.consilens.server.domain.enumtype.TaskStatus;
 import com.consilens.server.domain.model.TaskRecord;
 import com.consilens.server.domain.model.TaskExecutionContext;
 import com.consilens.server.domain.repository.TaskRepository;
 import com.consilens.server.infrastructure.db.entity.TaskCommandEntity;
 import com.consilens.server.infrastructure.db.service.ArtifactPersistenceService;
 import com.consilens.server.infrastructure.db.service.TaskCommandService;
+import com.consilens.server.infrastructure.db.service.TaskService;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,6 +33,7 @@ import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @SpringBootTest
 @org.springframework.test.context.TestPropertySource(properties = {
         "consilens.server.scheduler.enabled=false",
+        "consilens.server.security.enabled=false",
         "consilens.server.database.allow-embedded=true",
         "spring.sql.init.mode=always"
 })
@@ -51,6 +55,9 @@ class ConsilensServerApplicationTest {
 
     @Autowired
     private TaskCommandService taskCommandService;
+
+    @Autowired
+    private TaskService taskService;
 
     @Autowired
     private ArtifactService artifactService;
@@ -230,6 +237,15 @@ class ConsilensServerApplicationTest {
         TaskCommandEntity releasedCommand = taskCommandService.getById(command.getId());
         assertThat(releasedCommand.getStatus().name()).isEqualTo("RELEASED");
         assertThat(releasedCommand.getExecuteNodeKey()).isNull();
+    }
+
+    @Test
+    void shouldReturnEmptyListsForNonPositiveSchedulerQueryLimits() {
+        assertThat(taskCommandService.listExpiredClaims(LocalDateTime.now(), 0)).isEmpty();
+        assertThat(taskCommandService.listClaimedByExecuteNode("node-a", 0)).isEmpty();
+        assertThat(taskService.listByExecuteNodeAndStatuses("node-a", List.of(TaskStatus.RUNNING), 0)).isEmpty();
+        assertThat(taskService.listByStatusesExcludingExecuteNodes(List.of(TaskStatus.RUNNING), Set.of("node-a"), 0))
+                .isEmpty();
     }
 
     private TaskExecutionContext context(String traceId) {

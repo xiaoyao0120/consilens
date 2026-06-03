@@ -17,6 +17,7 @@ import java.util.Optional;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -95,5 +96,44 @@ class RunTaskRecoveryServiceTest {
         verify(taskCommandRepository).releaseClaimedByTaskId(101L, now);
         verify(taskRepository).resetForRetry(eq(101L), any(), eq(now));
         verify(runTaskCommandEnqueueService).enqueue(eq(task), eq(now));
+    }
+
+    @Test
+    void shouldRecoverDeadNodeTasksEvenWhenNoAliveNodesAreReported() {
+        TaskRepository taskRepository = mock(TaskRepository.class);
+        TaskCommandRepository taskCommandRepository = mock(TaskCommandRepository.class);
+        RunTaskCommandEnqueueService runTaskCommandEnqueueService = mock(RunTaskCommandEnqueueService.class);
+        ServerNodeQueryService serverNodeQueryService = mock(ServerNodeQueryService.class);
+        ServerTopologyService serverTopologyService = mock(ServerTopologyService.class);
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        Instant now = Instant.now();
+        TaskRecord task = TaskRecord.builder()
+                .id(102L)
+                .taskKey("task-dead-node")
+                .status(TaskStatus.RUNNING)
+                .retryCount(0)
+                .maxRetryCount(3)
+                .build();
+
+        when(serverNodeQueryService.listAliveNodes()).thenReturn(List.of());
+        when(taskRepository.listByStatusesExcludingExecuteNodes(any(), any(), eq(properties.getScheduler().getRecoveryBatchSize())))
+                .thenReturn(List.of(task));
+        when(taskRepository.updateRetryableFromStatuses(eq(102L), any(), eq("EXECUTE_NODE_LOST"), eq("Execution node heartbeat expired"), eq(now)))
+                .thenReturn(true);
+        when(taskRepository.resetForRetry(eq(102L), any(), eq(now))).thenReturn(true);
+
+        RunTaskRecoveryService recoveryService = new RunTaskRecoveryService(taskRepository,
+                taskCommandRepository,
+                runTaskCommandEnqueueService,
+                serverNodeQueryService,
+                serverTopologyService,
+                properties);
+
+        recoveryService.recoverTasksOnDeadNodes(now);
+
+        verify(taskCommandRepository).releaseClaimedByTaskId(102L, now);
+        verify(taskRepository).resetForRetry(eq(102L), any(), eq(now));
+        verify(runTaskCommandEnqueueService).enqueue(eq(task), eq(now));
+        verify(taskRepository, never()).listByStatusesExcludingExecuteNodes(any(), any(), eq(0));
     }
 }
