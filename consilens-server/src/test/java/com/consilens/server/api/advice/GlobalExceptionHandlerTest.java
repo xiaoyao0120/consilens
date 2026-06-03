@@ -1,6 +1,7 @@
 package com.consilens.server.api.advice;
 
 import com.consilens.server.api.dto.ApiResponse;
+import com.consilens.server.domain.exception.ArtifactIntegrityException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -35,6 +36,18 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.METHOD_NOT_ALLOWED);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getErrorCode()).isEqualTo("METHOD_NOT_ALLOWED");
+    }
+
+    @Test
+    void shouldReturnInternalErrorForArtifactIntegrityFailure() {
+        ResponseEntity<ApiResponse<Void>> response = handler.handleArtifactIntegrity(
+                new ArtifactIntegrityException("checksum mismatch"),
+                request());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getErrorCode()).isEqualTo("ARTIFACT_INTEGRITY_ERROR");
+        assertThat(response.getBody().getError()).isEqualTo("Artifact content integrity check failed");
     }
 
     private MockHttpServletRequest request() {

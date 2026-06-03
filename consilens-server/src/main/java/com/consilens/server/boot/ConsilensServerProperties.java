@@ -11,9 +11,12 @@ public class ConsilensServerProperties {
     private final Scheduler scheduler = new Scheduler();
     private final Artifact artifact = new Artifact();
     private final Database database = new Database();
+    private final Security security = new Security();
+    private final Api api = new Api();
 
     @Data
     public static class Node {
+        private String nodeKey;
         private int heartbeatIntervalSeconds = 2;
         private int expireSeconds = 30;
         private int topologyRefreshSeconds = 3;
@@ -34,10 +37,22 @@ public class ConsilensServerProperties {
     public static class Artifact {
         private String storageType = "local-file";
         private String localBaseDir = "./.consilens-server/artifacts";
+        private long maxContentBytes = 50L * 1024L * 1024L;
     }
 
     @Data
     public static class Database {
         private boolean allowEmbedded = false;
+    }
+
+    @Data
+    public static class Security {
+        private boolean enabled = true;
+        private String apiKey;
+    }
+
+    @Data
+    public static class Api {
+        private long maxRequestBodyBytes = 10L * 1024L * 1024L;
     }
 }

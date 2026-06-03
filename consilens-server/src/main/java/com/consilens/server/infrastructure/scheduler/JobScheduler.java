@@ -67,20 +67,25 @@ public class JobScheduler extends Thread {
         log.info("job scheduler started");
 
         int retryNum = 0;
-        runTaskRecoveryService.recoverCurrentNodeStartupTasks(Instant.now());
+        boolean startupRecovered = false;
         while (running) {
             TaskCommandRecord command = null;
             boolean commandSubmitted = false;
             try {
                 Instant now = Instant.now();
+                if (!startupRecovered) {
+                    runTaskRecoveryService.recoverCurrentNodeStartupTasks(now);
+                    startupRecovered = true;
+                }
                 runTaskRecoveryService.recoverExpiredClaims(now);
-                runTaskRecoveryService.recoverTasksOnDeadNodes(now);
 
                 ServerTopologySnapshot snapshot = topologyService.snapshot();
                 if (!snapshot.isDispatchable()) {
                     sleepMillis(DEFAULT_SLEEP_TIME_MILLIS * 4);
                     continue;
                 }
+
+                runTaskRecoveryService.recoverTasksOnDeadNodes(now);
 
                 command = taskCommandRepository.getStartCommand(snapshot.getTotalSlot(),
                         snapshot.getCurrentSlot(),

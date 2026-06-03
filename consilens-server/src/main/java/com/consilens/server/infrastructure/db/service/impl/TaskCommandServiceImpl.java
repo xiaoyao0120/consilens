@@ -87,6 +87,9 @@ public class TaskCommandServiceImpl
 
     @Override
     public List<TaskCommandEntity> listExpiredClaims(LocalDateTime now, int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
         return list(new QueryWrapper<TaskCommandEntity>().lambda()
                 .eq(TaskCommandEntity::getStatus, TaskCommandStatus.CLAIMED)
                 .lt(TaskCommandEntity::getLockUntil, now)
@@ -96,6 +99,9 @@ public class TaskCommandServiceImpl
 
     @Override
     public List<TaskCommandEntity> listClaimedByExecuteNode(String executeNodeKey, int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
         return list(new QueryWrapper<TaskCommandEntity>().lambda()
                 .eq(TaskCommandEntity::getStatus, TaskCommandStatus.CLAIMED)
                 .eq(TaskCommandEntity::getExecuteNodeKey, executeNodeKey)

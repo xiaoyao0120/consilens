@@ -1,0 +1,12 @@
+spring:
+  sql:
+    init:
+      mode: never
+
+consilens:
+  server:
+    database:
+      allow-embedded: false
+    security:
+      enabled: true
+      api-key:

@@ -131,5 +131,7 @@ temp/
 .claude/
 
 AGENTS.md
-scripts/
+scripts/*
+!scripts/release/
+!scripts/release/release-check.sh
 design/

@@ -37,6 +37,15 @@
             </includes>
         </fileSet>
 
+        <!-- Agent skills distributed as runtime prompts/tools guidance -->
+        <fileSet>
+            <directory>${project.parent.basedir}/agent-skills</directory>
+            <outputDirectory>agent-skills</outputDirectory>
+            <includes>
+                <include>**/SKILL.md</include>
+            </includes>
+        </fileSet>
+
         <!-- Create empty logs directory -->
         <fileSet>
             <directory>${project.basedir}/src/main/resources</directory>

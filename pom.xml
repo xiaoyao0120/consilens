@@ -66,7 +66,6 @@
         <module>consilens-performance</module>
         <module>consilens-cli</module>
         <module>consilens-server</module>
-        <module>consilens-dist</module>
     </modules>
 
     <dependencyManagement>
@@ -461,6 +460,20 @@
 
         <profile>
             <id>prod</id>
+        </profile>
+
+        <profile>
+            <id>consilens-mcp</id>
+            <modules>
+                <module>consilens-mcp</module>
+            </modules>
+        </profile>
+
+        <profile>
+            <id>release</id>
+            <modules>
+                <module>consilens-dist</module>
+            </modules>
         </profile>
     </profiles>
 </project>

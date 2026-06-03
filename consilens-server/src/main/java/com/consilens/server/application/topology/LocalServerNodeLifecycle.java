@@ -35,11 +35,11 @@ public class LocalServerNodeLifecycle {
         heartbeat();
     }
 
-    @Scheduled(fixedDelayString = "${consilens.server.node.heartbeat-interval-ms:2000}")
+    @Scheduled(fixedDelayString = "#{${consilens.server.node.heartbeat-interval-seconds:2} * 1000}")
     public void heartbeat() {
         Instant now = Instant.now();
         String host = resolveHost();
-        String nodeKey = host + ":" + port;
+        String nodeKey = resolveNodeKey(host);
         Optional<ServerNodeRecord> existing = serverNodeRepository.findByNodeKey(nodeKey);
         ServerNodeRecord record = existing.orElseGet(ServerNodeRecord::new);
         record.setNodeKey(nodeKey);
@@ -60,7 +60,7 @@ public class LocalServerNodeLifecycle {
     }
 
     public String currentNodeKey() {
-        return resolveHost() + ":" + port;
+        return resolveNodeKey(resolveHost());
     }
 
     private String resolveHost() {
@@ -69,6 +69,14 @@ public class LocalServerNodeLifecycle {
         } catch (Exception exception) {
             return "127.0.0.1";
         }
+    }
+
+    private String resolveNodeKey(String host) {
+        String nodeKey = properties.getNode().getNodeKey();
+        if (nodeKey != null && !nodeKey.isBlank()) {
+            return nodeKey.trim();
+        }
+        return host + ":" + port;
     }
 
     private String resolveMachineCode() {
