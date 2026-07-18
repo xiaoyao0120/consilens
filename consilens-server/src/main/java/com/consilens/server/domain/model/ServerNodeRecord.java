@@ -1,6 +1,6 @@
 package com.consilens.server.domain.model;
 
-import com.consilens.server.domain.enumtype.ServerNodeStatus;
+import com.consilens.server.domain.enums.ServerNodeStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;

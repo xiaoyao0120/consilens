@@ -1,6 +1,6 @@
 package com.consilens.server.infrastructure.storage;
 
-import com.consilens.server.domain.enumtype.ArtifactKind;
+import com.consilens.server.domain.enums.ArtifactKind;
 
 public interface ArtifactContentStore {
 

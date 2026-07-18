@@ -1,6 +1,6 @@
 package com.consilens.server.domain.model;
 
-import com.consilens.server.domain.enumtype.ArtifactKind;
+import com.consilens.server.domain.enums.ArtifactKind;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;

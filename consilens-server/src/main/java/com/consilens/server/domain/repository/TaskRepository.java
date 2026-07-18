@@ -1,7 +1,7 @@
 package com.consilens.server.domain.repository;
 
 import com.consilens.server.domain.model.TaskRecord;
-import com.consilens.server.domain.enumtype.TaskStatus;
+import com.consilens.server.domain.enums.TaskStatus;
 
 import java.time.Instant;
 import java.util.Collection;

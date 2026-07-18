@@ -5,7 +5,7 @@ spring:
     default: local
 
 mybatis-plus:
-  type-enums-package: com.consilens.server.domain.enumtype
+  type-enums-package: com.consilens.server.domain.enums
 
 server:
   port: 18080

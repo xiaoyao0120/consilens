@@ -2,7 +2,7 @@ package com.consilens.server.application.artifact;
 
 import com.consilens.server.api.dto.ArtifactContentDto;
 import com.consilens.server.api.dto.ArtifactRefDto;
-import com.consilens.server.domain.enumtype.ArtifactKind;
+import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.domain.model.TaskExecutionContext;
 
 import java.util.Map;
