@@ -1,6 +1,6 @@
 package com.consilens.server.infrastructure.db.repository;
 
-import com.consilens.server.domain.enumtype.TaskStatus;
+import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.model.TaskRecord;
 import com.consilens.server.domain.repository.TaskRepository;
 import com.consilens.server.infrastructure.db.entity.TaskEntity;

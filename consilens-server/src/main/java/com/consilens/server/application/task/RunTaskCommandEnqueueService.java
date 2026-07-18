@@ -1,6 +1,6 @@
 package com.consilens.server.application.task;
 
-import com.consilens.server.domain.enumtype.TaskCommandStatus;
+import com.consilens.server.domain.enums.TaskCommandStatus;
 import com.consilens.server.domain.model.TaskCommandRecord;
 import com.consilens.server.domain.model.TaskRecord;
 import com.consilens.server.domain.repository.TaskCommandRepository;

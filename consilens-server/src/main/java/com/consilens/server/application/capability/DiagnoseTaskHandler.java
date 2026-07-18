@@ -4,7 +4,7 @@ import com.consilens.server.api.dto.ArtifactContentDto;
 import com.consilens.server.api.dto.ArtifactRefDto;
 import com.consilens.server.api.dto.DiagnoseRequest;
 import com.consilens.server.application.artifact.ArtifactService;
-import com.consilens.server.domain.enumtype.ArtifactKind;
+import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.domain.exception.InvalidInputException;
 import com.consilens.server.domain.model.TaskExecutionContext;
 import com.consilens.server.domain.model.TaskExecutionResult;

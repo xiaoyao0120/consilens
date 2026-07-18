@@ -4,7 +4,7 @@ import com.consilens.server.application.task.RunTaskCommandEnqueueService;
 import com.consilens.server.application.topology.ServerNodeQueryService;
 import com.consilens.server.application.topology.ServerTopologyService;
 import com.consilens.server.boot.ConsilensServerProperties;
-import com.consilens.server.domain.enumtype.TaskStatus;
+import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.model.ServerNodeRecord;
 import com.consilens.server.domain.model.TaskCommandRecord;
 import com.consilens.server.domain.model.TaskRecord;

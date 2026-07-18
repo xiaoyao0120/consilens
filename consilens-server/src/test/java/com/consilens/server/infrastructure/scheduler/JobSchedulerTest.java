@@ -2,7 +2,7 @@ package com.consilens.server.infrastructure.scheduler;
 
 import com.consilens.server.application.topology.ServerTopologyService;
 import com.consilens.server.boot.ConsilensServerProperties;
-import com.consilens.server.domain.enumtype.TaskStatus;
+import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.model.ServerTopologySnapshot;
 import com.consilens.server.domain.model.TaskCommandRecord;
 import com.consilens.server.domain.model.TaskRecord;
@@ -19,7 +19,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;

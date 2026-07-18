@@ -2,7 +2,7 @@ package com.consilens.server.infrastructure.scheduler;
 
 import com.consilens.server.application.topology.ServerTopologyService;
 import com.consilens.server.boot.ConsilensServerProperties;
-import com.consilens.server.domain.enumtype.TaskStatus;
+import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.model.ServerTopologySnapshot;
 import com.consilens.server.domain.model.TaskCommandRecord;
 import com.consilens.server.domain.model.TaskRecord;

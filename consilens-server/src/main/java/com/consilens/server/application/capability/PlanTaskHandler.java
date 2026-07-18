@@ -5,7 +5,7 @@ import com.consilens.server.api.dto.PlanRequest;
 import com.consilens.server.application.artifact.ArtifactService;
 import com.consilens.server.application.capability.config.ServerCompareConfig;
 import com.consilens.server.application.capability.config.ServerCompareConfigService;
-import com.consilens.server.domain.enumtype.ArtifactKind;
+import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.domain.model.TaskExecutionContext;
 import com.consilens.server.domain.model.TaskExecutionResult;
 import org.springframework.stereotype.Component;

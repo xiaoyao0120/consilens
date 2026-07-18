@@ -1,6 +1,6 @@
 package com.consilens.server.application.task;
 
-import com.consilens.server.domain.enumtype.TaskStatus;
+import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.exception.ConflictException;
 import com.consilens.server.domain.exception.ResourceNotFoundException;
 import com.consilens.server.domain.model.TaskRecord;

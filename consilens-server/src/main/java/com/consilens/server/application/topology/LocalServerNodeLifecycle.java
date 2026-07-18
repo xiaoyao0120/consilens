@@ -1,7 +1,7 @@
 package com.consilens.server.application.topology;
 
 import com.consilens.server.boot.ConsilensServerProperties;
-import com.consilens.server.domain.enumtype.ServerNodeStatus;
+import com.consilens.server.domain.enums.ServerNodeStatus;
 import com.consilens.server.domain.model.ServerNodeRecord;
 import com.consilens.server.domain.repository.ServerNodeRepository;
 import org.springframework.beans.factory.annotation.Value;

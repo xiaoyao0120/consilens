@@ -3,7 +3,7 @@ package com.consilens.server.application.task;
 import com.consilens.server.api.dto.RunRequest;
 import com.consilens.server.api.dto.TaskAcceptedResponse;
 import com.consilens.server.boot.ConsilensServerProperties;
-import com.consilens.server.domain.enumtype.TaskStatus;
+import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.exception.ConflictException;
 import com.consilens.server.domain.model.TaskRecord;
 import com.consilens.server.domain.repository.TaskRepository;

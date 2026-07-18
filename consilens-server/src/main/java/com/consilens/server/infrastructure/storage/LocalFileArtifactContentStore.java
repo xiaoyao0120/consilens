@@ -1,7 +1,7 @@
 package com.consilens.server.infrastructure.storage;
 
 import com.consilens.server.boot.ConsilensServerProperties;
-import com.consilens.server.domain.enumtype.ArtifactKind;
+import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.support.hash.Sha256Support;
 import org.springframework.stereotype.Component;
 

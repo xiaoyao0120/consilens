@@ -1,4 +1,4 @@
-package com.consilens.server.domain.enumtype;
+package com.consilens.server.domain.enums;
 
 public enum ArtifactKind {
     CONFIG,

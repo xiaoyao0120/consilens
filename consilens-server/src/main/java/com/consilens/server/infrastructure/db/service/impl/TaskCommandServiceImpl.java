@@ -3,7 +3,7 @@ package com.consilens.server.infrastructure.db.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
-import com.consilens.server.domain.enumtype.TaskCommandStatus;
+import com.consilens.server.domain.enums.TaskCommandStatus;
 import com.consilens.server.infrastructure.db.entity.TaskCommandEntity;
 import com.consilens.server.infrastructure.db.mapper.TaskCommandMapper;
 import com.consilens.server.infrastructure.db.service.TaskCommandService;
