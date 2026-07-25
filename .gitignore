@@ -135,3 +135,4 @@ scripts/*
 !scripts/release/
 !scripts/release/release-check.sh
 design/
+.zcode
