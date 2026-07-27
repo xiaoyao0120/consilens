@@ -60,26 +60,41 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
             sql.append("(SELECT STRING_AGG(row_checksum, '|') WITHIN GROUP (ORDER BY pk_key) FROM (SELECT ");
 
             // Build primary key for stable ordering
-            sql.append("CONCAT_WS('|', ");
-            for (int i = 0; i < keyColumns.size(); i++) {
-                if (i > 0)
-                    sql.append(", ");
-                String col = keyColumns.get(i);
-                DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+            // SQL Server CONCAT_WS requires 3+ args (sep + 2+ exprs), so handle single key specially
+            if (keyColumns.size() == 1) {
+                sql.append(dataTypeHandler.normalizeColumn(keyColumns.get(0), columnDataTypes.get(keyColumns.get(0))));
+                sql.append(" as pk_key, ");
+            } else {
+                sql.append("CONCAT_WS('|', ");
+                for (int i = 0; i < keyColumns.size(); i++) {
+                    if (i > 0)
+                        sql.append(", ");
+                    String col = keyColumns.get(i);
+                    DataType dataType = columnDataTypes.get(col);
+                    sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                }
+                sql.append(") as pk_key, ");
             }
-            sql.append(") as pk_key, ");
 
             // Build per-row checksum using HASHBYTES MD5
-            sql.append("CONVERT(VARCHAR(32), HASHBYTES('MD5', CONCAT_WS('|', ");
-            for (int i = 0; i < columns.size(); i++) {
-                if (i > 0)
-                    sql.append(", ");
-                String col = columns.get(i);
+            // SQL Server CONCAT_WS requires 3+ args, so use CONCAT for single column
+            if (columns.size() == 1) {
+                sql.append("CONVERT(VARCHAR(32), HASHBYTES('MD5', CONCAT('|', ");
+                String col = columns.get(0);
                 DataType dataType = columnDataTypes.get(col);
                 sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(")), 2) as row_checksum");
+            } else {
+                sql.append("CONVERT(VARCHAR(32), HASHBYTES('MD5', CONCAT_WS('|', ");
+                for (int i = 0; i < columns.size(); i++) {
+                    if (i > 0)
+                        sql.append(", ");
+                    String col = columns.get(i);
+                    DataType dataType = columnDataTypes.get(col);
+                    sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                }
+                sql.append(")), 2) as row_checksum");
             }
-            sql.append(")), 2) as row_checksum");
 
             sql.append(" FROM ");
             sql.append(buildRelationRef(schemaName, tableName));

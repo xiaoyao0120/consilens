@@ -59,7 +59,10 @@ class OracleSqlQueryGeneratorTest {
         types.put("created_at", DataType.DATETIME);
 
         String sql = generator.getChecksumSQL("SYSTEM", "users", columns, Arrays.asList("id"), types, null);
-        assertTrue(sql.contains("DBMS_CRYPTO"));
+        // Uses STANDARD_HASH instead of DBMS_CRYPTO because STANDARD_HASH is available
+        // by default in Oracle 12c+ without requiring DBA privileges
+        assertTrue(sql.contains("STANDARD_HASH"));
+        assertTrue(sql.contains("LISTAGG"));
     }
 
     @Test

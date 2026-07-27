@@ -1,0 +1,108 @@
+# SQL Server 同库 Join 比对配置
+# 适用于同一 SQL Server 实例下的两张表比对
+#
+# 前置条件：
+#   1. SQL Server 中已加载 examples/seed-sql/load-sqlserver-consilens-demo-data.sql
+
+source:
+  type: sqlserver
+  name: source-sqlserver
+  connection:
+    url: jdbc:sqlserver://localhost:1433;databaseName=consilens_demo;encrypt=true;trustServerCertificate=true
+    username: ${env.SQLSERVER_USER}
+    password: ${env.SQLSERVER_PASSWORD}
+  resource:
+    type: table
+    name: consilens_performance_demo_table
+  readOptions:
+    consistency: snapshot
+    batchSize: 500
+    fetchSize: 1000
+
+target:
+  type: sqlserver
+  name: target-sqlserver
+  connection:
+    url: jdbc:sqlserver://localhost:1433;databaseName=consilens_demo;encrypt=true;trustServerCertificate=true
+    username: ${env.SQLSERVER_USER}
+    password: ${env.SQLSERVER_PASSWORD}
+  resource:
+    type: table
+    name: consilens_performance_demo_table
+  readOptions:
+    consistency: snapshot
+    batchSize: 500
+    fetchSize: 1000
+
+comparison:
+  keys:
+    source:
+      - record_id
+    target:
+      - record_id
+  fields:
+    source:
+      - col_tinyint
+      - col_smallint
+      - col_mediumint
+      - col_int
+      - col_bigint
+      - col_decimal
+      - col_numeric
+      - col_varchar_50
+      - col_varchar_100
+      - col_varchar_255
+      - col_date
+      - col_datetime
+      - col_timestamp
+      - user_name
+      - email
+      - phone
+      - amount
+      - balance
+      - credit_limit
+      - status
+      - category
+      - priority
+      - score
+      - created_at
+      - updated_at
+    target:
+      - col_tinyint
+      - col_smallint
+      - col_mediumint
+      - col_int
+      - col_bigint
+      - col_decimal
+      - col_numeric
+      - col_varchar_50
+      - col_varchar_100
+      - col_varchar_255
+      - col_date
+      - col_datetime
+      - col_timestamp
+      - user_name
+      - email
+      - phone
+      - amount
+      - balance
+      - credit_limit
+      - status
+      - category
+      - priority
+      - score
+      - created_at
+      - updated_at
+
+strategy:
+  mode: join
+  algorithm: concat
+  bisectionFactor: 4
+  bisectionThreshold: 10000
+  batchSize: 500
+  maxDifferences: 5000
+
+result:
+  sinks:
+    - format: console
+      type: result

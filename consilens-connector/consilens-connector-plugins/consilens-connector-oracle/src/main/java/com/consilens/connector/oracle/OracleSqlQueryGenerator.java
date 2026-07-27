@@ -59,7 +59,10 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
     }
 
     /**
-     * Generate checksum SQL using traditional CONCAT method (backward compatible)
+     * Generate checksum SQL using traditional CONCAT method (backward compatible).
+     * Uses STANDARD_HASH with MD5 to be consistent with MySQL and PostgreSQL checksum algorithms.
+     * STANDARD_HASH is available by default in Oracle 12c+ without requiring additional privileges.
+     * Wraps with RAWTOHEX to convert RAW result to hex string.
      */
     private String getChecksumSQLWithConcat(String schemaName, String tableName,
             List<String> keyColumns,
@@ -72,12 +75,13 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
         if (columns.isEmpty()) {
             sql.append("'' as checksum ");
         } else {
-            // Oracle uses STANDARD_HASH or DBMS_CRYPTO
-            // BUGFIX: Use only primary key columns for ordering to ensure stable sort
-            sql.append("RAWTOHEX(DBMS_CRYPTO.HASH(");
-            sql.append("UTL_RAW.CAST_TO_RAW(LISTAGG(row_checksum, '|') WITHIN GROUP (ORDER BY pk_key)), 3)) as checksum ");
+            // Use STANDARD_HASH with MD5 to be consistent with MySQL/PostgreSQL (both use MD5).
+            // STANDARD_HASH is available by default in Oracle 12c+ without requiring DBA privileges.
+            // RAWTOHEX converts RAW hash result to hex string, LOWER ensures lowercase for consistency
+            // with MySQL's MD5() which returns lowercase hex.
+            sql.append("LOWER(RAWTOHEX(STANDARD_HASH(LISTAGG(row_checksum, '|') WITHIN GROUP (ORDER BY pk_key), 'MD5'))) as checksum ");
             sql.append("FROM (SELECT ");
-            
+
             // Build primary key for stable ordering
             for (int i = 0; i < keyColumns.size(); i++) {
                 if (i > 0)
@@ -87,9 +91,9 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
                 sql.append(dataTypeHandler.normalizeColumn(col, dataType));
             }
             sql.append(" as pk_key, ");
-            
+
             // Build row checksum using all columns
-            sql.append("RAWTOHEX(DBMS_CRYPTO.HASH(UTL_RAW.CAST_TO_RAW(");
+            sql.append("LOWER(RAWTOHEX(STANDARD_HASH(");
             for (int i = 0; i < columns.size(); i++) {
                 if (i > 0)
                     sql.append(" || '|' || ");
@@ -97,8 +101,8 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
                 DataType dataType = columnDataTypes.get(col);
                 sql.append(dataTypeHandler.normalizeColumn(col, dataType));
             }
-            sql.append("), 3)) as row_checksum ");
-            
+            sql.append(", 'MD5'))) as row_checksum ");
+
             sql.append("FROM ");
             sql.append(buildRelationRef(schemaName, tableName));
 

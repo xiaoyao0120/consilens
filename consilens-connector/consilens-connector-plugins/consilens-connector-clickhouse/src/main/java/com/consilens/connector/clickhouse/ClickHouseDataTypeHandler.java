@@ -260,13 +260,9 @@ public class ClickHouseDataTypeHandler extends BaseDataTypeHandler {
 
     /**
      * ClickHouse-specific decimal normalization with configurable decimal places.
-     * Use formatDecimal to ensure specified decimal places with trailing zeros.
+     * Use printf to ensure specified decimal places with trailing zeros.
      * This ensures consistent decimal representation across databases.
-     */
-    /**
-     * ClickHouse-specific decimal normalization with configurable decimal places.
-     * Use formatDecimal to ensure specified decimal places with trailing zeros.
-     * This ensures consistent decimal representation across databases.
+     * Note: ClickHouse does not have formatDecimal function, use printf instead.
      */
     @Override
     protected String normalizeDecimal(String quotedCol) {
@@ -285,13 +281,16 @@ public class ClickHouseDataTypeHandler extends BaseDataTypeHandler {
         }
 
         String defaultValue = "0." + "0".repeat(precision);
+        // Use printf for decimal formatting (e.g., printf('%.4f', value) for 4 decimal places)
+        // printf adds trailing zeros and uses dot as decimal separator regardless of locale
+        String formatPattern = "%." + precision + "f";
 
         if (rounding) {
             // Round half up: round first, then format
-            return "COALESCE(formatDecimal(round(" + quotedCol + ", " + precision + "), " + precision + "), '" + defaultValue + "')";
+            return "COALESCE(printf('" + formatPattern + "', round(" + quotedCol + ", " + precision + ")), '" + defaultValue + "')";
         } else {
             // Truncate: truncate first, then format
-            return "COALESCE(formatDecimal(truncate(" + quotedCol + ", " + precision + "), " + precision + "), '" + defaultValue + "')";
+            return "COALESCE(printf('" + formatPattern + "', truncate(" + quotedCol + ", " + precision + ")), '" + defaultValue + "')";
         }
     }
 
