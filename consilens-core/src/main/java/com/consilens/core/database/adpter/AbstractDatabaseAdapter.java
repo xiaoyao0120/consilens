@@ -323,8 +323,10 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
             log.info("Executing checksum query: {}", checksumQuery);
 
             // Execute query using a RowMapper that returns Maps
+            // Use TreeMap with case-insensitive comparator for cross-database compatibility
+            // Oracle returns column labels in uppercase by default
             List<Map<String, Object>> results = query(checksumQuery, (rs, rowNum) -> {
-                Map<String, Object> row = new HashMap<>();
+                Map<String, Object> row = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
                 int columnCount = rs.getMetaData().getColumnCount();
                 for (int i = 1; i <= columnCount; i++) {
                     String columnName = rs.getMetaData().getColumnLabel(i);

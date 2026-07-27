@@ -1,0 +1,119 @@
+# Oracle 同库 Join 比对配置
+# 适用于同一 Oracle 实例下的两张表比对（如生产表与备份表）
+# 使用 Join 模式，性能优于 Checksum 模式，但要求源表和目标表在同一数据库中
+#
+# 前置条件：
+#   1. Oracle 中已加载 examples/seed-sql/load-oracle-consilens-demo-data.sql
+#   2. 设置环境变量 ORACLE_USER, ORACLE_PASSWORD
+
+source:
+  type: oracle
+  name: source-oracle
+  connection:
+    url: jdbc:oracle:thin:@localhost:1521:ORCL
+    username: ${env.ORACLE_USER}
+    password: ${env.ORACLE_PASSWORD}
+  resource:
+    type: table
+    name: ORDERS
+  readOptions:
+    consistency: snapshot
+    batchSize: 500
+    fetchSize: 1000
+    useCursorFetch: true
+
+target:
+  type: oracle
+  name: target-oracle
+  connection:
+    url: jdbc:oracle:thin:@localhost:1521:ORCL
+    username: ${env.ORACLE_USER}
+    password: ${env.ORACLE_PASSWORD}
+  resource:
+    type: table
+    name: ORDERS_BACKUP
+  readOptions:
+    consistency: snapshot
+    batchSize: 500
+    fetchSize: 1000
+    useCursorFetch: true
+
+comparison:
+  keys:
+    source:
+      - ORDER_ID
+    target:
+      - ORDER_ID
+
+  fields:
+    source:
+      - CUSTOMER_ID
+      - AMOUNT
+      - STATUS
+    target:
+      - CUSTOMER_ID
+      - AMOUNT
+      - STATUS
+
+  extraColumns:
+    - CREATED_AT
+
+  filters:
+    source: "CREATED_AT >= TO_DATE('2025-01-01', 'YYYY-MM-DD')"
+    target: "CREATED_AT >= TO_DATE('2025-01-01', 'YYYY-MM-DD')"
+
+strategy:
+  # join 要求 source / target 指向同一个 JDBC URL
+  mode: join
+  algorithm: concat
+  bisectionFactor: 4
+  bisectionThreshold: 10000
+  batchSize: 500
+  maxDifferences: 5000
+
+normalization:
+  global:
+    decimal:
+      precision: 4
+      rounding: true
+    float:
+      precision: 4
+      rounding: false
+    date:
+      format: yyyy-MM-dd
+      comparisonMode: DATE_ONLY
+    datetime:
+      format: yyyy-MM-dd HH:mm:ss
+      timezone: Asia/Shanghai
+      comparisonMode: "TRUNCATE_TO_SECOND"
+    timestamp:
+      format: yyyy-MM-dd HH:mm:ss
+      timezone: Asia/Shanghai
+      comparisonMode: "TRUNCATE_TO_SECOND"
+    binary:
+      encoding: hex
+      uppercase: true
+    boolean:
+      trueValue: "1"
+      falseValue: "0"
+      nullValue: "<BOOL_NULL>"
+
+result:
+  failOnSinkError: false
+  sinks:
+    - format: console
+      type: result
+    - format: csv
+      type: diff-record
+      enabled: true
+      properties:
+        path: ./output/oracle-orders-diff.csv
+        delimiter: ","
+        includeHeader: true
+        mergeDefaults: true
+        columns:
+          - name: env
+            value: staging
+    - format: console
+      type: result
+      enabled: false

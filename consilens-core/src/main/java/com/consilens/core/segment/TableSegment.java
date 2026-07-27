@@ -344,12 +344,12 @@ public class TableSegment {
         // Add key range conditions
         if (minKey != null && minKey.isPresent() && keyColumns != null && !keyColumns.isEmpty()) {
             List<Object> minValues = minKey.get();
-            
+
             if (keyColumns.size() == 1) {
                 // Single key: simple range check
                 String column = keyColumns.get(0);
                 Object minValue = minValues.get(0);
-                
+
                 if (minValue != null) {
                     whereBuilder.append(String.format("%s >= %s", column, formatValue(minValue)));
                 }
@@ -614,16 +614,31 @@ public class TableSegment {
     private String formatValue(Object value) {
         if (value == null) {
             return "NULL";
-        } else if (value instanceof String) {
-            return "'" + escapeSQL((String) value) + "'";
+        } else if (value instanceof Number) {
+            return value.toString();
         } else if (value instanceof Boolean) {
             return (Boolean) value ? "TRUE" : "FALSE";
         } else if (value instanceof java.time.temporal.TemporalAccessor) {
             return "'" + value.toString() + "'";
         } else if (value instanceof java.util.Date) {
             return "'" + new java.sql.Timestamp(((java.util.Date) value).getTime()) + "'";
-        } else if (value instanceof Number) {
-            return value.toString();
+        } else if (value instanceof String) {
+            // Check if the string can be parsed as a number (for cross-database compatibility)
+            // Some JDBC drivers (Trino, Presto) return numeric columns as strings
+            String strVal = (String) value;
+            try {
+                // Try to parse as a number
+                if (strVal.contains(".")) {
+                    Double.parseDouble(strVal);
+                    return strVal; // Return without quotes
+                } else {
+                    Long.parseLong(strVal);
+                    return strVal; // Return without quotes
+                }
+            } catch (NumberFormatException e) {
+                // Not a number, treat as string
+                return "'" + escapeSQL(strVal) + "'";
+            }
         } else {
             throw new IllegalArgumentException("Unsupported key value type: " + value.getClass().getName());
         }

@@ -1,0 +1,100 @@
+# MySQL 到 Trino 跨数据库 Checksum 比对配置
+# Trino 是查询引擎，使用 memory connector 进行测试
+#
+# 前置条件：
+#   1. MySQL 中已加载 examples/seed-sql/load-mysql-consilens-demo-data.sql
+#   2. Trino 中已加载 examples/seed-sql/load-trino-consilens-demo-data.sql
+
+source:
+  type: mysql
+  name: source-mysql
+  connection:
+    url: jdbc:mysql://localhost:13306/consilens_demo?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${env.MYSQL_USER}
+    password: ${env.MYSQL_PASSWORD}
+  resource:
+    type: table
+    name: consilens_performance_demo_table
+
+target:
+  type: trino
+  name: target-trino
+  connection:
+    url: jdbc:trino://localhost:8081/memory/consilens_demo
+    username: ${env.TRINO_USER}
+  resource:
+    type: table
+    name: consilens_performance_demo_table
+
+comparison:
+  keys:
+    source:
+      - record_id
+    target:
+      - record_id
+  fields:
+    source:
+      - col_tinyint
+      - col_smallint
+      - col_mediumint
+      - col_int
+      - col_bigint
+      - col_decimal
+      - col_numeric
+      - col_varchar_50
+      - col_varchar_100
+      - col_varchar_255
+      - col_date
+      - col_datetime
+      - col_timestamp
+      - user_name
+      - email
+      - phone
+      - amount
+      - balance
+      - credit_limit
+      - status
+      - category
+      - priority
+      - score
+      - created_at
+      - updated_at
+    target:
+      - col_tinyint
+      - col_smallint
+      - col_mediumint
+      - col_int
+      - col_bigint
+      - col_decimal
+      - col_numeric
+      - col_varchar_50
+      - col_varchar_100
+      - col_varchar_255
+      - col_date
+      - col_datetime
+      - col_timestamp
+      - user_name
+      - email
+      - phone
+      - amount
+      - balance
+      - credit_limit
+      - status
+      - category
+      - priority
+      - score
+      - created_at
+      - updated_at
+
+strategy:
+  mode: checksum
+  algorithm: xor
+  bisectionFactor: 8
+  bisectionThreshold: 8000
+  batchSize: 1000
+  enableProfiling: true
+
+result:
+  sinks:
+    - format: console
+      type: result

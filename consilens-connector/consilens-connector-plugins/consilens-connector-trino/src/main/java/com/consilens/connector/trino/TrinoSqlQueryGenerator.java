@@ -51,15 +51,22 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
             sql.append("FROM (SELECT ");
 
             // Build primary key for stable ordering
-            sql.append("CONCAT(");
-            for (int i = 0; i < keyColumns.size(); i++) {
-                if (i > 0)
-                    sql.append(", '|', ");
-                String col = keyColumns.get(i);
+            // Trino CONCAT requires at least 2 arguments, so handle single key specially
+            if (keyColumns.size() == 1) {
+                String col = keyColumns.get(0);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(dataTypeHandler.normalizeColumn(col, dataType)).append(" as pk_key, ");
+            } else {
+                sql.append("CONCAT(");
+                for (int i = 0; i < keyColumns.size(); i++) {
+                    if (i > 0)
+                        sql.append(", '|', ");
+                    String col = keyColumns.get(i);
+                    DataType dataType = columnDataTypes.get(col);
+                    sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                }
+                sql.append(") as pk_key, ");
             }
-            sql.append(") as pk_key, ");
 
             // Build per-row checksum using MD5
             sql.append("lower(to_hex(md5(to_utf8(CONCAT(");

@@ -56,28 +56,40 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
         if (columns.isEmpty()) {
             sql.append("'' as checksum ");
         } else {
-            // Two-step approach matching MySQL: per-row MD5 + aggregate MD5
-            sql.append("COALESCE(lower(hex(MD5(groupConcat('|')(row_checksum ORDER BY pk_key)))), '') as checksum ");
+            // ClickHouse does not support:
+            //   - CONCAT_WS (use concat instead)
+            //   - ORDER BY inside aggregate functions like MySQL's GROUP_CONCAT
+            // Use nested subquery approach: ORDER BY in inner subquery, then groupArray preserves order.
+            // groupArray collects values in row order, so ORDER BY in subquery ensures correct ordering.
+            sql.append("COALESCE(lower(hex(MD5(arrayStringConcat(groupArray(row_checksum), '|')))), '') as checksum ");
             sql.append("FROM (");
+            sql.append("SELECT row_checksum FROM (");
             sql.append("SELECT ");
 
-            // Build primary key for stable ordering
-            sql.append("CONCAT_WS('|', ");
-            for (int i = 0; i < keyColumns.size(); i++) {
-                if (i > 0) {
-                    sql.append(", ");
-                }
-                String col = keyColumns.get(i);
+            // Build primary key for stable ordering using concat (ClickHouse has no CONCAT_WS)
+            // Note: ClickHouse concat() requires at least 2 arguments, so handle single column case
+            if (keyColumns.size() == 1) {
+                String col = keyColumns.get(0);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(dataTypeHandler.normalizeColumn(col, dataType)).append(" as pk_key, ");
+            } else {
+                sql.append("concat(");
+                for (int i = 0; i < keyColumns.size(); i++) {
+                    if (i > 0) {
+                        sql.append(", '|', ");
+                    }
+                    String col = keyColumns.get(i);
+                    DataType dataType = columnDataTypes.get(col);
+                    sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                }
+                sql.append(") as pk_key, ");
             }
-            sql.append(") as pk_key, ");
 
             // Build per-row checksum using MD5 (lower(hex()) to match MySQL's lowercase hex output)
-            sql.append("lower(hex(MD5(CONCAT_WS('|', ");
+            sql.append("lower(hex(MD5(concat(");
             for (int i = 0; i < columns.size(); i++) {
                 if (i > 0) {
-                    sql.append(", ");
+                    sql.append(", '|', ");
                 }
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
@@ -92,6 +104,9 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
                 sql.append(" WHERE ").append(whereClause);
             }
 
+            // Order by pk_key to ensure deterministic ordering
+            sql.append(" ORDER BY pk_key LIMIT 10000000");
+            sql.append(") AS ordered");
             sql.append(") AS data");
         }
 

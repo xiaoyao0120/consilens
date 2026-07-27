@@ -47,10 +47,28 @@ public class DefaultDatabaseAdapter extends AbstractDatabaseAdapter {
             }
 
             // First check if table exists
-            DatabaseMetaData metaData = conn.getMetaData();
+            // Use JDBC metadata first, but fall back to dialect-specific query
+            // because some JDBC drivers (e.g., ClickHouse 0.4.6) have bugs in getTables()
             boolean tableExists = false;
+            DatabaseMetaData metaData = conn.getMetaData();
             try (ResultSet tables = metaData.getTables(null, schemaName, tableName, new String[]{"TABLE"})) {
                 tableExists = tables.next();
+            }
+
+            // Fallback: if JDBC metadata says table doesn't exist, try dialect-specific query
+            // This handles cases where JDBC driver metadata is buggy (e.g., ClickHouse)
+            if (!tableExists) {
+                String checkSql = dialect.getMetadataQueryGenerator().getTableExistsSQL(schemaName, tableName);
+                log.debug("JDBC metadata did not find table {}.{}, trying dialect-specific query: {}", schemaName, tableName, checkSql);
+                try (Statement stmt = conn.createStatement();
+                     ResultSet rs = stmt.executeQuery(checkSql)) {
+                    if (rs.next() && rs.getInt(1) > 0) {
+                        tableExists = true;
+                        log.debug("Dialect-specific query confirmed table {}.{} exists", schemaName, tableName);
+                    }
+                } catch (SQLException fallbackEx) {
+                    log.debug("Dialect-specific table check also failed: {}", fallbackEx.getMessage());
+                }
             }
 
             if (!tableExists) {
@@ -81,10 +99,20 @@ public class DefaultDatabaseAdapter extends AbstractDatabaseAdapter {
 
                     // Use dialect's type mapping instead of manual mapping
                     DataType dataType = dialect.getDataTypeHandler().convertToDataType(columnType);
-                    
+
+                    // For Oracle NUMBER type, JDBC driver returns just "NUMBER" without precision/scale,
+                    // so convertToDataType returns DECIMAL. Refine using precision/scale from metadata.
+                    if ("NUMBER".equalsIgnoreCase(columnType) && scale == 0 && precision > 0) {
+                        if (precision <= 9) {
+                            dataType = DataType.INTEGER;
+                        } else if (precision <= 18) {
+                            dataType = DataType.BIGINT;
+                        }
+                    }
+
                     // Log type conversion at DEBUG level
-                    log.debug("Column '{}': JDBC TYPE_NAME='{}' -> DataType.{}", 
-                            columnName, columnType, dataType);
+                    log.debug("Column '{}': JDBC TYPE_NAME='{}' (precision={}, scale={}) -> DataType.{}",
+                            columnName, columnType, precision, scale, dataType);
 
                     ColumnInfo columnInfo = ColumnInfo.builder()
                             .name(columnName)
