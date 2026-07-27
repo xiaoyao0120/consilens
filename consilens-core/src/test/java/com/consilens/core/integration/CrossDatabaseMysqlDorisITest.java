@@ -9,7 +9,10 @@ import com.consilens.core.segment.TableSegment;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.containers.wait.strategy.LogMessageWaitStrategy;
@@ -29,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Cross-database (MySQL → Doris) Checksum diff integration test.
  * Doris uses MySQL protocol but has specific syntax for CREATE TABLE.
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @Testcontainers(disabledWithoutDocker = true)
 @DisplayName("跨数据库 MySQL vs Doris Checksum Diff 集成测试")
 class CrossDatabaseMysqlDorisITest {
@@ -57,8 +61,15 @@ class CrossDatabaseMysqlDorisITest {
 
         String dorisHost = DORIS.getHost();
         Integer dorisPort = DORIS.getMappedPort(9030);
-        String dorisUrl = "jdbc:mysql://" + dorisHost + ":" + dorisPort + "/consilens_demo?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai";
 
+        // First create database on Doris (connect without database)
+        String dorisRootUrl = "jdbc:mysql://" + dorisHost + ":" + dorisPort + "/?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai";
+        DatabaseAdapter dorisRootAdapter = CrossDatabaseITestBase.createAdapter("doris-root", dorisRootUrl, "root", "", "doris");
+        CrossDatabaseITestBase.executeSql(dorisRootAdapter, "CREATE DATABASE IF NOT EXISTS consilens_demo");
+        dorisRootAdapter.close();
+
+        // Now connect with database
+        String dorisUrl = "jdbc:mysql://" + dorisHost + ":" + dorisPort + "/consilens_demo?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai";
         dorisAdapter = CrossDatabaseITestBase.createAdapter("doris-target", dorisUrl, "root", "", "doris");
 
         createTestTable(mysqlAdapter, "cross_source");
@@ -104,6 +115,7 @@ class CrossDatabaseMysqlDorisITest {
     }
 
     @Test
+    @Order(1)
     @DisplayName("MySQL 和 Doris 中相同数据应无差异")
     void identicalDataAcrossDatabasesShouldHaveNoDifferences() throws Exception {
         TableSegment seg1 = TableSegment.builder()
@@ -133,6 +145,7 @@ class CrossDatabaseMysqlDorisITest {
     }
 
     @Test
+    @Order(2)
     @DisplayName("MySQL vs Doris 应检测到数据差异")
     void shouldDetectDifferencesAcrossDatabases() throws Exception {
         CrossDatabaseITestBase.executeSql(dorisAdapter,

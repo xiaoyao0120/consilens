@@ -9,7 +9,10 @@ import com.consilens.core.segment.TableSegment;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.containers.wait.strategy.LogMessageWaitStrategy;
@@ -29,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Cross-database (MySQL → StarRocks) Checksum diff integration test.
  * StarRocks uses MySQL protocol but has specific syntax for CREATE TABLE.
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @Testcontainers(disabledWithoutDocker = true)
 @DisplayName("跨数据库 MySQL vs StarRocks Checksum Diff 集成测试")
 class CrossDatabaseMysqlStarRocksITest {
@@ -42,10 +46,11 @@ class CrossDatabaseMysqlStarRocksITest {
 
     @Container
     private static final GenericContainer<?> STARROCKS = new GenericContainer<>(
-            DockerImageName.parse("starrocks/allin1-ubuntu:latest"))
+            DockerImageName.parse("starrocks/allin1-ubuntu:latest").asCompatibleSubstituteFor("starrocks/allin1-ubuntu"))
+            .withCreateContainerCmdModifier(cmd -> cmd.withPlatform("linux/arm64"))
             .withExposedPorts(9030, 8030)
             .waitingFor(new LogMessageWaitStrategy()
-                    .withRegEx(".*Enjoy the freedom and flexibility of StarRocks.*\\s")
+                    .withRegEx(".*Enjoy the journey to StarRocks blazing-fast lake-house engine!.*\\s")
                     .withStartupTimeout(Duration.ofMinutes(5)));
 
     private static DatabaseAdapter mysqlAdapter;
@@ -57,8 +62,15 @@ class CrossDatabaseMysqlStarRocksITest {
 
         String srHost = STARROCKS.getHost();
         Integer srPort = STARROCKS.getMappedPort(9030);
-        String srUrl = "jdbc:mysql://" + srHost + ":" + srPort + "/consilens_demo?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai";
 
+        // First create database on StarRocks (connect without database)
+        String srRootUrl = "jdbc:mysql://" + srHost + ":" + srPort + "/?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai";
+        DatabaseAdapter srRootAdapter = CrossDatabaseITestBase.createAdapter("starrocks-root", srRootUrl, "root", "", "starrocks");
+        CrossDatabaseITestBase.executeSql(srRootAdapter, "CREATE DATABASE IF NOT EXISTS consilens_demo");
+        srRootAdapter.close();
+
+        // Now connect with database
+        String srUrl = "jdbc:mysql://" + srHost + ":" + srPort + "/consilens_demo?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai";
         starrocksAdapter = CrossDatabaseITestBase.createAdapter("starrocks-target", srUrl, "root", "", "starrocks");
 
         createTestTable(mysqlAdapter, "cross_source");
@@ -103,6 +115,7 @@ class CrossDatabaseMysqlStarRocksITest {
     }
 
     @Test
+    @Order(1)
     @DisplayName("MySQL 和 StarRocks 中相同数据应无差异")
     void identicalDataAcrossDatabasesShouldHaveNoDifferences() throws Exception {
         TableSegment seg1 = TableSegment.builder()
@@ -132,6 +145,7 @@ class CrossDatabaseMysqlStarRocksITest {
     }
 
     @Test
+    @Order(2)
     @DisplayName("MySQL vs StarRocks 应检测到数据差异")
     void shouldDetectDifferencesAcrossDatabases() throws Exception {
         CrossDatabaseITestBase.executeSql(starrocksAdapter,

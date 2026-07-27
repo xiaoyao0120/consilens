@@ -104,6 +104,13 @@
             <scope>test</scope>
         </dependency>
 
+        <dependency>
+            <groupId>com.consilens</groupId>
+            <artifactId>consilens-connector-oceanbase</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Oracle JDBC Driver for testcontainers -->
         <dependency>
             <groupId>com.oracle.database.jdbc</groupId>

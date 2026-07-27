@@ -42,7 +42,7 @@ services:
   # ---------------------------------------------------------
   consilens-server:
     build:
-      context: .
+      context: ..
       dockerfile: Dockerfile
     image: consilens-server:latest
     container_name: consilens-server
