@@ -1,0 +1,61 @@
+# MySQL vs OceanBase 跨库比对配置
+# 验证 OceanBase connector 与 MySQL 的兼容性
+
+source:
+  type: mysql
+  name: source-mysql
+  connection:
+    url: jdbc:mysql://localhost:13306/mydb
+    username: root
+    password: Kuanilens_MySQL_2026!
+  resource:
+    type: table
+    name: orders
+
+target:
+  type: oceanbase
+  name: target-oceanbase
+  connection:
+    url: jdbc:mysql://localhost:2881/test?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: root
+    password: Admin123_123
+  resource:
+    type: table
+    name: orders
+
+comparison:
+  keys:
+    source:
+      - order_id
+    target:
+      - order_id
+
+  fields:
+    source:
+      - customer_id
+      - amount
+      - status
+    target:
+      - customer_id
+      - amount
+      - status
+
+  extraColumns:
+    - created_at
+
+  filters:
+    source: "created_at >= '2025-01-01'"
+    target: "created_at >= '2025-01-01'"
+
+strategy:
+  mode: checksum
+  algorithm: concat
+  bisectionFactor: 4
+  bisectionThreshold: 10000
+  batchSize: 500
+  maxDifferences: 5000
+
+result:
+  sinks:
+    - format: console
+      type: result

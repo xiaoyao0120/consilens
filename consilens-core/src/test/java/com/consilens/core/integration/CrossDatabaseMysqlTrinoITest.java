@@ -9,7 +9,10 @@ import com.consilens.core.segment.TableSegment;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.containers.wait.strategy.LogMessageWaitStrategy;
@@ -29,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Cross-database (MySQL → Trino) Checksum diff integration test.
  * Trino is a query engine, uses memory connector for testing.
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @Testcontainers(disabledWithoutDocker = true)
 @DisplayName("跨数据库 MySQL vs Trino Checksum Diff 集成测试")
 class CrossDatabaseMysqlTrinoITest {
@@ -44,9 +48,10 @@ class CrossDatabaseMysqlTrinoITest {
     private static final GenericContainer<?> TRINO = new GenericContainer<>(
             DockerImageName.parse("trinodb/trino:430"))
             .withExposedPorts(8080)
+            .withEnv("TRINO_DISCOVERY_URI", "http://localhost:8080")
             .waitingFor(new LogMessageWaitStrategy()
                     .withRegEx(".*SERVER STARTED.*\\s")
-                    .withStartupTimeout(Duration.ofMinutes(3)));
+                    .withStartupTimeout(Duration.ofMinutes(5)));
 
     private static DatabaseAdapter mysqlAdapter;
     private static DatabaseAdapter trinoAdapter;
@@ -57,8 +62,19 @@ class CrossDatabaseMysqlTrinoITest {
 
         String trinoHost = TRINO.getHost();
         Integer trinoPort = TRINO.getMappedPort(8080);
-        String trinoUrl = "jdbc:trino://" + trinoHost + ":" + trinoPort + "/memory/consilens_demo";
 
+        // Wait for Trino worker to fully register (SERVER STARTED log is not enough)
+        System.out.println("Waiting for Trino worker to register...");
+        Thread.sleep(15000);
+
+        // First connect without schema to create the schema
+        String trinoRootUrl = "jdbc:trino://" + trinoHost + ":" + trinoPort + "/memory";
+        DatabaseAdapter trinoRootAdapter = CrossDatabaseITestBase.createAdapter("trino-root", trinoRootUrl, "test", "", "trino");
+        CrossDatabaseITestBase.executeSql(trinoRootAdapter, "CREATE SCHEMA IF NOT EXISTS consilens_demo");
+        trinoRootAdapter.close();
+
+        // Now connect with schema
+        String trinoUrl = "jdbc:trino://" + trinoHost + ":" + trinoPort + "/memory/consilens_demo";
         trinoAdapter = CrossDatabaseITestBase.createAdapter("trino-target", trinoUrl, "test", "", "trino");
 
         createTestTable(mysqlAdapter, "cross_source");
@@ -110,6 +126,7 @@ class CrossDatabaseMysqlTrinoITest {
     }
 
     @Test
+    @Order(1)
     @DisplayName("MySQL 和 Trino 中相同数据应无差异")
     void identicalDataAcrossDatabasesShouldHaveNoDifferences() throws Exception {
         TableSegment seg1 = TableSegment.builder()
@@ -139,6 +156,7 @@ class CrossDatabaseMysqlTrinoITest {
     }
 
     @Test
+    @Order(2)
     @DisplayName("MySQL vs Trino 应检测到数据差异")
     void shouldDetectDifferencesAcrossDatabases() throws Exception {
         CrossDatabaseITestBase.executeSql(trinoAdapter,

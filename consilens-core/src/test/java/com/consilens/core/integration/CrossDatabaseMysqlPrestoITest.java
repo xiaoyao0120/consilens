@@ -9,7 +9,10 @@ import com.consilens.core.segment.TableSegment;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.MethodOrderer;
+import org.junit.jupiter.api.Order;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestMethodOrder;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.containers.wait.strategy.LogMessageWaitStrategy;
@@ -29,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Cross-database (MySQL → Presto) Checksum diff integration test.
  * Presto is a query engine, uses memory connector for testing.
  */
+@TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @Testcontainers(disabledWithoutDocker = true)
 @DisplayName("跨数据库 MySQL vs Presto Checksum Diff 集成测试")
 class CrossDatabaseMysqlPrestoITest {
@@ -44,9 +48,10 @@ class CrossDatabaseMysqlPrestoITest {
     private static final GenericContainer<?> PRESTO = new GenericContainer<>(
             DockerImageName.parse("prestodb/presto:0.284"))
             .withExposedPorts(8080)
+            .withFileSystemBind("/tmp/presto-config", "/opt/presto-server/etc", org.testcontainers.containers.BindMode.READ_WRITE)
             .waitingFor(new LogMessageWaitStrategy()
                     .withRegEx(".*SERVER STARTED.*\\s")
-                    .withStartupTimeout(Duration.ofMinutes(3)));
+                    .withStartupTimeout(Duration.ofMinutes(5)));
 
     private static DatabaseAdapter mysqlAdapter;
     private static DatabaseAdapter prestoAdapter;
@@ -57,8 +62,19 @@ class CrossDatabaseMysqlPrestoITest {
 
         String prestoHost = PRESTO.getHost();
         Integer prestoPort = PRESTO.getMappedPort(8080);
-        String prestoUrl = "jdbc:presto://" + prestoHost + ":" + prestoPort + "/memory/consilens_demo";
 
+        // Wait for Presto worker to fully register (SERVER STARTED log is not enough)
+        System.out.println("Waiting for Presto worker to register...");
+        Thread.sleep(15000);
+
+        // First connect without schema to create the schema
+        String prestoRootUrl = "jdbc:presto://" + prestoHost + ":" + prestoPort + "/memory";
+        DatabaseAdapter prestoRootAdapter = CrossDatabaseITestBase.createAdapter("presto-root", prestoRootUrl, "test", "", "presto");
+        CrossDatabaseITestBase.executeSql(prestoRootAdapter, "CREATE SCHEMA IF NOT EXISTS consilens_demo");
+        prestoRootAdapter.close();
+
+        // Now connect with schema
+        String prestoUrl = "jdbc:presto://" + prestoHost + ":" + prestoPort + "/memory/consilens_demo";
         prestoAdapter = CrossDatabaseITestBase.createAdapter("presto-target", prestoUrl, "test", "", "presto");
 
         createTestTable(mysqlAdapter, "cross_source");
@@ -110,6 +126,7 @@ class CrossDatabaseMysqlPrestoITest {
     }
 
     @Test
+    @Order(1)
     @DisplayName("MySQL 和 Presto 中相同数据应无差异")
     void identicalDataAcrossDatabasesShouldHaveNoDifferences() throws Exception {
         TableSegment seg1 = TableSegment.builder()
@@ -139,6 +156,7 @@ class CrossDatabaseMysqlPrestoITest {
     }
 
     @Test
+    @Order(2)
     @DisplayName("MySQL vs Presto 应检测到数据差异")
     void shouldDetectDifferencesAcrossDatabases() throws Exception {
         CrossDatabaseITestBase.executeSql(prestoAdapter,

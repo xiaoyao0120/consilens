@@ -260,9 +260,9 @@ public class ClickHouseDataTypeHandler extends BaseDataTypeHandler {
 
     /**
      * ClickHouse-specific decimal normalization with configurable decimal places.
-     * Use printf to ensure specified decimal places with trailing zeros.
-     * This ensures consistent decimal representation across databases.
-     * Note: ClickHouse does not have formatDecimal function, use printf instead.
+     * Manually formats decimal values to ensure trailing zeros for cross-database consistency.
+     * Note: ClickHouse 23.3 has neither printf (added in 23.7) nor formatDecimal (removed in 23.3).
+     * Uses trunc + lpad approach: split into integer and fractional parts, pad with trailing zeros.
      */
     @Override
     protected String normalizeDecimal(String quotedCol) {
@@ -281,23 +281,22 @@ public class ClickHouseDataTypeHandler extends BaseDataTypeHandler {
         }
 
         String defaultValue = "0." + "0".repeat(precision);
-        // Use printf for decimal formatting (e.g., printf('%.4f', value) for 4 decimal places)
-        // printf adds trailing zeros and uses dot as decimal separator regardless of locale
-        String formatPattern = "%." + precision + "f";
+        String roundedCol = rounding
+                ? "round(" + quotedCol + ", " + precision + ")"
+                : "truncate(" + quotedCol + ", " + precision + ")";
 
-        if (rounding) {
-            // Round half up: round first, then format
-            return "COALESCE(printf('" + formatPattern + "', round(" + quotedCol + ", " + precision + ")), '" + defaultValue + "')";
-        } else {
-            // Truncate: truncate first, then format
-            return "COALESCE(printf('" + formatPattern + "', truncate(" + quotedCol + ", " + precision + ")), '" + defaultValue + "')";
-        }
+        // Format: integer_part '.' fractional_part_padded_to_precision
+        // trunc() handles negative numbers correctly (truncates toward zero)
+        // abs() ensures fractional part is always positive
+        // lpad ensures trailing zeros are added (e.g., 10.5 -> 10.5000)
+        return "COALESCE(concat(toString(trunc(" + roundedCol + ")), '.', lpad(toString(round(abs(" + roundedCol + " - trunc(" + roundedCol + ")) * " + pow10(precision) + ", 0)), " + precision + ", '0')), '" + defaultValue + "')";
     }
 
     /**
      * ClickHouse-specific float normalization with configurable decimal places.
      * CRITICAL: FLOAT is single-precision and may have precision issues.
      * Cast to Float64 (DOUBLE) first to ensure consistent formatting.
+     * Uses trunc + lpad approach for ClickHouse 23.3 compatibility.
      */
     @Override
     protected String normalizeFloat(String quotedCol) {
@@ -316,14 +315,24 @@ public class ClickHouseDataTypeHandler extends BaseDataTypeHandler {
         }
 
         String defaultValue = "0." + "0".repeat(precision);
+        String roundedCol = rounding
+                ? "round(CAST(" + quotedCol + " AS Float64), " + precision + ")"
+                : "truncate(CAST(" + quotedCol + " AS Float64), " + precision + ")";
 
-        if (rounding) {
-            // Round half up: round first, then format
-            return "COALESCE(formatDecimal(round(CAST(" + quotedCol + " AS Float64), " + precision + "), " + precision + "), '" + defaultValue + "')";
-        } else {
-            // Truncate: truncate first, then format
-            return "COALESCE(formatDecimal(truncate(CAST(" + quotedCol + " AS Float64), " + precision + "), " + precision + "), '" + defaultValue + "')";
+        // Same trunc + lpad approach as normalizeDecimal
+        return "COALESCE(concat(toString(trunc(" + roundedCol + ")), '.', lpad(toString(round(abs(" + roundedCol + " - trunc(" + roundedCol + ")) * " + pow10(precision) + ", 0)), " + precision + ", '0')), '" + defaultValue + "')";
+    }
+
+    /**
+     * Returns 10^n as a string for use in SQL.
+     * Used to multiply fractional part by 10^precision to get integer representation.
+     */
+    private String pow10(int n) {
+        StringBuilder sb = new StringBuilder("1");
+        for (int i = 0; i < n; i++) {
+            sb.append("0");
         }
+        return sb.toString();
     }
 
     /**
