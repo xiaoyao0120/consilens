@@ -63,7 +63,34 @@ class ClickHouseSqlQueryGeneratorTest {
 
         String sql = generator.getChecksumSQL("public", "users", columns, Arrays.asList("id"), types, null);
         assertTrue(sql.contains("MD5"));
-        assertTrue(sql.contains("groupConcat"));
+        assertTrue(sql.contains("arrayStringConcat"));
+        assertTrue(sql.contains("groupArray"));
+    }
+
+    @Test
+    void testGetChecksumSQLNormalizesNullIntegers() {
+        List<String> columns = Arrays.asList("id", "amount");
+        Map<String, DataType> types = new HashMap<>();
+        types.put("id", DataType.INTEGER);
+        types.put("amount", DataType.BIGINT);
+
+        String sql = generator.getChecksumSQL("public", "orders", columns, Arrays.asList("id"), types, null);
+        // NULL integers must collapse to '0' inside concat(), matching MySQL's
+        // COALESCE(..., '0') normalization; otherwise row checksums diverge.
+        assertTrue(sql.contains("COALESCE(toString("));
+        assertTrue(sql.contains("), '0')"));
+    }
+
+    @Test
+    void testGetRowHashSQLNormalizesNullIntegers() {
+        List<String> columns = Arrays.asList("id", "amount");
+        Map<String, DataType> types = new HashMap<>();
+        types.put("id", DataType.INTEGER);
+        types.put("amount", DataType.BIGINT);
+
+        String sql = generator.getRowHashSQL("public", "orders", Arrays.asList("id"), columns, types, null);
+        assertTrue(sql.contains("COALESCE(toString("));
+        assertTrue(sql.contains("), '0')"));
     }
 
     @Test

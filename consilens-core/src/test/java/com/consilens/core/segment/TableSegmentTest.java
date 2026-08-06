@@ -1,9 +1,11 @@
 package com.consilens.core.segment;
 
+import com.consilens.core.database.adpter.DatabaseAdapter;
 import com.consilens.connector.api.model.TablePath;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -195,8 +197,49 @@ public class TableSegmentTest {
 
         String whereClause = segment.buildWhereClause();
 
-        assertTrue(whereClause.contains("(biz_date > '2026-05-01' OR (biz_date = '2026-05-01' AND status >= 'active'))"));
-        assertTrue(whereClause.contains("(biz_date < '2026-05-01' OR (biz_date = '2026-05-01' AND status <= 'pending'))"));
+        // Date-looking strings are emitted as ANSI literals so Presto/Trino strict
+        // type checking accepts the comparison.
+        assertTrue(whereClause.contains("(biz_date > DATE '2026-05-01' OR (biz_date = DATE '2026-05-01' AND status >= 'active'))"));
+        assertTrue(whereClause.contains("(biz_date < DATE '2026-05-01' OR (biz_date = DATE '2026-05-01' AND status <= 'pending'))"));
+    }
+
+    @Test
+    public void testBuildWhereClauseWithLocalDateKeyUsesAnsiLiteral() {
+        TableSegment segment = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Arrays.asList("created"))
+                .minKey(Optional.of(Arrays.asList(LocalDate.of(2026, 5, 1))))
+                .maxKey(Optional.of(Arrays.asList(LocalDate.of(2026, 5, 31))))
+                .build();
+
+        String whereClause = segment.buildWhereClause();
+
+        assertTrue(whereClause.contains("created >= DATE '2026-05-01'"));
+        assertTrue(whereClause.contains("created < DATE '2026-05-31'"));
+    }
+
+    @Test
+    public void testBuildWhereClauseWithLocalDateKeyUsesQuotedLiteralForSqlServer() {
+        DatabaseAdapter sqlServerAdapter = (DatabaseAdapter) java.lang.reflect.Proxy.newProxyInstance(
+                DatabaseAdapter.class.getClassLoader(),
+                new Class<?>[]{DatabaseAdapter.class},
+                (proxy, method, args) -> "getConnectorType".equals(method.getName()) ? "sqlserver" : null);
+
+        TableSegment segment = TableSegment.builder()
+                .database(sqlServerAdapter)
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Arrays.asList("created"))
+                .minKey(Optional.of(Arrays.asList(LocalDate.of(2026, 5, 1))))
+                .maxKey(Optional.of(Arrays.asList(LocalDate.of(2026, 5, 31))))
+                .build();
+
+        String whereClause = segment.buildWhereClause();
+
+        // SQL Server has no ANSI DATE literal; quoted strings are implicitly converted.
+        assertTrue(whereClause.contains("created >= '2026-05-01'"));
+        assertTrue(whereClause.contains("created < '2026-05-31'"));
+        assertFalse(whereClause.contains("DATE '"));
+        assertFalse(whereClause.contains("TIMESTAMP '"));
     }
 
     @Test

@@ -112,6 +112,48 @@ public class TiDBSqlQueryGenerator extends BaseSqlQueryGenerator {
     }
 
     @Override
+    public String getRowHashSQL(String schemaName, String tableName,
+            List<String> primaryKeys,
+            List<String> columns,
+            Map<String, DataType> columnDataTypes,
+            String whereClause) {
+        StringBuilder sql = new StringBuilder();
+
+        // SELECT primary key columns
+        sql.append("SELECT ");
+        for (int i = 0; i < primaryKeys.size(); i++) {
+            if (i > 0) {
+                sql.append(", ");
+            }
+            sql.append(capabilityProvider.quote(primaryKeys.get(i)));
+        }
+
+        // Add row_hash column using MD5(CONCAT_WS('|', ...))
+        // TiDB is MySQL-compatible, so CONCAT_WS and MD5 work the same way
+        sql.append(", MD5(CONCAT_WS('|'");
+
+        // Add normalized columns using type-specific normalization
+        for (String col : columns) {
+            sql.append(", ");
+            DataType dataType = columnDataTypes.get(col);
+            sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+        }
+
+        sql.append(")) AS row_hash");
+
+        // FROM clause
+        sql.append(" FROM ");
+        sql.append(buildRelationRef(schemaName, tableName));
+
+        // WHERE clause (if provided)
+        if (whereClause != null && !whereClause.trim().isEmpty()) {
+            sql.append(" WHERE ").append(whereClause);
+        }
+
+        return sql.toString();
+    }
+
+    @Override
     public String getFullOuterJoinSQL(String table1, String table2,
             List<String> joinColumns,
             String whereClause) {

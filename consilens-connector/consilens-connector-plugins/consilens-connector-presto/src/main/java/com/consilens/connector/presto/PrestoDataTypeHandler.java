@@ -200,8 +200,10 @@ public class PrestoDataTypeHandler extends BaseDataTypeHandler {
 
     /**
      * Presto-specific decimal normalization with configurable decimal places.
-     * Use FORMAT to ensure specified decimal places with trailing zeros.
-     * This ensures consistent decimal representation across databases.
+     * Uses format() with a fixed number of decimal places so trailing zeros are
+     * preserved, matching MySQL's FORMAT(ROUND(col, N), N) output. CAST(ROUND(x, p)
+     * AS VARCHAR) would drop trailing zeros (e.g. 1.5 instead of 1.5000) and break
+     * cross-database checksums for DOUBLE/FLOAT columns.
      */
     @Override
     protected String normalizeDecimal(String quotedCol) {
@@ -219,10 +221,10 @@ public class PrestoDataTypeHandler extends BaseDataTypeHandler {
         String defaultValue = "0." + "0".repeat(precision);
 
         if (rounding) {
-            // Round: apply ROUND then format
+            // Round: apply ROUND then format with fixed decimal places
             return "COALESCE(FORMAT('%." + precision + "f', ROUND(" + quotedCol + ", " + precision + ")), '" + defaultValue + "')";
         } else {
-            // Truncate: apply TRUNCATE then format
+            // Truncate: apply TRUNCATE then format with fixed decimal places
             return "COALESCE(FORMAT('%." + precision + "f', TRUNCATE(" + quotedCol + ", " + precision + ")), '" + defaultValue + "')";
         }
     }
@@ -231,6 +233,8 @@ public class PrestoDataTypeHandler extends BaseDataTypeHandler {
      * Presto-specific float normalization with configurable decimal places.
      * CRITICAL: FLOAT/REAL is single-precision and may have precision issues.
      * Cast to DOUBLE first to ensure consistent formatting.
+     * Uses format() with a fixed number of decimal places so trailing zeros are
+     * preserved, matching MySQL's FORMAT output.
      */
     @Override
     protected String normalizeFloat(String quotedCol) {
@@ -248,10 +252,10 @@ public class PrestoDataTypeHandler extends BaseDataTypeHandler {
         String defaultValue = "0." + "0".repeat(precision);
 
         if (rounding) {
-            // Round: apply ROUND then format
+            // Round: apply ROUND then format with fixed decimal places
             return "COALESCE(FORMAT('%." + precision + "f', ROUND(CAST(" + quotedCol + " AS DOUBLE), " + precision + ")), '" + defaultValue + "')";
         } else {
-            // Truncate: apply TRUNCATE then format
+            // Truncate: apply TRUNCATE then format with fixed decimal places
             return "COALESCE(FORMAT('%." + precision + "f', TRUNCATE(CAST(" + quotedCol + " AS DOUBLE), " + precision + ")), '" + defaultValue + "')";
         }
     }

@@ -55,7 +55,7 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
             if (keyColumns.size() == 1) {
                 String col = keyColumns.get(0);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType)).append(" as pk_key, ");
+                sql.append(formatForChecksum(col, dataType)).append(" as pk_key, ");
             } else {
                 sql.append("CONCAT(");
                 for (int i = 0; i < keyColumns.size(); i++) {
@@ -63,7 +63,7 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
                         sql.append(", '|', ");
                     String col = keyColumns.get(i);
                     DataType dataType = columnDataTypes.get(col);
-                    sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                    sql.append(formatForChecksum(col, dataType));
                 }
                 sql.append(") as pk_key, ");
             }
@@ -75,7 +75,7 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
                     sql.append(", '|', ");
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(formatForChecksum(col, dataType));
             }
             sql.append("))))) as row_checksum");
         }
@@ -118,7 +118,7 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
             }
             String col = columns.get(i);
             DataType dataType = columnDataTypes.get(col);
-            sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+            sql.append(formatForChecksum(col, dataType));
         }
 
         sql.append("))))) AS row_hash");
@@ -176,6 +176,39 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
         }
 
         return sql.toString();
+    }
+
+    /**
+     * Format a column for checksum calculation, applying type-specific formatting
+     * for temporal types (Date, DateTime, Timestamp).
+     *
+     * <p>normalizeDate/normalizeDateTime etc. now return the raw column to avoid
+     * type mismatches in WHERE clauses. This method re-applies the proper formatting
+     * when the column is used inside the checksum concat().
+     */
+    private String formatForChecksum(String quotedCol, DataType dataType) {
+        if (dataType == null) {
+            return dataTypeHandler.normalizeColumn(quotedCol, null);
+        }
+        String typeName = dataType.name().toLowerCase();
+        if (dataTypeHandler instanceof TrinoDataTypeHandler) {
+            TrinoDataTypeHandler trinoHandler = (TrinoDataTypeHandler) dataTypeHandler;
+            if (typeName.contains("date") && !typeName.contains("time")) {
+                return trinoHandler.formatDateForChecksum(quotedCol);
+            }
+            if (typeName.contains("time") || typeName.contains("datetime") || typeName.contains("timestamp")) {
+                return trinoHandler.formatDateTimeForChecksum(quotedCol, typeName);
+            }
+        }
+        return dataTypeHandler.normalizeColumn(quotedCol, dataType);
+    }
+
+    /**
+     * Trino does not have CONCAT_WS. Use ARRAY_JOIN(ARRAY[...], sep) instead.
+     */
+    @Override
+    protected String stringJoin(String separator, List<String> args) {
+        return "ARRAY_JOIN(ARRAY[" + String.join(", ", args) + "], " + separator + ")";
     }
 
     private String buildJoinCondition(String table1, String table2, List<String> joinColumns) {

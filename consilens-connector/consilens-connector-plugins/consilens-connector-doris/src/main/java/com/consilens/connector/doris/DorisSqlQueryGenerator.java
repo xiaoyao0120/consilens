@@ -61,9 +61,11 @@ public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
         if (columns.isEmpty()) {
             sql.append("'' as checksum ");
         } else {
-            // Two-step approach matching MySQL: per-row MD5 + aggregate MD5
-            sql.append("COALESCE(MD5(GROUP_CONCAT(row_checksum ORDER BY pk_key SEPARATOR '|')), '') as checksum ");
+            // Doris GROUP_CONCAT syntax: GROUP_CONCAT(expr, separator) with comma
+            // ORDER BY must be in a subquery since Doris doesn't support ORDER BY inside GROUP_CONCAT
+            sql.append("COALESCE(MD5(GROUP_CONCAT(row_checksum, '|')), '') as checksum ");
             sql.append("FROM (");
+            sql.append("SELECT row_checksum FROM (");
             sql.append("SELECT ");
 
             // Build primary key for stable ordering
@@ -78,7 +80,7 @@ public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
             }
             sql.append(") as pk_key, ");
 
-            // Build per-row checksum using MD5
+            // Build per-row checksum using MD5 (already STRING type)
             sql.append("MD5(CONCAT_WS('|', ");
             for (int i = 0; i < columns.size(); i++) {
                 if (i > 0) {
@@ -97,7 +99,9 @@ public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
                 sql.append(" WHERE ").append(whereClause);
             }
 
-            sql.append(") AS data");
+            // Order by pk_key to ensure deterministic checksum
+            sql.append(" ORDER BY pk_key");
+            sql.append(") AS ordered_data) AS data");
         }
 
         return sql.toString();

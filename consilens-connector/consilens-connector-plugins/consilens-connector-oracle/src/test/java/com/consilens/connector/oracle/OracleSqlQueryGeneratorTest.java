@@ -59,10 +59,39 @@ class OracleSqlQueryGeneratorTest {
         types.put("created_at", DataType.DATETIME);
 
         String sql = generator.getChecksumSQL("SYSTEM", "users", columns, Arrays.asList("id"), types, null);
-        // Uses STANDARD_HASH instead of DBMS_CRYPTO because STANDARD_HASH is available
-        // by default in Oracle 12c+ without requiring DBA privileges
+        // Row-level checksums use STANDARD_HASH; the final aggregation uses
+        // DBMS_CRYPTO.HASH over a pure-text EXTRACT(//text()) result so XML tags
+        // never enter the hash input. The trailing '|' is trimmed and empty input is
+        // coalesced to '' so the hash text matches MySQL's GROUP_CONCAT(..., SEPARATOR
+        // '|') byte for byte (including the empty-table '' result).
         assertTrue(sql.contains("STANDARD_HASH"));
-        assertTrue(sql.contains("LISTAGG"));
+        assertTrue(sql.contains("DBMS_CRYPTO.HASH"));
+        assertTrue(sql.contains("EXTRACT(XMLAGG(XMLELEMENT(E, row_checksum || '|') ORDER BY pk_key), '//text()')"));
+        assertTrue(sql.contains("COALESCE(RTRIM("));
+        assertTrue(sql.contains("GETCLOBVAL(), '|'), '')"));
+        assertFalse(sql.contains("LISTAGG"));
+    }
+
+    @Test
+    void testGetJoinDiffDetailSQLKeepsChangedColumnsWhenOnlySomeDiffer() {
+        List<String> keyColumns = Arrays.asList("id");
+        List<String> compareColumns = Arrays.asList("name", "amount", "status");
+
+        String sql = generator.getJoinDiffDetailSQL("SYSTEM", "users", "t1",
+                keyColumns, compareColumns, compareColumns, null,
+                "SYSTEM", "users", "t2",
+                keyColumns, compareColumns, compareColumns, null);
+
+        // Oracle || treats NULL like '' while MySQL CONCAT_WS skips NULL elements, so
+        // each changed column carries a leading ', ' separator and LTRIM strips the
+        // first one. Unchanged columns therefore cannot null out or corrupt the whole
+        // expression, matching MySQL output such as '["amount", "status"]'.
+        assertTrue(sql.contains("'[' || ', ' || COALESCE(LTRIM("));
+        assertTrue(sql.contains("THEN ', \"name\"'"));
+        assertTrue(sql.contains("THEN ', \"amount\"'"));
+        assertTrue(sql.contains("THEN ', \"status\"'"));
+        assertFalse(sql.contains("ELSE NULL"));
+        assertFalse(sql.contains("CONCAT_WS"));
     }
 
     @Test

@@ -250,12 +250,17 @@ public class ClickHouseDataTypeHandler extends BaseDataTypeHandler {
     }
 
     /**
-     * ClickHouse-specific integer normalization: CAST to String.
-     * Use trim to ensure no leading/trailing spaces for cross-database consistency.
+     * ClickHouse-specific integer normalization.
+     * NOTE: ClickHouse is strict about type compatibility in WHERE clauses.
+     * When a SELECT alias matches a column name, ClickHouse may resolve WHERE
+     * references to the SELECT expression. If we CAST integers to String here,
+     * range comparisons like {@code order_id >= 1} fail with NO_COMMON_TYPE.
+     * To avoid this, return the original column and let the query generator
+     * apply toString() explicitly inside concat() for checksum calculation.
      */
     @Override
     protected String normalizeInteger(String quotedCol) {
-        return "COALESCE(trim(CAST(" + quotedCol + " AS String)), '0')";
+        return quotedCol;
     }
 
     /**
@@ -336,63 +341,77 @@ public class ClickHouseDataTypeHandler extends BaseDataTypeHandler {
     }
 
     /**
-     * ClickHouse-specific date normalization: YYYY-MM-DD format.
+     * ClickHouse-specific date normalization.
+     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
+     * Formatting is applied in the query generator's checksum SQL.
      */
     @Override
     protected String normalizeDate(String quotedCol) {
-        return "COALESCE(formatDateTime(" + quotedCol + ", '" + resolveClickHouseTemporalFormat("date",
-                "%Y-%m-%d", "%Y-%m-%d") + "'), '')";
+        return quotedCol;
     }
 
     /**
-     * ClickHouse-specific time normalization: HH:MM:SS format.
+     * ClickHouse-specific time normalization.
+     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
      */
     @Override
     protected String normalizeTime(String quotedCol) {
-        return "COALESCE(formatDateTime(" + quotedCol + ", '" + resolveClickHouseTemporalFormat("time",
-                "%H:%M:%S", "%H:%M:%S") + "'), '')";
+        return quotedCol;
     }
 
     @Override
     protected String normalizeTimeWithTimezone(String quotedCol) {
-        return "COALESCE(formatDateTime(" + quotedCol + ", '" + resolveClickHouseTemporalFormat("time_with_timezone",
-                "%H:%M:%S", "%H:%M:%S") + "'), '')";
+        return quotedCol;
     }
 
     /**
-     * ClickHouse-specific datetime normalization: YYYY-MM-DD HH:MM:SS format.
-     * For DATETIME type (no timezone information):
-     * - No timezone conversion needed, just format directly
+     * ClickHouse-specific datetime normalization.
+     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
+     * Formatting is applied in the query generator's checksum SQL.
      */
     @Override
     protected String normalizeDateTime(String quotedCol) {
-        return "COALESCE(formatDateTime(" + quotedCol + ", '" + resolveClickHouseTemporalFormat("datetime",
-                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d") + "'), '')";
+        return quotedCol;
     }
 
     /**
-     * ClickHouse-specific timestamp normalization: YYYY-MM-DD HH:MM:SS format.
-     * CRITICAL: Convert to UTC timezone to ensure cross-database consistency.
-     * 
-     * For TIMESTAMP type (ClickHouse DateTime):
-     * - Convert to UTC timezone before formatting
-     * - This matches MySQL and PostgreSQL behavior
+     * ClickHouse-specific timestamp normalization.
+     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
+     * Formatting is applied in the query generator's checksum SQL.
      */
     @Override
     protected String normalizeTimestamp(String quotedCol) {
-        return "COALESCE(formatDateTime(toTimeZone(" + quotedCol + ", '"
-                + resolveClickHouseTimezone("timestamp", "UTC") + "'), '" + resolveClickHouseTemporalFormat("timestamp",
-                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d") + "'), '')";
+        return quotedCol;
     }
 
     /**
-     * ClickHouse-specific timestamp with timezone normalization: YYYY-MM-DD HH:MM:SS format.
-     * CRITICAL: Convert to UTC timezone to ensure cross-database consistency.
+     * ClickHouse-specific timestamp with timezone normalization.
+     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
      */
     @Override
     protected String normalizeTimestampWithTimezone(String quotedCol) {
-        return "COALESCE(formatDateTime(toTimeZone(" + quotedCol + ", '"
-                + resolveClickHouseTimezone("timestamp_with_timezone", "UTC") + "'), '" + resolveClickHouseTemporalFormat("timestamp_with_timezone",
+        return quotedCol;
+    }
+
+    /**
+     * Returns the formatted SQL expression for date columns in checksum calculation.
+     * Called by ClickHouseSqlQueryGenerator to format Date columns for concat().
+     */
+    public String formatDateForChecksum(String quotedCol) {
+        return "COALESCE(toString(" + quotedCol + "), '')";
+    }
+
+    /**
+     * Returns the formatted SQL expression for datetime/timestamp columns in checksum calculation.
+     * Applies timezone conversion and formatting.
+     */
+    public String formatDateTimeForChecksum(String quotedCol, String dataType) {
+        if ("timestamp".equals(dataType) || "timestamp_with_timezone".equals(dataType)) {
+            return "COALESCE(formatDateTime(toTimeZone(" + quotedCol + ", '"
+                    + resolveClickHouseTimezone(dataType, "UTC") + "'), '" + resolveClickHouseTemporalFormat(dataType,
+                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d") + "'), '')";
+        }
+        return "COALESCE(formatDateTime(" + quotedCol + ", '" + resolveClickHouseTemporalFormat(dataType,
                 "%Y-%m-%d %H:%M:%S", "%Y-%m-%d") + "'), '')";
     }
 

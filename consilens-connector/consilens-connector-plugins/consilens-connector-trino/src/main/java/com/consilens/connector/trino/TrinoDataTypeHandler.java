@@ -254,65 +254,77 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
     }
 
     /**
-     * Trino-specific date normalization: YYYY-MM-DD format.
+     * Trino-specific date normalization.
+     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
+     * Formatting is applied in the query generator's checksum SQL.
      */
     @Override
     protected String normalizeDate(String quotedCol) {
-        return "COALESCE(FORMAT_DATETIME(" + quotedCol + ", '" + resolveTrinoTemporalFormat("date",
-                "yyyy-MM-dd", "yyyy-MM-dd") + "'), '')";
+        return quotedCol;
     }
 
     /**
-     * Trino-specific time normalization: HH:MM:SS format.
+     * Trino-specific time normalization.
+     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
      */
     @Override
     protected String normalizeTime(String quotedCol) {
-        return "COALESCE(FORMAT_DATETIME(CAST(CONCAT('1970-01-01 ', CAST(" + quotedCol
-                + " AS VARCHAR)) AS TIMESTAMP), '" + resolveTrinoTemporalFormat("time",
-                "HH:mm:ss", "HH:mm:ss") + "'), '')";
+        return quotedCol;
     }
 
     @Override
     protected String normalizeTimeWithTimezone(String quotedCol) {
-        return "COALESCE(FORMAT_DATETIME(CAST(CONCAT('1970-01-01 ', CAST(" + quotedCol
-                + " AS VARCHAR)) AS TIMESTAMP), '" + resolveTrinoTemporalFormat("time_with_timezone",
-                "HH:mm:ss", "HH:mm:ss") + "'), '')";
+        return quotedCol;
     }
 
     /**
-     * Trino-specific datetime normalization: YYYY-MM-DD HH:MM:SS format.
-     * For TIMESTAMP type (no timezone information):
-     * - No timezone conversion needed, just format directly
+     * Trino-specific datetime normalization.
+     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
+     * Formatting is applied in the query generator's checksum SQL.
      */
     @Override
     protected String normalizeDateTime(String quotedCol) {
-        return "COALESCE(FORMAT_DATETIME(" + quotedCol + ", '" + resolveTrinoTemporalFormat("datetime",
-                "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd") + "'), '')";
+        return quotedCol;
     }
 
     /**
-     * Trino-specific timestamp normalization: YYYY-MM-DD HH:MM:SS format.
-     * CRITICAL: Convert to UTC timezone to ensure cross-database consistency.
-     * 
-     * For TIMESTAMP type:
-     * - Convert to UTC timezone before formatting
-     * - This matches MySQL and PostgreSQL behavior
+     * Trino-specific timestamp normalization.
+     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
+     * Formatting is applied in the query generator's checksum SQL.
      */
     @Override
     protected String normalizeTimestamp(String quotedCol) {
-        return "COALESCE(FORMAT_DATETIME(AT_TIMEZONE(" + quotedCol + ", '"
-                + resolveTrinoTimezone("timestamp", "UTC") + "'), '" + resolveTrinoTemporalFormat("timestamp",
-                "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd") + "'), '')";
+        return quotedCol;
     }
 
     /**
-     * Trino-specific timestamp with timezone normalization: YYYY-MM-DD HH:MM:SS format.
-     * CRITICAL: Convert to UTC timezone to ensure cross-database consistency.
+     * Trino-specific timestamp with timezone normalization.
+     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
      */
     @Override
     protected String normalizeTimestampWithTimezone(String quotedCol) {
-        return "COALESCE(FORMAT_DATETIME(AT_TIMEZONE(" + quotedCol + ", '"
-                + resolveTrinoTimezone("timestamp_with_timezone", "UTC") + "'), '" + resolveTrinoTemporalFormat("timestamp_with_timezone",
+        return quotedCol;
+    }
+
+    /**
+     * Returns the formatted SQL expression for date columns in checksum calculation.
+     * Called by TrinoSqlQueryGenerator to format Date columns for CONCAT().
+     */
+    public String formatDateForChecksum(String quotedCol) {
+        return "COALESCE(TRIM(CAST(" + quotedCol + " AS VARCHAR)), '')";
+    }
+
+    /**
+     * Returns the formatted SQL expression for datetime/timestamp columns in checksum calculation.
+     * Applies timezone conversion and formatting.
+     */
+    public String formatDateTimeForChecksum(String quotedCol, String dataType) {
+        if ("timestamp".equals(dataType) || "timestamp_with_timezone".equals(dataType)) {
+            return "COALESCE(FORMAT_DATETIME(AT_TIMEZONE(" + quotedCol + ", '"
+                    + resolveTrinoTimezone(dataType, "UTC") + "'), '" + resolveTrinoTemporalFormat(dataType,
+                    "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd") + "'), '')";
+        }
+        return "COALESCE(FORMAT_DATETIME(" + quotedCol + ", '" + resolveTrinoTemporalFormat(dataType,
                 "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd") + "'), '')";
     }
 

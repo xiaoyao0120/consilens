@@ -67,11 +67,11 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
             sql.append("SELECT ");
 
             // Build primary key for stable ordering using concat (ClickHouse has no CONCAT_WS)
-            // Note: ClickHouse concat() requires at least 2 arguments, so handle single column case
+            // Note: ClickHouse concat() requires String arguments, so wrap with toString()
             if (keyColumns.size() == 1) {
                 String col = keyColumns.get(0);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType)).append(" as pk_key, ");
+                sql.append("COALESCE(toString(").append(formatForChecksum(col, dataType)).append("), '0') as pk_key, ");
             } else {
                 sql.append("concat(");
                 for (int i = 0; i < keyColumns.size(); i++) {
@@ -80,12 +80,13 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
                     }
                     String col = keyColumns.get(i);
                     DataType dataType = columnDataTypes.get(col);
-                    sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                    sql.append("COALESCE(toString(").append(formatForChecksum(col, dataType)).append("), '0')");
                 }
                 sql.append(") as pk_key, ");
             }
 
             // Build per-row checksum using MD5 (lower(hex()) to match MySQL's lowercase hex output)
+            // Wrap with toString() because ClickHouse concat() requires String arguments
             sql.append("lower(hex(MD5(concat(");
             for (int i = 0; i < columns.size(); i++) {
                 if (i > 0) {
@@ -93,7 +94,7 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
                 }
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append("COALESCE(toString(").append(formatForChecksum(col, dataType)).append("), '0')");
             }
             sql.append(")))) as row_checksum ");
 
@@ -130,14 +131,17 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
         }
 
         // lower(hex(MD5(...))) to match MySQL's MD5 lowercase hex output
-        sql.append(", lower(hex(MD5(CONCAT_WS('|'");
-
-        for (String col : columns) {
-            sql.append(", ");
+        // Use concat() with toString() because ClickHouse CONCAT_WS doesn't exist
+        // and concat() requires String arguments
+        sql.append(", lower(hex(MD5(concat(");
+        for (int i = 0; i < columns.size(); i++) {
+            if (i > 0) {
+                sql.append(", '|', ");
+            }
+            String col = columns.get(i);
             DataType dataType = columnDataTypes.get(col);
-            sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+            sql.append("COALESCE(toString(").append(formatForChecksum(col, dataType)).append("), '0')");
         }
-
         sql.append(")))) AS row_hash");
 
         sql.append(" FROM ");
@@ -217,5 +221,30 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
                     .append(capabilityProvider.quote(joinColumns.get(i)));
         }
         return condition.toString();
+    }
+
+    /**
+     * Format a column for checksum calculation, applying type-specific formatting
+     * for temporal types (Date, DateTime, Timestamp).
+     *
+     * <p>normalizeDate/normalizeDateTime etc. now return the raw column to avoid
+     * type mismatches in WHERE clauses. This method re-applies the proper formatting
+     * when the column is used inside the checksum concat().
+     */
+    private String formatForChecksum(String quotedCol, DataType dataType) {
+        if (dataType == null) {
+            return dataTypeHandler.normalizeColumn(quotedCol, null);
+        }
+        String typeName = dataType.name().toLowerCase();
+        if (dataTypeHandler instanceof ClickHouseDataTypeHandler) {
+            ClickHouseDataTypeHandler chHandler = (ClickHouseDataTypeHandler) dataTypeHandler;
+            if (typeName.contains("date") && !typeName.contains("time")) {
+                return chHandler.formatDateForChecksum(quotedCol);
+            }
+            if (typeName.contains("time") || typeName.contains("datetime") || typeName.contains("timestamp")) {
+                return chHandler.formatDateTimeForChecksum(quotedCol, typeName);
+            }
+        }
+        return dataTypeHandler.normalizeColumn(quotedCol, dataType);
     }
 }

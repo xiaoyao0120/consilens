@@ -56,8 +56,10 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
             sql.append("'' as checksum ");
         } else {
             // Two-step approach matching MySQL: per-row MD5 + aggregate MD5
+            // Note: STRING_AGG returns VARCHAR(8000) by default which overflows for large tables.
+            // Cast row_checksum to VARCHAR(MAX) so the aggregate result is also VARCHAR(MAX).
             sql.append("COALESCE(CONVERT(VARCHAR(MAX), HASHBYTES('MD5', ");
-            sql.append("(SELECT STRING_AGG(row_checksum, '|') WITHIN GROUP (ORDER BY pk_key) FROM (SELECT ");
+            sql.append("(SELECT STRING_AGG(CAST(row_checksum AS VARCHAR(MAX)), '|') WITHIN GROUP (ORDER BY pk_key) FROM (SELECT ");
 
             // Build primary key for stable ordering
             // SQL Server CONCAT_WS requires 3+ args (sep + 2+ exprs), so handle single key specially

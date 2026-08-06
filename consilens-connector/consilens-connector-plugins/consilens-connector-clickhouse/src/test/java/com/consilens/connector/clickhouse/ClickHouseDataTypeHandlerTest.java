@@ -24,13 +24,25 @@ class ClickHouseDataTypeHandlerTest {
     @Test
     void testNormalizeColumn_Int() {
         String result = handler.normalizeColumn("amount", DataType.INTEGER);
-        assertEquals("COALESCE(trim(CAST(`amount` AS String)), '0')", result);
+        // Integer columns are returned as-is for WHERE compatibility; the query
+        // generator applies COALESCE(toString(...), '0') inside checksum concat().
+        assertEquals("`amount`", result);
     }
 
     @Test
     void testNormalizeColumn_Timestamp() {
         String result = handler.normalizeColumn("created_at", DataType.TIMESTAMP);
-        assertEquals("COALESCE(formatDateTime(toTimeZone(`created_at`, 'UTC'), '%Y-%m-%d %H:%M:%S'), '')", result);
+        // Timestamp columns are returned as-is for WHERE compatibility; the query
+        // generator applies formatting via formatDateTimeForChecksum.
+        assertEquals("`created_at`", result);
+    }
+
+    @Test
+    void testNormalizeColumn_DecimalKeepsTrailingZeros() {
+        String result = handler.normalizeColumn("amount", DataType.DECIMAL);
+        assertTrue(result.contains("toString(trunc("));
+        assertTrue(result.contains("lpad("));
+        assertTrue(result.contains("'0.0000'"));
     }
 
     @Test

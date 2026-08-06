@@ -610,6 +610,10 @@ public class TableSegment {
 
     /**
      * Format a value for SQL.
+     * Uses ANSI standard DATE/TIMESTAMP literals for temporal types to ensure
+     * cross-database compatibility (especially for Presto/Trino strict type checking),
+     * except for SQL Server which does not support ANSI date literals and requires
+     * plain quoted strings that it can implicitly convert.
      */
     private String formatValue(Object value) {
         if (value == null) {
@@ -618,10 +622,19 @@ public class TableSegment {
             return value.toString();
         } else if (value instanceof Boolean) {
             return (Boolean) value ? "TRUE" : "FALSE";
+        } else if (value instanceof java.time.LocalDate) {
+            return formatTemporalLiteral(value.toString());
+        } else if (value instanceof java.time.LocalDateTime) {
+            return formatTemporalLiteral(value.toString());
         } else if (value instanceof java.time.temporal.TemporalAccessor) {
-            return "'" + value.toString() + "'";
+            // Other temporal types (e.g., Instant, ZonedDateTime) - format as DATE if possible
+            return formatTemporalLiteral(value.toString());
+        } else if (value instanceof java.sql.Date) {
+            return formatTemporalLiteral(value.toString());
+        } else if (value instanceof java.sql.Timestamp) {
+            return formatTemporalLiteral(value.toString());
         } else if (value instanceof java.util.Date) {
-            return "'" + new java.sql.Timestamp(((java.util.Date) value).getTime()) + "'";
+            return formatTemporalLiteral(new java.sql.Timestamp(((java.util.Date) value).getTime()).toString());
         } else if (value instanceof String) {
             // Check if the string can be parsed as a number (for cross-database compatibility)
             // Some JDBC drivers (Trino, Presto) return numeric columns as strings
@@ -636,12 +649,41 @@ public class TableSegment {
                     return strVal; // Return without quotes
                 }
             } catch (NumberFormatException e) {
-                // Not a number, treat as string
+                // Not a number - check if it looks like a date/timestamp
+                // Presto/Trino JDBC drivers may return DATE columns as strings like "2026-05-01"
+                if (strVal.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                    return formatTemporalLiteral(strVal);
+                } else if (strVal.matches("\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}.*")) {
+                    return formatTemporalLiteral(strVal);
+                }
+                // Regular string
                 return "'" + escapeSQL(strVal) + "'";
             }
         } else {
             throw new IllegalArgumentException("Unsupported key value type: " + value.getClass().getName());
         }
+    }
+
+    /**
+     * Format a temporal value as a SQL literal. SQL Server does not understand
+     * ANSI DATE/TIMESTAMP literals, so use a plain quoted string there; other
+     * dialects (Presto, Trino, Oracle, PostgreSQL) keep the ANSI literal form.
+     */
+    private String formatTemporalLiteral(String value) {
+        if (database != null && isSqlServerConnector(database.getConnectorType())) {
+            return "'" + escapeSQL(value) + "'";
+        }
+        if (value.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            return "DATE '" + value + "'";
+        }
+        // Presto/Trino TIMESTAMP literals require a space separator, while
+        // LocalDateTime.toString() uses 'T'; normalize to the ANSI form.
+        return "TIMESTAMP '" + value.replace('T', ' ') + "'";
+    }
+
+    private boolean isSqlServerConnector(String connectorType) {
+        return "sqlserver".equalsIgnoreCase(connectorType)
+                || "mssql".equalsIgnoreCase(connectorType);
     }
 
     private String escapeSQL(String value) {
