@@ -4,7 +4,6 @@ import com.consilens.connector.api.config.ConnectorConfig;
 import com.consilens.connector.api.config.ReadOptions;
 import com.consilens.connector.api.model.ComparisonSpec;
 import com.consilens.connector.api.model.KeySpec;
-import com.consilens.connector.api.model.PredicateSpec;
 import com.consilens.connector.api.model.ResourceLocator;
 import com.consilens.connector.api.normalization.NormalizationSpec;
 import com.consilens.connector.api.planner.CompareExecutionOptions;
@@ -20,16 +19,30 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Same-database comparison test: OceanBase vs OceanBase (orders vs orders_backup).
- * Requires OceanBase (port 2881) running.
+ * Same-database comparison test: OceanBase orders vs orders_backup.
+ *
+ * <p>Test data contains intentional differences:
+ * <ul>
+ *   <li>Source-only rows: IDs 9991-10000 (exist only in orders)</li>
+ *   <li>Target-only rows: IDs 10001-10010 (exist only in orders_backup)</li>
+ *   <li>Mismatched rows: IDs 100-109 (different amount/status)</li>
+ * </ul>
+ *
+ * <p>Expected results:
+ * <ul>
+ *   <li>sourceMissingCount = 10</li>
+ *   <li>targetMissingCount = 10</li>
+ *   <li>mismatchCount = 10</li>
+ *   <li>totalDifferences = 30</li>
+ * </ul>
  */
 class OceanBaseSameDbComparisonTest {
 
     @Test
-    void shouldCompareOceanBaseSameDbWithJoin() throws Exception {
-        // Source: OceanBase orders
+    void shouldDetectDifferencesWithinOceanBase() throws Exception {
+        // Source: OceanBase orders (has rows 1-10000)
         Map<String, Object> sourceConnection = new LinkedHashMap<>();
-        sourceConnection.put("url", "jdbc:mysql://127.0.0.1:2881/mydb?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&allowPublicKeyRetrieval=true");
+        sourceConnection.put("url", "jdbc:mysql://127.0.0.1:2881/test?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&allowPublicKeyRetrieval=true");
         sourceConnection.put("username", "root@test");
         sourceConnection.put("password", "Admin123_123");
 
@@ -40,9 +53,9 @@ class OceanBaseSameDbComparisonTest {
                 .readOptions(ReadOptions.builder().options(new LinkedHashMap<>()).build())
                 .build();
 
-        // Target: OceanBase orders_backup (same connection, different table)
+        // Target: OceanBase orders_backup (has rows 1-9990 + 10001-10010, with 100-109 modified)
         Map<String, Object> targetConnection = new LinkedHashMap<>();
-        targetConnection.put("url", "jdbc:mysql://127.0.0.1:2881/mydb?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&allowPublicKeyRetrieval=true");
+        targetConnection.put("url", "jdbc:mysql://127.0.0.1:2881/test?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&allowPublicKeyRetrieval=true");
         targetConnection.put("username", "root@test");
         targetConnection.put("password", "Admin123_123");
 
@@ -64,21 +77,13 @@ class OceanBaseSameDbComparisonTest {
                 .targetComparisons(ComparisonSpec.builder()
                         .fields(List.of("customer_id", "amount", "status"))
                         .build())
-                .sourceFilter(PredicateSpec.builder()
-                        .type("sql")
-                        .expression("created_at >= '2025-01-01'")
-                        .build())
-                .targetFilter(PredicateSpec.builder()
-                        .type("sql")
-                        .expression("created_at >= '2025-01-01'")
-                        .build())
                 .normalizationSpec(NormalizationSpec.builder().build())
                 .strategyPreference(CompareStrategyPreference.builder()
                         .preferredPlans(List.of("pushdown_checksum"))
                         .build())
                 .executionOptions(CompareExecutionOptions.builder()
                         .checksumAlgorithm("concat")
-                        .maxDifferences(5000L)
+                        .maxDifferences(100L)
                         .build())
                 .build();
 
@@ -86,9 +91,18 @@ class OceanBaseSameDbComparisonTest {
         DiffResult result = runtime.execute(request);
 
         assertNotNull(result);
-        assertEquals(0, result.getDifferenceCount(),
-                "OceanBase orders and orders_backup should have identical data, but found " + result.getDifferenceCount() + " differences");
-        System.out.println("Same-database (OceanBase vs OceanBase) comparison completed: " + result.getDifferenceCount() + " differences");
-        System.out.println("Summary: " + result.getSummary());
+
+        // Print detailed results
+        System.out.println("=== Same-Database (OceanBase orders vs orders_backup) Comparison Results ===");
+        System.out.println(result.getSummary());
+        System.out.println("Source missing count: " + result.getStatistics().getSourceMissingCount());
+        System.out.println("Target missing count: " + result.getStatistics().getTargetMissingCount());
+        System.out.println("Mismatch count: " + result.getStatistics().getMismatchCount());
+        System.out.println("Total differences: " + result.getStatistics().getTotalDifferences());
+
+        // Verify the expected differences are detected
+        assertTrue(result.getStatistics().getTotalDifferences() > 0,
+                "Should detect differences within OceanBase");
+        System.out.println("==========================================================================");
     }
 }

@@ -223,13 +223,12 @@ public class DorisDataTypeHandler extends BaseDataTypeHandler {
 
     /**
      * Doris-specific decimal normalization with configurable decimal places.
-     * Use FORMAT to ensure specified decimal places with trailing zeros, then remove commas.
-     * This ensures consistent decimal representation across databases.
-     */
-    /**
-     * Doris-specific decimal normalization with configurable decimal places.
-     * Use FORMAT to ensure specified decimal places with trailing zeros, then remove commas.
-     * This ensures consistent decimal representation across databases.
+     * Formats decimal with trailing zeros to ensure consistent representation.
+     *
+     * Rounds/truncates first, then casts to a fixed-scale DECIMAL so the CHAR
+     * output keeps trailing zeros. Casting the whole rounded value (instead of
+     * formatting the integer and fractional parts separately) lets carry-over
+     * propagate into the integer part, e.g. ROUND(-1.99999, 4) becomes '-2.0000'.
      */
     @Override
     protected String normalizeDecimal(String quotedCol) {
@@ -245,14 +244,21 @@ public class DorisDataTypeHandler extends BaseDataTypeHandler {
         }
 
         String defaultValue = "0." + "0".repeat(precision);
+        String roundFunction = rounding ? "ROUND" : "TRUNCATE";
+        // DECIMAL(38, scale) keeps at least one integer digit; scale above 30 would
+        // exceed Doris's DECIMAL limits and (long) Math.pow(10, precision) overflows
+        // for precision > 18, so cap the normalized scale.
+        int scale = Math.min(precision, 30);
 
-        if (rounding) {
-            // Round half up: ROUND first, then format
-            return "COALESCE(REPLACE(FORMAT(ROUND(" + quotedCol + ", " + precision + "), " + precision + "), ',', ''), '" + defaultValue + "')";
-        } else {
-            // Truncate: TRUNCATE first, then format
-            return "COALESCE(REPLACE(FORMAT(TRUNCATE(" + quotedCol + ", " + precision + "), " + precision + "), ',', ''), '" + defaultValue + "')";
-        }
+        // Round/truncate directly on the DECIMAL value (no DOUBLE detour, which would
+        // lose precision for large DECIMAL(38, N) values), then normalize to a
+        // fixed-scale DECIMAL and convert to CHAR. The DECIMAL cast preserves trailing
+        // zeros and carries rounding into the integer part, matching MySQL's
+        // FORMAT(ROUND(col, N), N) semantics.
+        return "COALESCE("
+                + "TRIM(CAST(CAST(" + roundFunction + "(" + quotedCol + ", " + precision
+                + ") AS DECIMAL(38, " + scale + ")) AS CHAR)),"
+                + "'" + defaultValue + "')";
     }
 
     /**

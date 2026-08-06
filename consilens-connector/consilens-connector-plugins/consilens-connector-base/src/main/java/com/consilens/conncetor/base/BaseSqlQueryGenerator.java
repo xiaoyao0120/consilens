@@ -545,28 +545,41 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
                 + " OR (" + left + " IS NOT NULL AND " + right + " IS NULL))";
     }
 
+    /**
+     * Returns a join expression for concatenating strings with a separator.
+     * Default implementation uses MySQL-style CONCAT_WS.
+     * Subclasses for databases without CONCAT_WS (e.g., Presto, Trino) should override this.
+     *
+     * @param separator the separator string (e.g., ",")
+     * @param args      the string expressions to join
+     * @return SQL expression that joins the args with the separator
+     */
+    protected String stringJoin(String separator, List<String> args) {
+        return "CONCAT_WS(" + separator + ", " + String.join(", ", args) + ")";
+    }
+
     protected String buildDiffColumnsExpression(String alias1, String alias2,
             List<String> compareColumns1, List<String> compareColumns2) {
         if (compareColumns1 == null || compareColumns1.isEmpty()) {
             return "'[]'";
         }
-        StringBuilder sql = new StringBuilder();
-        sql.append("CONCAT('[', CONCAT_WS(',', ");
         int count = Math.min(compareColumns1.size(),
                 compareColumns2 != null ? compareColumns2.size() : compareColumns1.size());
+        List<String> caseExprs = new java.util.ArrayList<>();
         for (int i = 0; i < count; i++) {
-            if (i > 0) {
-                sql.append(", ");
-            }
             String col1 = compareColumns1.get(i);
             String col2 = compareColumns2 != null && compareColumns2.size() > i ? compareColumns2.get(i) : col1;
             String c1 = columnRef(alias1, col1);
             String c2 = columnRef(alias2, col2);
-            sql.append("CASE WHEN ").append(buildNullSafeNotEquals(c1, c2))
-                    .append(" THEN '\"").append(col1).append("\"' ELSE NULL END");
+            caseExprs.add("CASE WHEN " + buildNullSafeNotEquals(c1, c2)
+                    + " THEN '\"" + col1 + "\"' ELSE NULL END");
         }
-        sql.append("), ']')");
-        return sql.toString();
+        // Wrap with CONCAT('[', ..., ']') to produce a JSON-like array string
+        List<String> joinArgs = new java.util.ArrayList<>();
+        joinArgs.add("'['");
+        joinArgs.addAll(caseExprs);
+        joinArgs.add("']'");
+        return stringJoin("', '", joinArgs);
     }
 
     protected String buildDiffPredicate(String alias1, String alias2,

@@ -5,6 +5,9 @@ import com.consilens.connector.api.model.DataType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -41,6 +44,47 @@ class DorisDataTypeHandlerTest {
         assertTrue(result.contains("CASE"));
         assertTrue(result.contains("'1'"));
         assertTrue(result.contains("'0'"));
+    }
+
+    @Test
+    void testNormalizeDecimalCarriesRoundingIntoIntegerPart() {
+        String result = handler.normalizeColumn("amount", DataType.DECIMAL);
+        // The whole rounded value is cast to a fixed-scale DECIMAL, so rounding
+        // carry (e.g. -1.99999 with precision 4 becomes -2.0000, not -1.10000)
+        // propagates into the integer part. ROUND must apply directly to the DECIMAL
+        // column: a DOUBLE detour would lose precision for large DECIMAL(38, N) values
+        // and diverge from MySQL FORMAT(ROUND(col, N), N).
+        assertTrue(result.contains("ROUND(`amount`, 4)"));
+        assertTrue(result.contains("AS DECIMAL(38, 4)"));
+        assertTrue(result.contains("'0.0000'"));
+        assertFalse(result.contains("Math.pow"));
+        assertFalse(result.contains("FLOOR(ABS"));
+        assertFalse(result.contains("AS DOUBLE"));
+    }
+
+    @Test
+    void testNormalizeDecimalCapsPrecisionToDecimalLimit() {
+        Map<String, Object> config = new HashMap<>();
+        config.put("decimal", new DorisDecimalRule(38));
+        DorisDataTypeHandler configured = new DorisDataTypeHandler(capabilityProvider, config);
+
+        String result = configured.normalizeColumn("amount", DataType.DECIMAL);
+        // precision > 30 must be capped to keep DECIMAL(38, scale) valid instead of
+        // overflowing (long) Math.pow(10, precision).
+        assertTrue(result.contains("AS DECIMAL(38, 30)"));
+    }
+
+    /** Minimal normalization rule with a getPrecision() method for test configs. */
+    public static class DorisDecimalRule {
+        private final int precision;
+
+        public DorisDecimalRule(int precision) {
+            this.precision = precision;
+        }
+
+        public int getPrecision() {
+            return precision;
+        }
     }
 
     @Test

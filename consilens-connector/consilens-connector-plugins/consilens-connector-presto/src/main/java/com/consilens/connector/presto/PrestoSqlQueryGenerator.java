@@ -178,6 +178,14 @@ public class PrestoSqlQueryGenerator extends BaseSqlQueryGenerator {
         return sql.toString();
     }
 
+    /**
+     * Presto does not have CONCAT_WS. Use ARRAY_JOIN(ARRAY[...], sep) instead.
+     */
+    @Override
+    protected String stringJoin(String separator, List<String> args) {
+        return "ARRAY_JOIN(ARRAY[" + String.join(", ", args) + "], " + separator + ")";
+    }
+
     private String buildJoinCondition(String table1, String table2, List<String> joinColumns) {
         StringBuilder condition = new StringBuilder();
         for (int i = 0; i < joinColumns.size(); i++) {

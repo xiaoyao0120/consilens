@@ -60,9 +60,11 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
 
     /**
      * Generate checksum SQL using traditional CONCAT method (backward compatible).
-     * Uses STANDARD_HASH with MD5 to be consistent with MySQL and PostgreSQL checksum algorithms.
-     * STANDARD_HASH is available by default in Oracle 12c+ without requiring additional privileges.
-     * Wraps with RAWTOHEX to convert RAW result to hex string.
+     * Uses DBMS_CRYPTO.HASH with MD5 to be consistent with MySQL and PostgreSQL checksum algorithms.
+     * Uses XMLAGG + GETCLOBVAL to avoid LISTAGG 4000 byte limit.
+     * DBMS_CRYPTO.HASH accepts CLOB input, which is required for large datasets (10000+ rows).
+     * Note: DBMS_CRYPTO requires EXECUTE privilege. Grant it to the comparison user
+     * once per schema: GRANT EXECUTE ON sys.dbms_crypto TO &lt;user&gt;;
      */
     private String getChecksumSQLWithConcat(String schemaName, String tableName,
             List<String> keyColumns,
@@ -75,11 +77,15 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
         if (columns.isEmpty()) {
             sql.append("'' as checksum ");
         } else {
-            // Use STANDARD_HASH with MD5 to be consistent with MySQL/PostgreSQL (both use MD5).
-            // STANDARD_HASH is available by default in Oracle 12c+ without requiring DBA privileges.
-            // RAWTOHEX converts RAW hash result to hex string, LOWER ensures lowercase for consistency
-            // with MySQL's MD5() which returns lowercase hex.
-            sql.append("LOWER(RAWTOHEX(STANDARD_HASH(LISTAGG(row_checksum, '|') WITHIN GROUP (ORDER BY pk_key), 'MD5'))) as checksum ");
+            // Use XMLAGG + EXTRACT(//text()) + GETCLOBVAL to aggregate row checksums into a
+            // pure-text CLOB, then RTRIM the trailing '|' so the hash input matches MySQL's
+            // GROUP_CONCAT(row_checksum ORDER BY pk_key SEPARATOR '|') byte for byte.
+            // XMLELEMENT itself would inject <E>...</E> XML tags into the hash input and break
+            // cross-database checksum consistency, so the tags are stripped before hashing.
+            // XMLAGG still avoids the LISTAGG 4000 byte limit for large datasets, and
+            // DBMS_CRYPTO.HASH (constant 2 = HASH_MD5) accepts CLOB input.
+            // An empty table yields NULL from XMLAGG, so COALESCE to '' like MySQL.
+            sql.append("LOWER(RAWTOHEX(DBMS_CRYPTO.HASH(COALESCE(RTRIM(EXTRACT(XMLAGG(XMLELEMENT(E, row_checksum || '|') ORDER BY pk_key), '//text()').GETCLOBVAL(), '|'), ''), 2))) as checksum ");
             sql.append("FROM (SELECT ");
 
             // Build primary key for stable ordering
@@ -117,7 +123,8 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
 
     /**
      * Generate checksum SQL using XOR method (high performance)
-     * Formula: MD5(col1+'_C1') ^ MD5(col2+'_C2') * 2 ^ MD5(col3+'_C3') * 3 ^ ...
+     * Formula: SUM(MD5(col1+'_C1') + MD5(col2+'_C2') * 2 + MD5(col3+'_C3') * 3 + ...)
+     * Uses SUM aggregate to avoid ORA-00937 (not a single-group group function) error.
      */
     private String getChecksumSQLWithXor(String schemaName, String tableName,
             List<String> keyColumns,
@@ -125,40 +132,41 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
             Map<String, DataType> columnDataTypes,
             String whereClause) {
         StringBuilder sql = new StringBuilder();
-        
+
         sql.append("SELECT COUNT(*) as row_count, ");
 
         if (columns.isEmpty()) {
             sql.append("'0' as checksum ");
         } else {
-            // Build XOR expression using Oracle's BITXOR function
-            sql.append("LPAD(TO_CHAR(");
-            
+            // Use SUM aggregate to combine per-row hash values
+            // This avoids ORA-00937 when used with COUNT(*)
+            sql.append("LPAD(TO_CHAR(SUM(");
+
             for (int i = 0; i < columns.size(); i++) {
                 if (i > 0) {
-                    sql.append(" + ");  // Oracle doesn't have native XOR for large numbers, use addition as approximation
+                    sql.append(" + ");
                 }
-                
+
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
                 String normalizedCol = dataTypeHandler.normalizeColumn(col, dataType);
-                
+
                 // Add salt to each column: col + '_C' + (index+1)
                 String saltedCol = normalizedCol + " || '_C" + (i + 1) + "'";
-                
+
                 // Convert STANDARD_HASH to numeric for XOR operation
                 // Take first 16 characters of hash and convert from hex to decimal
                 String hashExpr = "TO_NUMBER(SUBSTR(STANDARD_HASH(" + saltedCol + ", 'MD5'), 1, 16), 'XXXXXXXXXXXXXXXX')";
-                
+
                 // Apply weight: multiply by (index + 1)
                 if (i > 0) {
                     hashExpr = "(" + hashExpr + " * " + (i + 1) + ")";
                 }
-                
+
                 sql.append(hashExpr);
             }
-            
-            sql.append(", 'XXXXXXXXXXXXXXXX'), 16, '0') as checksum ");
+
+            sql.append("), 'XXXXXXXXXXXXXXXX'), 16, '0') as checksum ");
         }
 
         sql.append("FROM ");
@@ -170,6 +178,66 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
 
         return sql.toString();
     }
+    @Override
+    protected String stringJoin(String separator, List<String> args) {
+        // Oracle does not have CONCAT_WS; use || concatenation operator.
+        // Note: Oracle treats a NULL operand like an empty string here, so this
+        // helper is only used where that behavior is acceptable. The diff-columns
+        // expression is generated by buildDiffColumnsExpression below, which
+        // explicitly matches MySQL CONCAT_WS semantics.
+        if (args == null || args.isEmpty()) {
+            return "''";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < args.size(); i++) {
+            if (i > 0) {
+                sb.append(" || ").append(separator).append(" || ");
+            }
+            sb.append(args.get(i));
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Build the JSON-like diff-columns expression for Oracle.
+     *
+     * <p>MySQL's CONCAT_WS skips NULL elements, so unchanged columns (CASE without
+     * ELSE) disappear from the result. Oracle's {@code ||} treats NULL as an empty
+     * string instead, which would leave stray separators such as {@code [, , "col", ]}.
+     * To match MySQL byte for byte, each changed column contributes a leading
+     * separator ({@code , "col"}) and LTRIM strips it before wrapping in brackets:
+     * {@code '[' || ', ' || LTRIM(concat, ', ') || ', ' || ']'}.
+     */
+    @Override
+    protected String buildDiffColumnsExpression(String alias1, String alias2,
+            List<String> compareColumns1, List<String> compareColumns2) {
+        if (compareColumns1 == null || compareColumns1.isEmpty()) {
+            return "'[]'";
+        }
+        int count = Math.min(compareColumns1.size(),
+                compareColumns2 != null ? compareColumns2.size() : compareColumns1.size());
+        StringBuilder concat = new StringBuilder();
+        for (int i = 0; i < count; i++) {
+            String col1 = compareColumns1.get(i);
+            String col2 = compareColumns2 != null && compareColumns2.size() > i ? compareColumns2.get(i) : col1;
+            String c1 = columnRef(alias1, col1);
+            String c2 = columnRef(alias2, col2);
+            if (i > 0) {
+                concat.append(" || ");
+            }
+            concat.append("CASE WHEN ").append(buildNullSafeNotEquals(c1, c2))
+                    .append(" THEN ', \"").append(col1).append("\"' END");
+        }
+        return "'[' || ', ' || COALESCE(LTRIM(" + concat + ", ', '), '') || ', ' || ']'";
+    }
+
+    private String columnRef(String alias, String column) {
+        if (alias == null || alias.trim().isEmpty()) {
+            return capabilityProvider.quote(column);
+        }
+        return alias + "." + capabilityProvider.quote(column);
+    }
+
     @Override
     public String getRowHashSQL(String schemaName, String tableName,
             List<String> primaryKeys,

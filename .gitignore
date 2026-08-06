@@ -121,6 +121,9 @@ grafana/
 *.swp
 *.swo
 
+# Draft backups in cross-database examples
+examples/mysql-doris/*.bak
+
 # Application specific
 data/
 results/

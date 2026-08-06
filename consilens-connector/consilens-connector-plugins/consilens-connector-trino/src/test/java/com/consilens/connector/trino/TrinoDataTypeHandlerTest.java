@@ -27,8 +27,31 @@ class TrinoDataTypeHandlerTest {
     @Test
     void testNormalizeColumn_Date() {
         String result = handler.normalizeColumn("created_at", DataType.DATE);
-        assertTrue(result.contains("FORMAT_DATETIME"));
-        assertTrue(result.contains("yyyy-MM-dd"));
+        // Date columns are returned as-is for WHERE compatibility; the query
+        // generator applies formatting via formatDateForChecksum.
+        assertEquals("\"created_at\"", result);
+    }
+
+    @Test
+    void testFormatDateForChecksum() {
+        String result = handler.formatDateForChecksum("\"created_at\"");
+        assertTrue(result.contains("CAST(\"created_at\" AS VARCHAR)"));
+        assertTrue(result.contains("COALESCE"));
+    }
+
+    @Test
+    void testNormalizeDecimalKeepsTrailingZeros() {
+        String result = handler.normalizeColumn("amount", DataType.DECIMAL);
+        assertTrue(result.contains("FORMAT('%."));
+        assertTrue(result.contains("4f'"));
+        assertTrue(result.contains("'0.0000'"));
+    }
+
+    @Test
+    void testNormalizeFloatKeepsTrailingZeros() {
+        String result = handler.normalizeColumn("score", DataType.FLOAT);
+        assertTrue(result.contains("FORMAT('%."));
+        assertTrue(result.contains("CAST(\"score\" AS DOUBLE)"));
     }
 
     @Test

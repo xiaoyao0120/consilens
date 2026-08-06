@@ -32,6 +32,31 @@ class PrestoDataTypeHandlerTest {
     }
 
     @Test
+    void testNormalizeDecimalKeepsTrailingZeros() {
+        String result = handler.normalizeColumn("amount", DataType.DECIMAL);
+        // Fixed-decimal format() keeps trailing zeros (1.5 -> 1.5000) so DOUBLE and
+        // DECIMAL checksums match MySQL's FORMAT(col, N) output.
+        assertTrue(result.contains("FORMAT('%."));
+        assertTrue(result.contains("4f'"));
+        assertTrue(result.contains("'0.0000'"));
+        assertFalse(result.contains("AS VARCHAR)), '0.0000'"));
+    }
+
+    @Test
+    void testNormalizeFloatKeepsTrailingZeros() {
+        String result = handler.normalizeColumn("score", DataType.FLOAT);
+        assertTrue(result.contains("FORMAT('%."));
+        assertTrue(result.contains("CAST(\"score\" AS DOUBLE)"));
+    }
+
+    @Test
+    void testNormalizeDoubleKeepsTrailingZeros() {
+        String result = handler.normalizeColumn("ratio", DataType.DOUBLE);
+        assertTrue(result.contains("FORMAT('%."));
+        assertFalse(result.contains("CAST(ROUND(\"ratio\""));
+    }
+
+    @Test
     void testGetDataTypeMappingVarchar() {
         String result = handler.getDataTypeMapping("varchar", 255, 0, 0);
         assertEquals("VARCHAR(255)", result);
