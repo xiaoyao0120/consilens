@@ -366,31 +366,38 @@ public class ClickHouseDataTypeHandler extends BaseDataTypeHandler {
 
     /**
      * ClickHouse-specific datetime normalization.
-     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
-     * Formatting is applied in the query generator's checksum SQL.
+     * Converts to UTC and formats as string to stay consistent with MySQL's
+     * CONVERT_TZ-based normalization and the checksum SQL path.
      */
     @Override
     protected String normalizeDateTime(String quotedCol) {
-        return quotedCol;
+        return "COALESCE(formatDateTime(toTimeZone(" + quotedCol + ", '"
+                + resolveClickHouseTimezone("datetime", "UTC") + "'), '"
+                + resolveClickHouseTemporalFormat("datetime", "%Y-%m-%d %H:%i:%S", "%Y-%m-%d") + "'), '')";
     }
 
     /**
      * ClickHouse-specific timestamp normalization.
-     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
-     * Formatting is applied in the query generator's checksum SQL.
+     * Converts to UTC and formats as string to stay consistent with MySQL's
+     * CONVERT_TZ-based normalization and the checksum SQL path.
      */
     @Override
     protected String normalizeTimestamp(String quotedCol) {
-        return quotedCol;
+        return "COALESCE(formatDateTime(toTimeZone(" + quotedCol + ", '"
+                + resolveClickHouseTimezone("timestamp", "UTC") + "'), '"
+                + resolveClickHouseTemporalFormat("timestamp", "%Y-%m-%d %H:%i:%S", "%Y-%m-%d") + "'), '')";
     }
 
     /**
      * ClickHouse-specific timestamp with timezone normalization.
-     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
+     * Converts to UTC and formats as string to stay consistent with MySQL's
+     * CONVERT_TZ-based normalization and the checksum SQL path.
      */
     @Override
     protected String normalizeTimestampWithTimezone(String quotedCol) {
-        return quotedCol;
+        return "COALESCE(formatDateTime(toTimeZone(" + quotedCol + ", '"
+                + resolveClickHouseTimezone("timestamp_with_timezone", "UTC") + "'), '"
+                + resolveClickHouseTemporalFormat("timestamp_with_timezone", "%Y-%m-%d %H:%i:%S", "%Y-%m-%d") + "'), '')";
     }
 
     /**
@@ -409,10 +416,10 @@ public class ClickHouseDataTypeHandler extends BaseDataTypeHandler {
         if ("timestamp".equals(dataType) || "timestamp_with_timezone".equals(dataType)) {
             return "COALESCE(formatDateTime(toTimeZone(" + quotedCol + ", '"
                     + resolveClickHouseTimezone(dataType, "UTC") + "'), '" + resolveClickHouseTemporalFormat(dataType,
-                    "%Y-%m-%d %H:%M:%S", "%Y-%m-%d") + "'), '')";
+                    "%Y-%m-%d %H:%i:%S", "%Y-%m-%d") + "'), '')";
         }
         return "COALESCE(formatDateTime(" + quotedCol + ", '" + resolveClickHouseTemporalFormat(dataType,
-                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d") + "'), '')";
+                "%Y-%m-%d %H:%i:%S", "%Y-%m-%d") + "'), '')";
     }
 
     private String resolveClickHouseTimezone(String dataTypeName, String defaultTimezone) {
@@ -426,7 +433,7 @@ public class ClickHouseDataTypeHandler extends BaseDataTypeHandler {
 
     private Set<String> clickHouseTemporalTokens(String dataTypeName) {
         Set<String> dateTokens = temporalTokens("%Y", "%y", "%m", "%d", "%e", "%F");
-        Set<String> timeTokens = temporalTokens("%H", "%I", "%M", "%S", "%f", "%p", "%R", "%T");
+        Set<String> timeTokens = temporalTokens("%H", "%I", "%i", "%S", "%f", "%p", "%R", "%T");
         if ("date".equals(dataTypeName)) {
             return dateTokens;
         }
