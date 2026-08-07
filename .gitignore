@@ -139,3 +139,4 @@ scripts/*
 !scripts/release/release-check.sh
 design/
 .zcode
+output
