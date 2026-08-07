@@ -54,6 +54,9 @@
         <caffeine.version>3.1.8</caffeine.version>
         <jacoco.version>0.8.11</jacoco.version>
         <okhttp.version>4.12.0</okhttp.version>
+
+        <!-- Benchmark -->
+        <jmh.version>1.37</jmh.version>
     </properties>
 
     <modules>
@@ -66,6 +69,7 @@
         <module>consilens-performance</module>
         <module>consilens-cli</module>
         <module>consilens-server</module>
+        <module>consilens-benchmark</module>
     </modules>
 
     <dependencyManagement>
@@ -325,6 +329,18 @@
                 <groupId>com.github.ben-manes.caffeine</groupId>
                 <artifactId>caffeine</artifactId>
                 <version>${caffeine.version}</version>
+            </dependency>
+
+            <!-- JMH (benchmark module) -->
+            <dependency>
+                <groupId>org.openjdk.jmh</groupId>
+                <artifactId>jmh-core</artifactId>
+                <version>${jmh.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.openjdk.jmh</groupId>
+                <artifactId>jmh-generator-annprocess</artifactId>
+                <version>${jmh.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
