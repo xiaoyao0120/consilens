@@ -28,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -209,6 +210,28 @@ class ConnectorRecordDifferTest {
                         .validateUniqueKeys(true)
                         .maxDifferences(1L)
                         .build()));
+    }
+
+    @Test
+    void shouldKeepRawValuesInDiffOutput() {
+        SchemaDescriptor schema = SchemaDescriptor.builder()
+                .fields(List.of(
+                        FieldDescriptor.builder().name("id").canonicalType("varchar").build(),
+                        FieldDescriptor.builder().name("value").canonicalType("decimal").build()))
+                .fieldMap(Map.of(
+                        "id", FieldDescriptor.builder().name("id").canonicalType("varchar").build(),
+                        "value", FieldDescriptor.builder().name("value").canonicalType("decimal").build()))
+                .build();
+        CompareSegment source = segment("source_orders", schema, null,
+                List.of(record(Map.of("id", "1", "value", new BigDecimal("1.2300")))));
+        CompareSegment target = segment("target_orders", schema, null,
+                List.of(record(Map.of("id", "1", "value", new BigDecimal("2.3400")))));
+
+        DiffResult result = new ConnectorRecordDiffer().diff(
+                source, target, CompareExecutionSettings.builder().validateUniqueKeys(true).build());
+
+        assertEquals(List.of("1", new BigDecimal("1.2300")), result.getDifferences().get(0).getSourceValues().get());
+        assertEquals(List.of("1", new BigDecimal("2.3400")), result.getDifferences().get(0).getTargetValues().get());
     }
 
     private CompareSegment segment(String tableName, List<CanonicalRecord> records) {

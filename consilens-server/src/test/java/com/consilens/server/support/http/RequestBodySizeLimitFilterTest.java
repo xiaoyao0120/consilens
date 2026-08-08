@@ -21,7 +21,7 @@ class RequestBodySizeLimitFilterTest {
     @Test
     void shouldRejectApiRequestWhenContentLengthExceedsLimit() throws Exception {
         RequestBodySizeLimitFilter filter = new RequestBodySizeLimitFilter(properties(4L), objectMapper);
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/run");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/tasks/execute");
         request.addHeader("Content-Length", "5");
         request.addHeader("X-Trace-Id", "trace-large");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -36,7 +36,7 @@ class RequestBodySizeLimitFilterTest {
     @Test
     void shouldRejectApiRequestWhenStreamingBodyExceedsLimit() throws Exception {
         RequestBodySizeLimitFilter filter = new RequestBodySizeLimitFilter(properties(4L), objectMapper);
-        MockHttpServletRequest request = unknownLengthRequest("POST", "/v1/run");
+        MockHttpServletRequest request = unknownLengthRequest("POST", "/v1/tasks/execute");
         request.setContent("large".getBytes());
         request.addHeader("X-Trace-Id", "trace-stream");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -51,7 +51,7 @@ class RequestBodySizeLimitFilterTest {
     @Test
     void shouldRejectApiRequestWhenReaderExceedsLimit() throws Exception {
         RequestBodySizeLimitFilter filter = new RequestBodySizeLimitFilter(properties(4L), objectMapper);
-        MockHttpServletRequest request = unknownLengthRequest("POST", "/v1/run");
+        MockHttpServletRequest request = unknownLengthRequest("POST", "/v1/tasks/execute");
         request.setContent("large".getBytes());
         request.addHeader("X-Trace-Id", "trace-reader");
         MockHttpServletResponse response = new MockHttpServletResponse();
@@ -66,7 +66,7 @@ class RequestBodySizeLimitFilterTest {
     @Test
     void shouldAllowApiRequestWithinLimit() throws Exception {
         RequestBodySizeLimitFilter filter = new RequestBodySizeLimitFilter(properties(8L), objectMapper);
-        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/run");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1/tasks/execute");
         request.setContent("ok".getBytes());
         MockHttpServletResponse response = new MockHttpServletResponse();
 

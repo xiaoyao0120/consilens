@@ -140,3 +140,4 @@ scripts/*
 design/
 .zcode
 output
+.orchelon

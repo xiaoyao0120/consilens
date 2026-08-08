@@ -69,7 +69,7 @@ The MCP tool catalog maps to the Consilens server API:
 
 - `consilens.plan.config` -> `POST /v1/plan`
 - `consilens.validate.config` -> `POST /v1/validate`
-- `consilens.run.diff` -> `POST /v1/run`, with caller-provided `serialNo`
+- `consilens.run.diff` -> `POST /v1/tasks/execute`, with caller-provided `serialNo`
 - `consilens.diagnose.diff` -> `POST /v1/diagnose`
 - `consilens.repair.config` -> `POST /v1/repair`
 - `consilens.get.artifact` -> `GET /v1/artifacts/{artifactId}`

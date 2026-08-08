@@ -1,6 +1,9 @@
 package com.consilens.server.api.controller;
 
 import com.consilens.server.api.advice.GlobalExceptionHandler;
+import com.consilens.server.application.task.RunTaskCancelService;
+import com.consilens.server.application.task.RunTaskQueryService;
+import com.consilens.server.application.task.RunTaskRetryService;
 import com.consilens.server.application.task.RunTaskSubmissionService;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
@@ -16,44 +19,60 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-class RunControllerTest {
+class TaskControllerTest {
 
     @Test
-    void shouldRejectRunRequestWhenSerialNoExceedsDatabaseLimit() throws Exception {
-        RunTaskSubmissionService service = mock(RunTaskSubmissionService.class);
-        MockMvc mockMvc = mockMvc(service);
+    void shouldSubmitTaskThroughTaskController() throws Exception {
+        RunTaskSubmissionService submissionService = mock(RunTaskSubmissionService.class);
+        MockMvc mockMvc = mockMvc(submissionService);
 
-        mockMvc.perform(post("/v1/run")
+        mockMvc.perform(post("/v1/tasks/execute")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .header("X-Trace-Id", "trace-run")
+                        .header("X-Trace-Id", "trace-task")
+                        .content("{\"serialNo\":\"serial-1\",\"configArtifactId\":\"artifact-config\"}"))
+                .andExpect(status().isAccepted());
+
+        verify(submissionService).submit(any(), org.mockito.ArgumentMatchers.eq("trace-task"));
+    }
+
+    @Test
+    void shouldRejectTaskWhenSerialNoExceedsDatabaseLimit() throws Exception {
+        RunTaskSubmissionService submissionService = mock(RunTaskSubmissionService.class);
+        MockMvc mockMvc = mockMvc(submissionService);
+
+        mockMvc.perform(post("/v1/tasks/execute")
+                        .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"serialNo\":\"" + "s".repeat(129)
                                 + "\",\"configArtifactId\":\"artifact-config\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.errorCode").value("INVALID_INPUT"));
 
-        verify(service, never()).submit(any(), any());
+        verify(submissionService, never()).submit(any(), any());
     }
 
     @Test
-    void shouldRejectRunRequestWhenTimeoutIsNotPositive() throws Exception {
-        RunTaskSubmissionService service = mock(RunTaskSubmissionService.class);
-        MockMvc mockMvc = mockMvc(service);
+    void shouldRejectTaskWhenTimeoutIsNotPositive() throws Exception {
+        RunTaskSubmissionService submissionService = mock(RunTaskSubmissionService.class);
+        MockMvc mockMvc = mockMvc(submissionService);
 
-        mockMvc.perform(post("/v1/run")
+        mockMvc.perform(post("/v1/tasks/execute")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .header("X-Trace-Id", "trace-run")
                         .content("{\"serialNo\":\"serial-1\",\"configArtifactId\":\"artifact-config\","
                                 + "\"options\":{\"timeoutMs\":0}}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.errorCode").value("INVALID_INPUT"));
 
-        verify(service, never()).submit(any(), any());
+        verify(submissionService, never()).submit(any(), any());
     }
 
-    private MockMvc mockMvc(RunTaskSubmissionService service) {
-        return MockMvcBuilders.standaloneSetup(new RunController(service))
+    private MockMvc mockMvc(RunTaskSubmissionService submissionService) {
+        return MockMvcBuilders.standaloneSetup(new TaskController(
+                        mock(RunTaskQueryService.class),
+                        mock(RunTaskRetryService.class),
+                        mock(RunTaskCancelService.class),
+                        submissionService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setValidator(validator())
                 .build();

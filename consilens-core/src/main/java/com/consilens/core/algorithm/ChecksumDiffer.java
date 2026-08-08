@@ -1005,7 +1005,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         // Pass the adaptive factor to the enhanced bisection method so skewed partitions split faster.
         infoTreeRecorder.recordSplit(segmentId, "adaptive", adaptiveFactor);
         infoTreeRecorder.markAdaptiveSegment();
-        return bisectAndDiffSegmentsEnhanced(table1, table2, infoTreeRecorder, level, Long.MAX_VALUE, adaptiveFactor, segmentId);
+        long maxRows = estimateSegmentMaxRows(table1, table2);
+        return bisectAndDiffSegmentsEnhanced(table1, table2, infoTreeRecorder, level, maxRows, adaptiveFactor, segmentId);
     }
 
     /**
@@ -1064,6 +1065,23 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         }
         
         return adaptiveFactor;
+    }
+
+    private long estimateSegmentMaxRows(TableSegment table1, TableSegment table2) {
+        return Math.max(estimateSegmentRows(table1), estimateSegmentRows(table2));
+    }
+
+    private long estimateSegmentRows(TableSegment table) {
+        long size = table.approximateSize();
+        if (size >= 0) {
+            return size;
+        }
+        try {
+            return table.count();
+        } catch (Exception e) {
+            log.warn("Failed to estimate segment row count for adaptive bisection", e);
+            return config.getBisectionThreshold();
+        }
     }
 
     /**
@@ -1305,13 +1323,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         if (!hasIdentity) {
             return "seg" + segmentSequence.incrementAndGet();
         }
-        String raw = String.join("|",
-                String.valueOf(minKey),
-                String.valueOf(maxKey),
-                String.valueOf(where),
-                String.valueOf(limitOffset),
-                String.valueOf(index));
-        return "seg" + Integer.toHexString(Objects.hash(raw));
+        return "seg" + encodeKeyParts(minKey, maxKey, where, limitOffset, String.valueOf(index));
     }
 
     /**
@@ -1343,12 +1355,20 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         // Include full table path to ensure different tables have different cache keys
         String tablePath = segment.getTablePath() != null ? segment.getTablePath().toString() : "null";
         
-        return String.format("%s_%s_%s_%s_%s",
-                databaseId,
+        return databaseId + "_" + encodeKeyParts(
                 tablePath,
                 segment.getMinKey().map(Object::toString).orElse("null"),
                 segment.getMaxKey().map(Object::toString).orElse("null"),
                 segment.getWhereClause().orElse("null"));
+    }
+
+    private String encodeKeyParts(String... parts) {
+        StringBuilder key = new StringBuilder();
+        for (String part : parts) {
+            String value = part != null ? part : "null";
+            key.append(value.length()).append(':').append(value).append('|');
+        }
+        return key.toString();
     }
 
     @Override
