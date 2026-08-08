@@ -24,7 +24,11 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
- * LocalDiffEngine 微基准：覆盖 M01（无差异）与 M02（5% 差异）两类场景，规模三档。
+ * LocalDiffEngine 微基准：以"数据量 × 差异量"矩阵覆盖无差异与有差异两类场景。
+ *
+ * <p>规模由 {@code rows} 控制（默认 10w/50w/100w 三档），差异比例由 {@code diffRatio}
+ * 控制（默认 0%/1%/5%/10% 四档，0 表示无差异即 M01，大于 0 即 M02）。两个维度都可通过
+ * 命令行覆盖（见 BenchmarkOptions 的 --rows / --diff-ratio）。
  *
  * <p>被测对象为 {@link LocalDiffEngine#findDifferences}，纯内存调用，不触数据库。输入行集
  * 由 {@link BenchmarkFixtures} 以固定种子确定性构造，与单元测试共用同一份 fixture 逻辑。
@@ -44,14 +48,16 @@ public class LocalDiffEngineBenchmark {
     private static final String KEY_COL = "id";
     private static final String EXTRA_COL = "payload";
     private static final long SEED = 42L;
-    private static final double FIVE_PERCENT = 0.05;
 
     @Param({"100000", "500000", "1000000"})
     private int rows;
 
+    /** 差异比例：0 表示两侧完全一致（M01），大于 0 表示按该比例修改 extra 列（M02）。 */
+    @Param({"0.00", "0.01", "0.05", "0.10"})
+    private String diffRatio;
+
     private List<Object[]> leftRows;
     private List<Object[]> rightRows;
-    private List<Object[]> rightRowsDiff;
     private List<String> keyCols;
     private List<String> extraCols;
 
@@ -64,26 +70,23 @@ public class LocalDiffEngineBenchmark {
 
         final int keyColumns = 1;
         final int extraColumns = 1;
+        final double ratio = Double.parseDouble(diffRatio);
         leftRows = BenchmarkFixtures.buildRows(rows, SEED, keyColumns, extraColumns);
-        // M01：相同种子产出相同行集，两侧完全一致
+        // 相同种子产出相同行集，ratio=0 时两侧完全一致（M01）
         rightRows = BenchmarkFixtures.buildRows(rows, SEED, keyColumns, extraColumns);
-        // M02：右侧按 5% 比例修改 extra 列，主键保持不变
-        rightRowsDiff = BenchmarkFixtures.withDifferences(leftRows, FIVE_PERCENT, SEED + 1);
+        // ratio>0 时右侧按该比例修改 extra 列，主键保持不变（M02）
+        if (ratio > 0) {
+            rightRows = BenchmarkFixtures.withDifferences(leftRows, ratio, SEED + 1);
+        }
 
         keyCols = Arrays.asList(KEY_COL);
         extraCols = Arrays.asList(EXTRA_COL);
     }
 
-    /** M01：无差异，两侧行集完全一致。 */
+    /** 行集比对：差异量由 diffRatio 决定，0 即无差异场景。 */
     @Benchmark
-    public void m01NoDifference() {
+    public void runDiff() {
         LocalDiffEngine.findDifferences(leftRows, rightRows, keyCols, extraCols, keyCols, extraCols);
-    }
-
-    /** M02：5% 行存在差异。 */
-    @Benchmark
-    public void m02FivePercentDifference() {
-        LocalDiffEngine.findDifferences(leftRows, rightRowsDiff, keyCols, extraCols, keyCols, extraCols);
     }
 
     private void silenceLogger() {
