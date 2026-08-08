@@ -17,6 +17,8 @@ public final class ScenarioLoader {
     public static final String E02 = "E02";
     public static final String E03 = "E03";
     public static final String JOIN = "join";
+    public static final String GENERATED = "G01";
+    public static final String GENERATED_POSTGRESQL = "G02";
 
     private static final List<String> DEFAULT_SCENARIOS =
             Collections.unmodifiableList(Arrays.asList(E02, E03, JOIN));
@@ -54,9 +56,31 @@ public final class ScenarioLoader {
             case JOIN:
                 return new Scenario(JOIN, examplesDir.resolve("same-db/mysql/02-join-diff.yaml"),
                         Arrays.asList("MYSQL_USER", "MYSQL_PASSWORD"));
+            case GENERATED:
+                return new Scenario(GENERATED, generatedConfigPath(),
+                        Arrays.asList("BENCHMARK_JDBC_URL", "BENCHMARK_DB_USER", "BENCHMARK_DB_PASSWORD"));
+            case GENERATED_POSTGRESQL:
+                return new Scenario(GENERATED_POSTGRESQL, generatedPostgresqlConfigPath(),
+                        Arrays.asList("BENCHMARK_JDBC_URL", "BENCHMARK_DB_USER", "BENCHMARK_DB_PASSWORD"));
             default:
                 return null;
         }
+    }
+
+    private Path generatedConfigPath() {
+        String override = System.getenv("CONSILENS_GENERATED_CONFIG");
+        if (override != null && !override.trim().isEmpty()) {
+            return Paths.get(override.trim());
+        }
+        return Paths.get("consilens-benchmark/src/main/resources/e2e/generated-mysql.yaml");
+    }
+
+    private Path generatedPostgresqlConfigPath() {
+        String override = System.getenv("CONSILENS_GENERATED_POSTGRESQL_CONFIG");
+        if (override != null && !override.trim().isEmpty()) {
+            return Paths.get(override.trim());
+        }
+        return Paths.get("consilens-benchmark/src/main/resources/e2e/generated-postgresql.yaml");
     }
 
     /**

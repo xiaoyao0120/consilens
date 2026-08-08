@@ -9,8 +9,9 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * 基准套件命令行参数。解析 --mode / --scenario / --update-baseline / --output-dir / --baseline-path
- * 以及可选的 JMH 精简参数 --forks / --warmup-iterations / --measurement-iterations。
+ * 基准套件命令行参数。解析 --mode / --scenario / --rows / --diff-ratio /
+ * --update-baseline / --output-dir / --baseline-path 以及可选的 JMH 精简参数
+ * --forks / --warmup-iterations / --measurement-iterations。
  *
  * 默认 JMH 参数为精简值（1/1/1），便于本地快速验证；正式基准可在命令行覆盖。
  */
@@ -29,18 +30,22 @@ public final class BenchmarkOptions {
     private final boolean updateBaseline;
     private final Path outputDir;
     private final Path baselinePath;
+    private final List<String> rows;
+    private final List<String> diffRatios;
     private final int forks;
     private final int warmupIterations;
     private final int measurementIterations;
 
     private BenchmarkOptions(String mode, Set<String> scenarios, boolean updateBaseline,
-                             Path outputDir, Path baselinePath,
+                             Path outputDir, Path baselinePath, List<String> rows, List<String> diffRatios,
                              int forks, int warmupIterations, int measurementIterations) {
         this.mode = mode;
         this.scenarios = Collections.unmodifiableSet(scenarios);
         this.updateBaseline = updateBaseline;
         this.outputDir = outputDir;
         this.baselinePath = baselinePath;
+        this.rows = rows;
+        this.diffRatios = diffRatios;
         this.forks = forks;
         this.warmupIterations = warmupIterations;
         this.measurementIterations = measurementIterations;
@@ -64,6 +69,24 @@ public final class BenchmarkOptions {
 
     public Path baselinePath() {
         return baselinePath;
+    }
+
+    /** 是否显式指定数据量档位；未指定时使用微基准 @Param 默认值。 */
+    public boolean hasRows() {
+        return rows != null && !rows.isEmpty();
+    }
+
+    public List<String> rows() {
+        return rows;
+    }
+
+    /** 是否显式指定差异比例档位；未指定时使用微基准 @Param 默认值。 */
+    public boolean hasDiffRatios() {
+        return diffRatios != null && !diffRatios.isEmpty();
+    }
+
+    public List<String> diffRatios() {
+        return diffRatios;
     }
 
     public int forks() {
@@ -95,6 +118,8 @@ public final class BenchmarkOptions {
         boolean updateBaseline = false;
         Path outputDir = Paths.get(DEFAULT_OUTPUT_DIR);
         Path baselinePath = Paths.get(DEFAULT_BASELINE_PATH);
+        List<String> rows = null;
+        List<String> diffRatios = null;
         int forks = 1;
         int warmupIterations = 1;
         int measurementIterations = 1;
@@ -123,6 +148,12 @@ public final class BenchmarkOptions {
                 case "--baseline-path":
                     baselinePath = Paths.get(next(args, ++i, arg));
                     break;
+                case "--rows":
+                    rows = splitList(next(args, ++i, arg));
+                    break;
+                case "--diff-ratio":
+                    diffRatios = splitList(next(args, ++i, arg));
+                    break;
                 case "--forks":
                     forks = Integer.parseInt(next(args, ++i, arg));
                     break;
@@ -137,7 +168,7 @@ public final class BenchmarkOptions {
             }
         }
         return new BenchmarkOptions(mode, scenarios, updateBaseline, outputDir, baselinePath,
-                forks, warmupIterations, measurementIterations);
+                rows, diffRatios, forks, warmupIterations, measurementIterations);
     }
 
     private static String next(String[] args, int index, String flag) {
@@ -145,6 +176,17 @@ public final class BenchmarkOptions {
             throw new IllegalArgumentException("benchmark: missing value for " + flag);
         }
         return args[index];
+    }
+
+    private static List<String> splitList(String raw) {
+        List<String> values = new ArrayList<>();
+        for (String s : raw.split(",")) {
+            String trimmed = s.trim();
+            if (!trimmed.isEmpty()) {
+                values.add(trimmed);
+            }
+        }
+        return values;
     }
 
     /**
@@ -167,7 +209,8 @@ public final class BenchmarkOptions {
     public String toString() {
         return "BenchmarkOptions{mode=" + mode + ", scenarios=" + scenarios
                 + ", updateBaseline=" + updateBaseline + ", outputDir=" + outputDir
-                + ", baselinePath=" + baselinePath + ", forks=" + forks
+                + ", baselinePath=" + baselinePath + ", rows=" + rows
+                + ", diffRatios=" + diffRatios + ", forks=" + forks
                 + ", warmup=" + warmupIterations + ", measurement=" + measurementIterations + "}";
     }
 }

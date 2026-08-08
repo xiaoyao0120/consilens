@@ -5,6 +5,8 @@
 JSON 与漂移报告。
 
 设计详见 `logs/06-benchmark工程设计.md`。
+员工使用指南（数据量 × 差异量矩阵测试、参数与结果解读）见
+`docs/07-benchmark性能基准测试使用指南.md`。
 
 ## 编译与单元测试
 
@@ -14,6 +16,28 @@ JSON 与漂移报告。
 ```
 
 `mvn test` 仅跑 `*Test` 单元测试，不触发 JMH，不拉子进程。
+
+## 生成千万/亿级测试数据
+
+micro 使用内存 fixture；大数据量请使用数据库批量生成器。它按 batch 写入两张表，
+不会把全量数据放进 JVM，并生成实际行数、mismatch、源端缺失、目标端缺失校验报告。
+
+```bash
+bin/generate-benchmark-data.sh \
+  --jdbc-url 'jdbc:mysql://127.0.0.1:13306/consilens_benchmark' \
+  --username "$MYSQL_USER" --password "$MYSQL_PASSWORD" \
+  --rows 100000000 --diff-ratio 0.05 --batch-size 5000 --seed 42
+```
+
+常用参数：`--source-missing-ratio`、`--target-missing-ratio`、`--resume`、
+`--report`、`--source-table`、`--target-table`。完整的数据规则、千万/亿级执行步骤和
+校验报告说明见 `docs/07-benchmark性能基准测试使用指南.md` 的第八节。
+
+生成完成后，可设置 `BENCHMARK_JDBC_URL`、`BENCHMARK_DB_USER`、
+`BENCHMARK_DB_PASSWORD`，用 `bin/run-benchmark.sh e2e --scenario G01` 直接对
+`benchmark_source` 与 `benchmark_target` 做真实数据库比对；表名可通过
+`BENCHMARK_SOURCE_TABLE`、`BENCHMARK_TARGET_TABLE` 覆盖。
+PostgreSQL 数据使用 `bin/run-benchmark.sh e2e --scenario G02`。
 
 ## 直接执行基准
 

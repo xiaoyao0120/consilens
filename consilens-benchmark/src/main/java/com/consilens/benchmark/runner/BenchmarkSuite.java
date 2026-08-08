@@ -12,6 +12,7 @@ import com.consilens.benchmark.report.BenchmarkResult;
 import org.openjdk.jmh.results.RunResult;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
+import org.openjdk.jmh.runner.options.ChainedOptionsBuilder;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
@@ -62,32 +63,38 @@ public final class BenchmarkSuite {
      * 编程式跑 JMH 微基准，解析 RunResult 到 BenchmarkResult 列表。
      */
     public List<BenchmarkResult> runMicro() throws RunnerException {
-        Options jmhOpts = new OptionsBuilder()
+        ChainedOptionsBuilder builder = new OptionsBuilder()
                 .include(LocalDiffEngineBenchmark.class.getName())
                 .mode(org.openjdk.jmh.annotations.Mode.Throughput)
                 .forks(options.forks())
                 .warmupIterations(options.warmupIterations())
                 .measurementIterations(options.measurementIterations())
-                .shouldFailOnError(true)
-                .build();
+                .shouldFailOnError(true);
+        if (options.hasRows()) {
+            builder.param("rows", options.rows().toArray(new String[0]));
+        }
+        if (options.hasDiffRatios()) {
+            builder.param("diffRatio", options.diffRatios().toArray(new String[0]));
+        }
+        Options jmhOpts = builder.build();
 
         Collection<RunResult> runResults = new Runner(jmhOpts).run();
 
         List<BenchmarkResult> results = new ArrayList<>();
         for (RunResult rr : runResults) {
             String benchmark = rr.getParams().getBenchmark();
-            String primary = rr.getPrimaryResult().getLabel();
             double score = rr.getPrimaryResult().getScore();
             String unit = rr.getPrimaryResult().getScoreUnit();
 
-            String scenarioId = resolveScenarioId(benchmark, rr.getParams().getParam("rows"));
+            String scenarioId = resolveScenarioId(rr.getParams().getParam("rows"),
+                    rr.getParams().getParam("diffRatio"));
             String status = score > 0 ? "RUN" : "FAILED";
             Map<String, Double> subMetrics = new TreeMap<>();
             long sampleCount = (long) rr.getPrimaryResult().getStatistics().getN();
             subMetrics.put("sampleCount", (double) sampleCount);
 
             BenchmarkResult result = new BenchmarkResult();
-            result.setScenarioId(scenarioId + "." + normalizeMethod(primary, benchmark));
+            result.setScenarioId(scenarioId);
             result.setScore(score);
             result.setUnit(unit);
             result.setStatus(status);
@@ -167,23 +174,10 @@ public final class BenchmarkSuite {
         return scenarioId.startsWith("E") ? 0.25 : 0.15;
     }
 
-    private static String resolveScenarioId(String benchmark, String rows) {
-        if (benchmark.contains("m01NoDifference")) {
-            return M01 + "." + rows;
-        }
-        if (benchmark.contains("m02FivePercentDifference")) {
-            return M02 + "." + rows;
-        }
-        return benchmark;
-    }
-
-    private static String normalizeMethod(String primary, String benchmark) {
-        // JMH primary label 通常为方法名；用 benchmark 中的方法段更稳定
-        String method = benchmark;
-        int dot = benchmark.lastIndexOf('.');
-        if (dot >= 0) {
-            method = benchmark.substring(dot + 1);
-        }
-        return method;
+    private static String resolveScenarioId(String rows, String diffRatio) {
+        double ratio = diffRatio == null ? 0.05 : Double.parseDouble(diffRatio);
+        String code = ratio <= 0 ? M01 : M02;
+        String ratioLabel = diffRatio == null ? "default" : diffRatio;
+        return code + "." + rows + ".ratio" + ratioLabel;
     }
 }
