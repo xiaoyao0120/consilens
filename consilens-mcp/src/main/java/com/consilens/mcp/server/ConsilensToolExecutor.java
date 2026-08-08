@@ -43,7 +43,7 @@ public class ConsilensToolExecutor {
     private Map<String, Object> runDiff(Map<String, Object> arguments) {
         requireString(arguments, "serialNo");
         requireString(arguments, "configArtifactId");
-        return client.post("/v1/run", arguments);
+        return client.post("/v1/tasks/execute", arguments);
     }
 
     private Map<String, Object> getArtifact(Map<String, Object> arguments) {

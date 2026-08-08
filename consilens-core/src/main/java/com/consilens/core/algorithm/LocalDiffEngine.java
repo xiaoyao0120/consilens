@@ -397,29 +397,12 @@ public class LocalDiffEngine {
         if (val1 instanceof java.sql.Timestamp && val2 instanceof java.sql.Timestamp) {
             long time1 = ((java.sql.Timestamp) val1).getTime();
             long time2 = ((java.sql.Timestamp) val2).getTime();
-            
-            // Check for 8-hour timezone difference (28800000 ms = 8 hours)
-            // This handles cross-database comparison where MySQL may apply timezone conversion
-            // while PostgreSQL doesn't
-            long diff = Math.abs(time1 - time2);
-            if (diff == 28800000L) {
-                // 8 hours difference, likely timezone issue, consider them equal
-                return true;
-            }
-            
             return time1 == time2;
         }
 
         if (val1 instanceof java.util.Date && val2 instanceof java.util.Date) {
             long time1 = ((java.util.Date) val1).getTime();
             long time2 = ((java.util.Date) val2).getTime();
-            
-            // Check for 8-hour timezone difference
-            long diff = Math.abs(time1 - time2);
-            if (diff == 28800000L) {
-                return true;
-            }
-            
             return time1 == time2;
         }
 

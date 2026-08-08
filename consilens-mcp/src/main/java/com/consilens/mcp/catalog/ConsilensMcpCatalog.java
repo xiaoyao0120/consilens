@@ -39,7 +39,7 @@ public class ConsilensMcpCatalog {
                         prop("serialNo", "string", "Caller-provided idempotency key."),
                         prop("configArtifactId", "string", "CONFIG artifact id."),
                         prop("options", "object", "Run options such as dryRun and timeoutMs.")),
-                "/v1/run", false, true));
+                "/v1/tasks/execute", false, true));
         put(definitions, tool("consilens.diagnose.diff", "Diagnose diff",
                 "Diagnose a run result artifact.",
                 List.of("runArtifactId"),

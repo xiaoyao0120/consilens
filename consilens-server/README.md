@@ -51,6 +51,26 @@ For local smoke tests:
 ./mvnw -pl consilens-server spring-boot:run
 ```
 
+## Create Task
+
+`POST /v1/tasks/execute` creates an asynchronous run task from a server configuration
+artifact and returns its task ID.
+
+```bash
+curl -X POST http://localhost:18080/v1/tasks/execute \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "serialNo": "orders-compare-20260808",
+    "configArtifactId": "artifact-config",
+    "options": {
+      "dryRun": false
+    }
+  }'
+```
+
+The response has HTTP status `202 Accepted` and includes
+`data.taskId`. Query progress and results with `GET /v1/tasks/{taskId}`.
+
 ## Operations
 
 - HTTP port defaults to `18080`.

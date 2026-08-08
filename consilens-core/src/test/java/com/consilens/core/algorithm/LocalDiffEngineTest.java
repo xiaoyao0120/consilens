@@ -11,6 +11,7 @@ import com.consilens.connector.api.model.DataType;
 import java.util.Collections;
 import java.util.Map;
 import java.util.HashMap;
+import java.sql.Timestamp;
 
 /**
  * Test for LocalDiffEngine functionality.
@@ -142,5 +143,25 @@ public class LocalDiffEngineTest {
                 // LocalDiffEngine compares database-side normalized values.
                 // If the rows are already canonicalized, no differences should remain.
                 assertTrue(differences.isEmpty(), "Should find no differences after normalization");
+        }
+
+        @Test
+        public void testTimestampDifferenceOfEightHoursIsNotIgnored() {
+                List<Object[]> rows1 = Collections.singletonList(
+                                new Object[] { 1, Timestamp.valueOf("2023-01-01 00:00:00") });
+                List<Object[]> rows2 = Collections.singletonList(
+                                new Object[] { 1, Timestamp.valueOf("2023-01-01 08:00:00") });
+                List<String> keyColumns = Collections.singletonList("id");
+                List<String> extraColumns = Collections.singletonList("created_at");
+                Map<String, DataType> columnTypes = new HashMap<>();
+                columnTypes.put("id", DataType.INTEGER);
+                columnTypes.put("created_at", DataType.TIMESTAMP);
+
+                List<DiffRow> differences = LocalDiffEngine.findDifferences(
+                                rows1, rows2, keyColumns, extraColumns, keyColumns, extraColumns,
+                                columnTypes, columnTypes);
+
+                assertEquals(1, differences.size());
+                assertEquals(DiffOperation.MISMATCH, differences.get(0).getOperation());
         }
 }

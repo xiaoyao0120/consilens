@@ -227,7 +227,7 @@ final class ConnectorRecordDiffer {
             Object rawValue = value != null ? value.getValue() : null;
             DataType dataType = types.getOrDefault(column, DataType.UNKNOWN);
             String normalized = ValueNormalizer.normalizeValue(rawValue, dataType);
-            rawValues.add(normalized);
+            rawValues.add(rawValue);
             normalizedValues.add(normalized);
             if (keyColumns.contains(column)) {
                 normalizedKey.add(normalized);
