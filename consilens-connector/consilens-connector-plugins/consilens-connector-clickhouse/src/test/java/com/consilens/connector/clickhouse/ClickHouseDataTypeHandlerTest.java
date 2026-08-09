@@ -32,9 +32,7 @@ class ClickHouseDataTypeHandlerTest {
     @Test
     void testNormalizeColumn_Timestamp() {
         String result = handler.normalizeColumn("created_at", DataType.TIMESTAMP);
-        // Timestamp columns are returned as-is for WHERE compatibility; the query
-        // generator applies formatting via formatDateTimeForChecksum.
-        assertEquals("`created_at`", result);
+        assertEquals("COALESCE(formatDateTime(toTimeZone(`created_at`, 'UTC'), '%Y-%m-%d %H:%i:%S'), '')", result);
     }
 
     @Test

@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * LLM backend implementation that communicates with a local Ollama server.
@@ -114,7 +115,7 @@ public class OllamaBackend implements LLMBackend {
                 requestBody.set("tools", toolsArray);
             }
 
-            JsonNode response = httpClient.post(baseUrl + "/api/chat", requestBody);
+            JsonNode response = httpClient.postWithRetry(baseUrl + "/api/chat", requestBody, Map.of());
             return parseResponse(response);
         } catch (Exception e) {
             log.error("Ollama chat request failed: {}", e.getMessage(), e);
@@ -133,7 +134,7 @@ public class OllamaBackend implements LLMBackend {
             requestBody.put("prompt", prompt);
             requestBody.put("stream", false);
             applyGenerationOptions(requestBody);
-            JsonNode response = httpClient.post(baseUrl + "/api/generate", requestBody);
+            JsonNode response = httpClient.postWithRetry(baseUrl + "/api/generate", requestBody, Map.of());
             return response.path("response").asText("No response from Ollama");
         } catch (IOException e) {
             log.error("Ollama completion request failed: {}", e.getMessage(), e);
@@ -168,7 +169,7 @@ public class OllamaBackend implements LLMBackend {
             toolCalls = new ArrayList<>();
             for (JsonNode tc : toolCallsNode) {
                 JsonNode func = tc.path("function");
-                String id = tc.path("id").asText("tc_" + System.currentTimeMillis());
+                String id = tc.path("id").asText("tc_" + UUID.randomUUID());
                 String name = func.path("name").asText();
                 Map<String, Object> arguments = new HashMap<>();
                 JsonNode argsNode = func.path("arguments");

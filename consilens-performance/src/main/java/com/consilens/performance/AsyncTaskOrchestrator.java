@@ -7,8 +7,10 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
@@ -87,7 +89,7 @@ public class AsyncTaskOrchestrator {
             }
         }, executor)
         .exceptionally(throwable -> {
-            Exception cause = (Exception) throwable.getCause();
+            Throwable cause = unwrapCause(throwable);
 
             if (shouldRetry(retryPolicy, cause, attempt)) {
                 long delay = calculateRetryDelay(retryPolicy, attempt);
@@ -217,9 +219,7 @@ public class AsyncTaskOrchestrator {
      * Execute task with timeout.
      */
     public <T> CompletableFuture<T> executeWithTimeout(String taskName, Supplier<T> task, long timeout, TimeUnit unit) {
-        String taskId = generateTaskId(taskName);
-
-        return executeWithRetry(taskId, task)
+        return executeWithRetry(taskName, task)
                 .orTimeout(timeout, unit)
                 .whenComplete((result, error) -> {
                     if (error != null && error instanceof java.util.concurrent.TimeoutException) {
@@ -252,7 +252,7 @@ public class AsyncTaskOrchestrator {
     /**
      * Check if retry should be attempted.
      */
-    private boolean shouldRetry(RetryPolicy policy, Exception cause, int attempt) {
+    private boolean shouldRetry(RetryPolicy policy, Throwable cause, int attempt) {
         if (attempt >= policy.getMaxAttempts()) {
             return false;
         }
@@ -262,6 +262,15 @@ public class AsyncTaskOrchestrator {
         }
 
         return policy.isRetryOnAllExceptions();
+    }
+
+    private Throwable unwrapCause(Throwable throwable) {
+        Throwable cause = throwable;
+        while ((cause instanceof CompletionException || cause instanceof ExecutionException
+                || cause instanceof RuntimeException) && cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        return cause;
     }
 
     /**

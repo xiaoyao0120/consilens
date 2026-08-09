@@ -55,11 +55,19 @@ public final class PluginManager<K, P, T> {
         return factory.create(key);
     }
 
+    /**
+     * Creates an uncached instance for the supplied configuration. Callers own the
+     * returned instance and must close it when the implementation is closeable.
+     */
     public T create(K key, Map<String, ?> config) {
         if (config == null || config.isEmpty()) {
             return get(key);
         }
-        return configuredCreator.apply(registry.get(key), config);
+        try {
+            return configuredCreator.apply(registry.get(key), config);
+        } catch (RuntimeException e) {
+            throw new IllegalStateException("Failed to create configured plugin for key " + key, e);
+        }
     }
 
     public T getIfLoaded(K key) {

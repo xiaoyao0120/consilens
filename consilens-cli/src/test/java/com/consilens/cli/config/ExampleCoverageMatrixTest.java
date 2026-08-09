@@ -1,6 +1,8 @@
 package com.consilens.cli.config;
 
 import com.consilens.cli.model.CliConfiguration;
+import com.consilens.cli.service.CompareRequestFactory;
+import com.consilens.connector.api.normalization.DefaultNormalizationSpecValidator;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
@@ -113,6 +115,12 @@ class ExampleCoverageMatrixTest {
         assertNotNull(config.getComparison(), "Comparison config should not be null: " + configPath);
         assertNotNull(config.getComparison().getKeys(), "comparison.keys should not be null: " + configPath);
         config.validate();
+
+        var request = new CompareRequestFactory().create(config);
+        assertNotNull(request, "Config should compile to CompareRequest: " + configPath);
+        if (request.getNormalizationSpec() != null) {
+            new DefaultNormalizationSpecValidator().validate(request.getNormalizationSpec());
+        }
     }
 
     @Test

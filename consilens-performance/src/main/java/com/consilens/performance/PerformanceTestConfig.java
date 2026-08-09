@@ -132,7 +132,7 @@ public class PerformanceTestConfig {
             throw new IllegalArgumentException("Warmup iterations cannot be negative");
         }
 
-        if (testIterations <= 0) {
+        if (testIterations < 0 || (testDuration == null && testIterations == 0)) {
             throw new IllegalArgumentException("Test iterations must be positive");
         }
 

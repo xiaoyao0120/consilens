@@ -6,10 +6,15 @@ import io.modelcontextprotocol.json.McpJsonMapper;
 import io.modelcontextprotocol.spec.McpSchema;
 
 import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class ConsilensToolExecutor {
+
+    private static final Duration RUN_POLL_TIMEOUT = Duration.ofSeconds(120);
+    private static final Duration RUN_POLL_INTERVAL = Duration.ofSeconds(1);
 
     private final ConsilensServerClient client;
     private final McpJsonMapper jsonMapper;
@@ -43,7 +48,45 @@ public class ConsilensToolExecutor {
     private Map<String, Object> runDiff(Map<String, Object> arguments) {
         requireString(arguments, "serialNo");
         requireString(arguments, "configArtifactId");
-        return client.post("/v1/tasks/execute", arguments);
+        Map<String, Object> accepted = client.post("/v1/tasks/execute", arguments);
+        Object taskIdValue = accepted.get("taskId");
+        if (taskIdValue == null || String.valueOf(taskIdValue).isBlank()) {
+            return accepted;
+        }
+        String taskId = String.valueOf(taskIdValue);
+        Instant deadline = Instant.now().plus(RUN_POLL_TIMEOUT);
+        Map<String, Object> task = accepted;
+        while (Instant.now().isBefore(deadline)) {
+            task = client.get("/v1/tasks/" + taskId);
+            String status = String.valueOf(task.getOrDefault("status", ""));
+            if (isTerminalTaskStatus(status)) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("accepted", accepted);
+                result.put("task", task);
+                return result;
+            }
+            waitForTaskPoll();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("accepted", accepted);
+        result.put("task", task);
+        result.put("timedOut", true);
+        return result;
+    }
+
+    private boolean isTerminalTaskStatus(String status) {
+        return "SUCCEEDED".equalsIgnoreCase(status)
+                || "FAILED".equalsIgnoreCase(status)
+                || "CANCELLED".equalsIgnoreCase(status);
+    }
+
+    private void waitForTaskPoll() {
+        try {
+            Thread.sleep(RUN_POLL_INTERVAL.toMillis());
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for Consilens task completion", exception);
+        }
     }
 
     private Map<String, Object> getArtifact(Map<String, Object> arguments) {

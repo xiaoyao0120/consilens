@@ -106,4 +106,29 @@ class OpenAIBackendTest {
         assertThat(response.getFinishReason()).isEqualTo("error");
         assertThat(response.getText()).contains("api key is required");
     }
+
+    @Test
+    void retriesTransientFailuresAndGeneratesDistinctFallbackToolCallIds() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(503).setBody("temporarily unavailable"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setBody("{\"choices\":[{\"message\":{\"tool_calls\":["
+                            + "{\"function\":{\"name\":\"first\",\"arguments\":\"{}\"}},"
+                            + "{\"function\":{\"name\":\"second\",\"arguments\":\"{}\"}}]}}]}")
+                    .addHeader("Content-Type", "application/json"));
+            server.start();
+
+            OpenAIBackend backend = new OpenAIBackend(server.url("/v1").toString().replaceAll("/$", ""),
+                    "test-model", "test-key", Duration.ofSeconds(5), null, null);
+
+            LLMResponse response = backend.chat(null, List.of(ChatMessage.user("use tools")), List.of());
+
+            assertThat(server.takeRequest()).isNotNull();
+            assertThat(server.takeRequest()).isNotNull();
+            assertThat(response.getToolCalls()).hasSize(2);
+            assertThat(response.getToolCalls().get(0).getId())
+                    .isNotEqualTo(response.getToolCalls().get(1).getId());
+        }
+    }
 }

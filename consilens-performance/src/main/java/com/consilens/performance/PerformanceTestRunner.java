@@ -31,8 +31,8 @@ public class PerformanceTestRunner {
         config.validate();
 
         log.info("Starting performance test: {}", config.getTestName());
-        log.info("Configuration: warmup={}, iterations={}, concurrency={}",
-                config.getWarmupIterations(), config.getTestIterations(), config.getConcurrencyLevel());
+        log.info("Configuration: warmup={}, iterations={}, duration={}, concurrency={}",
+                config.getWarmupIterations(), config.getTestIterations(), config.getTestDuration(), config.getConcurrencyLevel());
 
         try {
             // Initialize thread pool
@@ -51,7 +51,8 @@ public class PerformanceTestRunner {
             }
 
             // Test phase
-            log.info("Running test phase: {} iterations", config.getTestIterations());
+            log.info("Running test phase: {}", config.getTestDuration() == null
+                    ? config.getTestIterations() + " iterations" : config.getTestDuration());
             List<TestResult> results;
             boolean collecting = false;
             try {
@@ -150,6 +151,9 @@ public class PerformanceTestRunner {
         List<TestResult> results = new ArrayList<>();
         int iterations = config.getTestIterations();
         int concurrency = config.getConcurrencyLevel();
+        if (config.getTestDuration() != null) {
+            return executeForDuration(config.getTestDuration(), concurrency, testLogic);
+        }
         PerformanceTestConfig.LoadPattern loadPattern = config.getLoadPattern();
 
         // Execute based on load pattern
@@ -178,6 +182,22 @@ public class PerformanceTestRunner {
                 break;
         }
 
+        return results;
+    }
+
+    private List<TestResult> executeForDuration(java.time.Duration duration,
+                                                int concurrency,
+                                                Callable<TestResult> testLogic) throws InterruptedException {
+        long deadline = System.nanoTime() + duration.toNanos();
+        List<TestResult> results = new ArrayList<>();
+        int batchSize = Math.max(1, concurrency);
+        while (System.nanoTime() < deadline) {
+            if (concurrency == 1) {
+                results.addAll(executeSequential(1, testLogic));
+            } else {
+                results.addAll(executeConcurrent(batchSize, concurrency, testLogic));
+            }
+        }
         return results;
     }
 

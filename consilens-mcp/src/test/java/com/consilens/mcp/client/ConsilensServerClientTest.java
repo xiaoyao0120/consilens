@@ -74,6 +74,14 @@ class ConsilensServerClientTest {
                     .setResponseCode(502)
                     .setBody("<html>bad gateway</html>")
                     .addHeader("X-Trace-Id", "gateway-trace"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(502)
+                    .setBody("<html>bad gateway</html>")
+                    .addHeader("X-Trace-Id", "gateway-trace"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(502)
+                    .setBody("<html>bad gateway</html>")
+                    .addHeader("X-Trace-Id", "gateway-trace"));
             server.start();
 
             ConsilensServerClient client = new ConsilensServerClient(
@@ -96,6 +104,16 @@ class ConsilensServerClientTest {
                     .setBody("{\"success\":false,\"error\":\"server unavailable\"}")
                     .addHeader("Content-Type", "application/json")
                     .addHeader("X-Trace-Id", "gateway-trace"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(503)
+                    .setBody("{\"success\":false,\"error\":\"server unavailable\"}")
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("X-Trace-Id", "gateway-trace"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(503)
+                    .setBody("{\"success\":false,\"error\":\"server unavailable\"}")
+                    .addHeader("Content-Type", "application/json")
+                    .addHeader("X-Trace-Id", "gateway-trace"));
             server.start();
 
             ConsilensServerClient client = new ConsilensServerClient(
@@ -107,6 +125,26 @@ class ConsilensServerClientTest {
                     .isInstanceOf(ConsilensServerException.class)
                     .extracting("statusCode", "errorCode", "traceId")
                     .containsExactly(503, "SERVER_ERROR", "gateway-trace");
+        }
+    }
+
+    @Test
+    void shouldRetryTransientServerErrors() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse().setResponseCode(503).setBody("temporarily unavailable"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setBody("{\"success\":true,\"data\":{\"artifact\":{\"id\":\"a1\"}}}")
+                    .addHeader("Content-Type", "application/json"));
+            server.start();
+
+            ConsilensServerClient client = new ConsilensServerClient(
+                    URI.create(server.url("/").toString()),
+                    null,
+                    new JacksonMcpJsonMapper(ConsilensJson.objectMapper()));
+
+            assertThat(client.get("/v1/artifacts/a1")).containsKey("artifact");
+            assertThat(server.getRequestCount()).isEqualTo(2);
         }
     }
 

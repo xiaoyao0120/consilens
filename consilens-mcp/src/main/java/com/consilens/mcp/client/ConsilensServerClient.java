@@ -16,6 +16,9 @@ import java.util.UUID;
 
 public class ConsilensServerClient {
 
+    private static final int MAX_RETRY_ATTEMPTS = 3;
+    private static final long INITIAL_RETRY_DELAY_MS = 250L;
+
     private final URI serverBaseUri;
     private final String serverApiKey;
     private final McpJsonMapper jsonMapper;
@@ -88,21 +91,32 @@ public class ConsilensServerClient {
     }
 
     private Map<String, Object> send(HttpRequest request) {
-        try {
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            ApiResponse apiResponse = readApiResponse(response);
-            if (response.statusCode() < 200 || response.statusCode() >= 300 || !apiResponse.isSuccess()) {
-                throw new ConsilensServerException(response.statusCode(), errorCode(apiResponse),
-                        traceId(apiResponse, response), message(apiResponse, response));
+        for (int attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
+            try {
+                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                if (isRetryableStatus(response.statusCode()) && attempt < MAX_RETRY_ATTEMPTS) {
+                    waitBeforeRetry(attempt, request);
+                    continue;
+                }
+                ApiResponse apiResponse = readApiResponse(response);
+                if (response.statusCode() < 200 || response.statusCode() >= 300 || !apiResponse.isSuccess()) {
+                    throw new ConsilensServerException(response.statusCode(), errorCode(apiResponse),
+                            traceId(apiResponse, response), message(apiResponse, response));
+                }
+                return data(apiResponse);
+            } catch (IOException exception) {
+                if (attempt < MAX_RETRY_ATTEMPTS) {
+                    waitBeforeRetry(attempt, request);
+                    continue;
+                }
+                throw new ConsilensServerException(0, "SERVER_IO_ERROR", traceId(request), exception.getMessage());
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new ConsilensServerException(0, "SERVER_INTERRUPTED", traceId(request),
+                        "Consilens server request interrupted");
             }
-            return data(apiResponse);
-        } catch (IOException exception) {
-            throw new ConsilensServerException(0, "SERVER_IO_ERROR", traceId(request), exception.getMessage());
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new ConsilensServerException(0, "SERVER_INTERRUPTED", traceId(request),
-                    "Consilens server request interrupted");
         }
+        throw new IllegalStateException("Unreachable retry state");
     }
 
     private ApiResponse readApiResponse(HttpResponse<String> response) {
@@ -164,6 +178,20 @@ public class ConsilensServerClient {
 
     private String traceId(HttpRequest request) {
         return request.headers().firstValue("X-Trace-Id").orElse(null);
+    }
+
+    private boolean isRetryableStatus(int statusCode) {
+        return statusCode == 408 || statusCode == 429 || statusCode >= 500;
+    }
+
+    private void waitBeforeRetry(int attempt, HttpRequest request) {
+        try {
+            Thread.sleep(INITIAL_RETRY_DELAY_MS * (1L << (attempt - 1)));
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new ConsilensServerException(0, "SERVER_INTERRUPTED", traceId(request),
+                    "Consilens server request interrupted");
+        }
     }
 
     private URI resolvePath(String path) {

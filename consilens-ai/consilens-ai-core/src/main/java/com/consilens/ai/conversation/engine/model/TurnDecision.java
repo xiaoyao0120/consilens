@@ -13,7 +13,8 @@ public class TurnDecision {
     public enum Type {
         QUESTION,
         ACTION,
-        MESSAGE
+        MESSAGE,
+        ERROR
     }
 
     Type type;

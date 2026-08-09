@@ -20,6 +20,8 @@ on:
       - 'consilens-spi/**'
       - 'consilens-dist/**'
       - 'scripts/**'
+      - '.mvn/**'
+      - 'mvnw'
       - 'pom.xml'
   pull_request:
 
@@ -61,8 +63,8 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: maven
-      - name: Test on JDK ${{ matrix.java }}
-        run: ./mvnw -B test
+      - name: Package with regression tests on JDK ${{ matrix.java }}
+        run: ./mvnw -B package
 
   mcp:
     name: CI-MCP
