@@ -679,13 +679,18 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
 
     @Override
     public Map<List<Object>, String> querySegmentRowHashes(TableSegment segment) {
+        Map<List<Object>, String> rowHashes = new LinkedHashMap<>();
+        forEachSegmentRowHash(segment, rowHashes::put);
+        return rowHashes;
+    }
+
+    @Override
+    public void forEachSegmentRowHash(TableSegment segment, RowHashConsumer consumer) {
         try {
             String rowHashQuery = buildRowHashQuery(segment);
 
             log.debug("Executing row hash query for segment: {}, keys: {}", 
                     segment.getTablePath(), segment.getKeyColumns().size());
-
-            Map<List<Object>, String> rowHashes = new LinkedHashMap<>();
 
             try (Connection connection = getConnection();
                  PreparedStatement statement = connection.prepareStatement(rowHashQuery)) {
@@ -703,12 +708,11 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
 
                         // Extract row hash (last column)
                         String rowHash = resultSet.getString(resultSet.getMetaData().getColumnCount());
-                        rowHashes.put(primaryKey, rowHash);
+                        consumer.accept(primaryKey, rowHash);
                         rowCount++;
                     }
 
-                    log.debug("Retrieved {} row hashes for segment: {}", rowHashes.size(), segment.getTablePath());
-                    return rowHashes;
+                    log.debug("Retrieved {} row hashes for segment: {}", rowCount, segment.getTablePath());
                 }
             }
 

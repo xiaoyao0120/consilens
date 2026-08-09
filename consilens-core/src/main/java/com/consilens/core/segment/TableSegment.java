@@ -2,6 +2,7 @@ package com.consilens.core.segment;
 
 import com.consilens.core.database.adpter.DatabaseAdapter;
 import com.consilens.connector.api.model.TableSchema;
+import com.consilens.connector.api.model.DataType;
 import com.consilens.connector.api.model.TablePath;
 import lombok.Builder;
 
@@ -351,7 +352,7 @@ public class TableSegment {
                 Object minValue = minValues.get(0);
 
                 if (minValue != null) {
-                    whereBuilder.append(String.format("%s >= %s", column, formatValue(minValue)));
+                    whereBuilder.append(String.format("%s >= %s", column, formatValue(minValue, columnType(column))));
                 }
                 
                 // Always add maxKey condition if it exists (segment upper bound)
@@ -365,7 +366,7 @@ public class TableSegment {
                         whereBuilder.append(String.format("%s %s %s",
                                 column,
                                 upperBoundInclusive ? "<=" : "<",
-                                formatValue(maxValue)));
+                                formatValue(maxValue, columnType(column))));
                     }
                 }
             } else {
@@ -380,18 +381,18 @@ public class TableSegment {
                     // Add equality conditions for all previous keys
                     for (int j = 0; j < i; j++) {
                         lowerBound.append(String.format("%s = %s AND ", 
-                                keyColumns.get(j), formatValue(minValues.get(j))));
+                                keyColumns.get(j), formatValue(minValues.get(j), columnType(keyColumns.get(j)))));
                     }
                     
                     // Add comparison for current key
                     if (i == keyColumns.size() - 1) {
                         // Last key: use >=
                         lowerBound.append(String.format("%s >= %s", 
-                                keyColumns.get(i), formatValue(minValues.get(i))));
+                                keyColumns.get(i), formatValue(minValues.get(i), columnType(keyColumns.get(i)))));
                     } else {
                         // Not last key: use >
                         lowerBound.append(String.format("%s > %s", 
-                                keyColumns.get(i), formatValue(minValues.get(i))));
+                                keyColumns.get(i), formatValue(minValues.get(i), columnType(keyColumns.get(i)))));
                     }
                     
                     if (i > 0) {
@@ -416,14 +417,14 @@ public class TableSegment {
                         // Add equality conditions for all previous keys
                         for (int j = 0; j < i; j++) {
                             upperBound.append(String.format("%s = %s AND ", 
-                                    keyColumns.get(j), formatValue(maxValues.get(j))));
+                                    keyColumns.get(j), formatValue(maxValues.get(j), columnType(keyColumns.get(j)))));
                         }
                         
                         // Add comparison for current key.
                         upperBound.append(String.format("%s %s %s",
                                 keyColumns.get(i),
                                 (upperBoundInclusive && i == keyColumns.size() - 1) ? "<=" : "<",
-                                formatValue(maxValues.get(i))));
+                                formatValue(maxValues.get(i), columnType(keyColumns.get(i)))));
                         
                         if (i > 0) {
                             upperBound.append(")");
@@ -662,6 +663,64 @@ public class TableSegment {
         } else {
             throw new IllegalArgumentException("Unsupported key value type: " + value.getClass().getName());
         }
+    }
+
+    /**
+     * Format a value for SQL, quoting string literals unless the column type is numeric.
+     *
+     * <p>Without the type, "00123" or "1.5" strings would be emitted unquoted and a
+     * VARCHAR primary key would be compared through implicit conversion, which can
+     * shift segment boundaries or miss rows. When the schema is available the type
+     * decides; otherwise the legacy shape-based behavior is kept for drivers that
+     * return numeric columns as strings.
+     */
+    private String formatValue(Object value, DataType dataType) {
+        if (value instanceof String && dataType != null) {
+            if (isNumericType(dataType)) {
+                return value.toString();
+            }
+            if (isCharacterType(dataType)) {
+                return "'" + escapeSQL((String) value) + "'";
+            }
+        }
+        return formatValue(value);
+    }
+
+    private boolean isNumericType(DataType dataType) {
+        switch (dataType) {
+            case INTEGER:
+            case BIGINT:
+            case SMALLINT:
+            case TINYINT:
+            case DECIMAL:
+            case NUMERIC:
+            case FLOAT:
+            case DOUBLE:
+            case REAL:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private boolean isCharacterType(DataType dataType) {
+        switch (dataType) {
+            case VARCHAR:
+            case CHAR:
+            case TEXT:
+            case CLOB:
+            case LONGVARCHAR:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private DataType columnType(String columnName) {
+        if (schema == null || !schema.isPresent()) {
+            return null;
+        }
+        return schema.get().getColumnType(columnName);
     }
 
     /**

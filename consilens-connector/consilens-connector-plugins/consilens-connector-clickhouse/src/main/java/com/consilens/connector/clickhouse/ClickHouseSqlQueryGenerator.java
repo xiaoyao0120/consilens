@@ -105,8 +105,10 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
                 sql.append(" WHERE ").append(whereClause);
             }
 
-            // Order by pk_key to ensure deterministic ordering
-            sql.append(" ORDER BY pk_key LIMIT 10000000");
+            // Order by pk_key to ensure deterministic ordering. The huge LIMIT keeps
+            // the ORDER BY effective (ClickHouse may otherwise optimize it away) while
+            // never truncating a checksum for tables with more than ten million rows.
+            sql.append(" ORDER BY pk_key LIMIT 18446744073709551615");
             sql.append(") AS ordered");
             sql.append(") AS data");
         }

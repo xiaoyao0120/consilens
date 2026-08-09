@@ -35,5 +35,8 @@ consilens:
       storage-type: local-file
       local-base-dir: ./.consilens-server/artifacts
       max-content-bytes: 52428800
+    database:
+      allow-embedded: false
+      time-zone:
     api:
       max-request-body-bytes: 10485760

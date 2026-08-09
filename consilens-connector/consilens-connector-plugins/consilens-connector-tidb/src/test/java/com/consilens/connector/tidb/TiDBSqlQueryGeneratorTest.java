@@ -65,6 +65,8 @@ class TiDBSqlQueryGeneratorTest {
         assertTrue(sql.contains("MD5(GROUP_CONCAT"));
         assertTrue(sql.contains("CONCAT_WS"));
         assertTrue(sql.contains("ORDER BY"));
+        assertTrue(sql.contains("ORDER BY pk_key LIMIT 18446744073709551615"));
+        assertFalse(sql.contains("LIMIT 10000000"));
     }
 
     @Test

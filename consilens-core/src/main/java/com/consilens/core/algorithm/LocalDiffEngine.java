@@ -66,21 +66,17 @@ public class LocalDiffEngine {
         Map<List<Object>, List<Object[]>> rowsByPk1 = groupRowsByPrimaryKey(rows1, keyColumns1.size());
         Map<List<Object>, List<Object[]>> rowsByPk2 = groupRowsByPrimaryKey(rows2, keyColumns2.size());
 
-        // Find all unique primary keys
-        Set<List<Object>> allPks = new HashSet<>();
-        allPks.addAll(rowsByPk1.keySet());
-        allPks.addAll(rowsByPk2.keySet());
-
         List<DiffRow> differences = new ArrayList<>();
 
-        // Process each primary key
-        for (List<Object> pk : allPks) {
+        // Process keys from table1, then keys that only exist in table2, so we
+        // do not need a third full-size collection for all primary keys.
+        for (List<Object> pk : rowsByPk1.keySet()) {
             List<Object[]> pkRows1 = rowsByPk1.getOrDefault(pk, Collections.emptyList());
             List<Object[]> pkRows2 = rowsByPk2.getOrDefault(pk, Collections.emptyList());
 
-        // Extract relevant columns (excluding ignored columns)
-        List<Object[]> relevantRows1 = extractRelevantColumns(pkRows1, keyColumns1, extraColumns1);
-        List<Object[]> relevantRows2 = extractRelevantColumns(pkRows2, keyColumns2, extraColumns2);
+            // Extract relevant columns (excluding ignored columns)
+            List<Object[]> relevantRows1 = extractRelevantColumns(pkRows1, keyColumns1, extraColumns1);
+            List<Object[]> relevantRows2 = extractRelevantColumns(pkRows2, keyColumns2, extraColumns2);
 
             // Determine differences for this primary key
             List<String> columnNames1 = new ArrayList<>(keyColumns1);
@@ -89,6 +85,21 @@ public class LocalDiffEngine {
             columnNames2.addAll(extraColumns2);
             List<DiffRow> pkDifferences = findPrimaryKeyDifferences(pk, pkRows1, pkRows2, relevantRows1, relevantRows2,
                     columnNames1, columnNames2, columnTypes1, columnTypes2);
+            differences.addAll(pkDifferences);
+        }
+
+        for (List<Object> pk : rowsByPk2.keySet()) {
+            if (rowsByPk1.containsKey(pk)) {
+                continue;
+            }
+            List<Object[]> pkRows2 = rowsByPk2.get(pk);
+            List<Object[]> relevantRows2 = extractRelevantColumns(pkRows2, keyColumns2, extraColumns2);
+            List<String> columnNames1 = new ArrayList<>(keyColumns1);
+            columnNames1.addAll(extraColumns1);
+            List<String> columnNames2 = new ArrayList<>(keyColumns2);
+            columnNames2.addAll(extraColumns2);
+            List<DiffRow> pkDifferences = findPrimaryKeyDifferences(pk, Collections.emptyList(), pkRows2,
+                    Collections.emptyList(), relevantRows2, columnNames1, columnNames2, columnTypes1, columnTypes2);
             differences.addAll(pkDifferences);
         }
 

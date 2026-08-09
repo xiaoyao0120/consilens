@@ -1,13 +1,19 @@
 package com.consilens.core.segment;
 
 import com.consilens.core.database.adpter.DatabaseAdapter;
+import com.consilens.connector.api.model.ColumnInfo;
+import com.consilens.connector.api.model.DataType;
+import com.consilens.connector.api.model.TableSchema;
 import com.consilens.connector.api.model.TablePath;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.LocalDate;
+import java.util.Collections;
 import java.util.Arrays;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -216,6 +222,64 @@ public class TableSegmentTest {
 
         assertTrue(whereClause.contains("created >= DATE '2026-05-01'"));
         assertTrue(whereClause.contains("created < DATE '2026-05-31'"));
+    }
+
+    @Test
+    public void testBuildWhereClauseQuotesNumericLookingVarcharKey() {
+        Map<String, ColumnInfo> columns = new LinkedHashMap<>();
+        columns.put("code", column("code", DataType.VARCHAR));
+        TableSchema schema = TableSchema.of(TablePath.of("test_table"), columns);
+
+        TableSegment segment = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Collections.singletonList("code"))
+                .schema(Optional.of(schema))
+                .minKey(Optional.of(Collections.singletonList("00123")))
+                .maxKey(Optional.of(Collections.singletonList("00200")))
+                .build();
+
+        String whereClause = segment.buildWhereClause();
+
+        assertTrue(whereClause.contains("code >= '00123'"));
+        assertTrue(whereClause.contains("code < '00200'"));
+    }
+
+    @Test
+    public void testBuildWhereClauseUnquotesNumericKeyFromDriverString() {
+        Map<String, ColumnInfo> columns = new LinkedHashMap<>();
+        columns.put("id", column("id", DataType.BIGINT));
+        TableSchema schema = TableSchema.of(TablePath.of("test_table"), columns);
+
+        TableSegment segment = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Collections.singletonList("id"))
+                .schema(Optional.of(schema))
+                .minKey(Optional.of(Collections.singletonList("123")))
+                .maxKey(Optional.of(Collections.singletonList("456")))
+                .build();
+
+        String whereClause = segment.buildWhereClause();
+
+        assertTrue(whereClause.contains("id >= 123"));
+        assertTrue(whereClause.contains("id < 456"));
+        assertFalse(whereClause.contains("id >= '123'"));
+    }
+
+    private ColumnInfo column(String name, DataType type) {
+        return ColumnInfo.builder()
+                .name(name)
+                .type(type)
+                .nullable(true)
+                .ordinalPosition(1)
+                .precision(Optional.empty())
+                .scale(Optional.empty())
+                .maxLength(Optional.empty())
+                .defaultValue(Optional.empty())
+                .collation(Optional.empty())
+                .primaryKey(false)
+                .uniqueKey(false)
+                .comment(Optional.empty())
+                .build();
     }
 
     @Test

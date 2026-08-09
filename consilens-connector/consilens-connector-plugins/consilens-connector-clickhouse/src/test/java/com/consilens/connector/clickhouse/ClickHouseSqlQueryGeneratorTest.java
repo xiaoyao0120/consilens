@@ -65,6 +65,8 @@ class ClickHouseSqlQueryGeneratorTest {
         assertTrue(sql.contains("MD5"));
         assertTrue(sql.contains("arrayStringConcat"));
         assertTrue(sql.contains("groupArray"));
+        assertTrue(sql.contains("ORDER BY pk_key LIMIT 18446744073709551615"));
+        assertFalse(sql.contains("LIMIT 10000000"));
     }
 
     @Test

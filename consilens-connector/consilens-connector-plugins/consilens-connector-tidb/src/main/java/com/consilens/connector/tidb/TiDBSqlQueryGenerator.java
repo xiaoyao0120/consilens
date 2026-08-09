@@ -100,8 +100,10 @@ public class TiDBSqlQueryGenerator extends BaseSqlQueryGenerator {
                 sql.append(" WHERE ").append(whereClause);
             }
 
-            // ORDER BY in subquery requires LIMIT to be enforced by optimizer
-            sql.append(" ORDER BY pk_key LIMIT 10000000");
+            // ORDER BY in subquery requires LIMIT to be enforced by optimizer.
+            // The unsigned-bigint cap keeps ORDER BY effective without truncating
+            // checksums on tables larger than ten million rows.
+            sql.append(" ORDER BY pk_key LIMIT 18446744073709551615");
             sql.append(") AS ordered");
             sql.append(") AS data");
         }

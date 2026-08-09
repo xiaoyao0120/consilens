@@ -64,6 +64,15 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     }
 
     @Override
+    public boolean renewRunning(Long taskId, LocalDateTime now) {
+        return update(new UpdateWrapper<TaskEntity>().lambda()
+                .set(TaskEntity::getStartTime, now)
+                .set(TaskEntity::getUpdatedAt, now)
+                .eq(TaskEntity::getId, taskId)
+                .eq(TaskEntity::getStatus, TaskStatus.RUNNING));
+    }
+
+    @Override
     public boolean updateSuccess(Long taskId, String artifactId, LocalDateTime now) {
         return update(new UpdateWrapper<TaskEntity>().lambda()
                 .set(TaskEntity::getStatus, TaskStatus.SUCCEEDED)
@@ -188,5 +197,17 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
             wrapper.lambda().notIn(TaskEntity::getExecuteNodeKey, executeNodeKeys);
         }
         return list(wrapper);
+    }
+
+    @Override
+    public List<TaskEntity> listStaleRunning(LocalDateTime before, int limit) {
+        if (limit <= 0) {
+            return List.of();
+        }
+        return list(new QueryWrapper<TaskEntity>().lambda()
+                .eq(TaskEntity::getStatus, TaskStatus.RUNNING)
+                .lt(TaskEntity::getStartTime, before)
+                .orderByAsc(TaskEntity::getStartTime)
+                .last("LIMIT " + limit));
     }
 }

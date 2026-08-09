@@ -43,6 +43,7 @@ public class ConsilensServerProperties {
     @Data
     public static class Database {
         private boolean allowEmbedded = false;
+        private String timeZone = "";
     }
 
     @Data

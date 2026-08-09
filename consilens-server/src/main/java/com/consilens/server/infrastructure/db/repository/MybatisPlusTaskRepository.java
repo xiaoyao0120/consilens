@@ -61,6 +61,11 @@ public class MybatisPlusTaskRepository implements TaskRepository {
     }
 
     @Override
+    public boolean renewRunning(Long taskId, Instant now) {
+        return taskService.renewRunning(taskId, DbTimeSupport.toLocalDateTime(now));
+    }
+
+    @Override
     public boolean updateSuccess(Long taskId, String artifactId, Instant now) {
         return taskService.updateSuccess(taskId, artifactId, DbTimeSupport.toLocalDateTime(now));
     }
@@ -140,6 +145,13 @@ public class MybatisPlusTaskRepository implements TaskRepository {
                                                                 Set<String> executeNodeKeys,
                                                                 int limit) {
         return taskService.listByStatusesExcludingExecuteNodes(statuses, executeNodeKeys, limit).stream()
+                .map(this::toRecord)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public List<TaskRecord> listStaleRunning(Instant before, int limit) {
+        return taskService.listStaleRunning(DbTimeSupport.toLocalDateTime(before), limit).stream()
                 .map(this::toRecord)
                 .collect(Collectors.toList());
     }
