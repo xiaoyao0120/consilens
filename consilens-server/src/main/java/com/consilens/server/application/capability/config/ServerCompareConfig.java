@@ -1,5 +1,6 @@
 package com.consilens.server.application.capability.config;
 
+import com.consilens.sink.api.model.ResultConfig;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -36,4 +37,7 @@ public class ServerCompareConfig {
 
     @Builder.Default
     private Map<String, Object> executionOptions = new LinkedHashMap<>();
+
+    @Builder.Default
+    private ResultConfig result = new ResultConfig();
 }

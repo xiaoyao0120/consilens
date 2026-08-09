@@ -2,11 +2,14 @@ package com.consilens.cli.ai.runtime;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.regex.Pattern;
 
 /**
  * Filesystem layout for the CLI-backed AI runtime.
  */
 public class AiRuntimePaths {
+
+    private static final Pattern SAFE_SESSION_ID = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,63}");
 
     private final Path baseDir;
     private final Path installHome;
@@ -53,7 +56,7 @@ public class AiRuntimePaths {
     }
 
     public Path sessionArtifactDir(String sessionId) {
-        return artifactsDir().resolve(sessionId);
+        return artifactsDir().resolve(requireSafeSessionId(sessionId));
     }
 
     public Path runsDir() {
@@ -61,11 +64,18 @@ public class AiRuntimePaths {
     }
 
     public Path sessionRunDir(String sessionId) {
-        return runsDir().resolve(sessionId);
+        return runsDir().resolve(requireSafeSessionId(sessionId));
     }
 
     public Path latestRunFile(String sessionId) {
         return sessionRunDir(sessionId).resolve("latest.json");
+    }
+
+    static String requireSafeSessionId(String sessionId) {
+        if (sessionId == null || !SAFE_SESSION_ID.matcher(sessionId).matches()) {
+            throw new IllegalArgumentException("Invalid sessionId");
+        }
+        return sessionId;
     }
 
     /**

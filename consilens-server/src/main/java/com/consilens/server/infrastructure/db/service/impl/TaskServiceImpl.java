@@ -66,7 +66,6 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     @Override
     public boolean renewRunning(Long taskId, LocalDateTime now) {
         return update(new UpdateWrapper<TaskEntity>().lambda()
-                .set(TaskEntity::getStartTime, now)
                 .set(TaskEntity::getUpdatedAt, now)
                 .eq(TaskEntity::getId, taskId)
                 .eq(TaskEntity::getStatus, TaskStatus.RUNNING));
@@ -167,6 +166,29 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
     }
 
     @Override
+    public boolean requestCancellation(Long taskId, LocalDateTime now) {
+        return update(new UpdateWrapper<TaskEntity>().lambda()
+                .set(TaskEntity::getStatus, TaskStatus.CANCEL_REQUESTED)
+                .set(TaskEntity::getErrorCode, "CANCEL_REQUESTED")
+                .set(TaskEntity::getErrorMessage, "Cancellation requested by API request")
+                .set(TaskEntity::getUpdatedAt, now)
+                .eq(TaskEntity::getId, taskId)
+                .eq(TaskEntity::getStatus, TaskStatus.RUNNING));
+    }
+
+    @Override
+    public boolean confirmCancellation(Long taskId, LocalDateTime now) {
+        return update(new UpdateWrapper<TaskEntity>().lambda()
+                .set(TaskEntity::getStatus, TaskStatus.CANCELLED)
+                .set(TaskEntity::getErrorCode, "CANCELLED")
+                .set(TaskEntity::getErrorMessage, "Cancelled after execution stopped")
+                .set(TaskEntity::getEndTime, now)
+                .set(TaskEntity::getUpdatedAt, now)
+                .eq(TaskEntity::getId, taskId)
+                .eq(TaskEntity::getStatus, TaskStatus.CANCEL_REQUESTED));
+    }
+
+    @Override
     public List<TaskEntity> listByExecuteNodeAndStatuses(String executeNodeKey,
                                                          Collection<TaskStatus> statuses,
                                                          int limit) {
@@ -206,8 +228,8 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         }
         return list(new QueryWrapper<TaskEntity>().lambda()
                 .eq(TaskEntity::getStatus, TaskStatus.RUNNING)
-                .lt(TaskEntity::getStartTime, before)
-                .orderByAsc(TaskEntity::getStartTime)
+                .lt(TaskEntity::getUpdatedAt, before)
+                .orderByAsc(TaskEntity::getUpdatedAt)
                 .last("LIMIT " + limit));
     }
 }

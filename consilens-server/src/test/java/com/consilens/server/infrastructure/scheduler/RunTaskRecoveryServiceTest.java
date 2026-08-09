@@ -179,6 +179,34 @@ class RunTaskRecoveryServiceTest {
     }
 
     @Test
+    void shouldNotConfirmCancellationOnlyBecauseExecutionNodeIsUnavailable() {
+        TaskRepository taskRepository = mock(TaskRepository.class);
+        TaskCommandRepository taskCommandRepository = mock(TaskCommandRepository.class);
+        RunTaskCommandEnqueueService runTaskCommandEnqueueService = mock(RunTaskCommandEnqueueService.class);
+        ServerNodeQueryService serverNodeQueryService = mock(ServerNodeQueryService.class);
+        ServerTopologyService serverTopologyService = mock(ServerTopologyService.class);
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        Instant now = Instant.now();
+        when(serverNodeQueryService.listAliveNodes()).thenReturn(List.of());
+        when(taskRepository.listByStatusesExcludingExecuteNodes(
+                eq(List.of(TaskStatus.CLAIMED, TaskStatus.RUNNING)),
+                any(),
+                eq(properties.getScheduler().getRecoveryBatchSize())))
+                .thenReturn(List.of());
+
+        RunTaskRecoveryService recoveryService = new RunTaskRecoveryService(taskRepository,
+                taskCommandRepository,
+                runTaskCommandEnqueueService,
+                serverNodeQueryService,
+                serverTopologyService,
+                properties);
+
+        recoveryService.recoverTasksOnDeadNodes(now);
+
+        verify(taskRepository, never()).confirmCancellation(anyLong(), any());
+    }
+
+    @Test
     void shouldDrainAllClaimedCommandsDuringStartupRecovery() {
         TaskRepository taskRepository = mock(TaskRepository.class);
         TaskCommandRepository taskCommandRepository = mock(TaskCommandRepository.class);

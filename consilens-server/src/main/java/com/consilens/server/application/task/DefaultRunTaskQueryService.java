@@ -58,7 +58,9 @@ public class DefaultRunTaskQueryService implements RunTaskQueryService {
                 || task.getStatus() == TaskStatus.CANCELLED) {
             return List.of("retry");
         }
-        if (task.getStatus() == TaskStatus.PENDING || task.getStatus() == TaskStatus.CLAIMED) {
+        if (task.getStatus() == TaskStatus.PENDING
+                || task.getStatus() == TaskStatus.CLAIMED
+                || task.getStatus() == TaskStatus.RUNNING) {
             return List.of("cancel");
         }
         return List.of();

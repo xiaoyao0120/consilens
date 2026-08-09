@@ -97,6 +97,6 @@ public class FileAiSessionStore implements AiSessionStore {
     }
 
     private Path sessionFile(String sessionId) {
-        return paths.sessionsDir().resolve(sessionId + ".json");
+        return paths.sessionsDir().resolve(AiRuntimePaths.requireSafeSessionId(sessionId) + ".json");
     }
 }

@@ -47,6 +47,11 @@
 
         <dependency>
             <groupId>com.consilens</groupId>
+            <artifactId>consilens-sink-all</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.consilens</groupId>
             <artifactId>consilens-connector-all</artifactId>
         </dependency>
 
