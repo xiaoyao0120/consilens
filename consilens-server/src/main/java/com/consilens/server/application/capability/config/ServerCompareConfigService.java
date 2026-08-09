@@ -18,6 +18,7 @@ import com.consilens.server.domain.exception.InvalidInputException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -25,6 +26,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -33,12 +36,16 @@ public class ServerCompareConfigService {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<Map<String, Object>>() {
     };
 
+    private static final Pattern ENV_PLACEHOLDER = Pattern.compile("\\$\\{env\\.([^}]+)}");
+
     private final ArtifactService artifactService;
     private final ObjectMapper objectMapper;
+    private final ObjectMapper yamlMapper;
 
     public ServerCompareConfigService(ArtifactService artifactService, ObjectMapper objectMapper) {
         this.artifactService = artifactService;
         this.objectMapper = objectMapper;
+        this.yamlMapper = new ObjectMapper(new YAMLFactory());
     }
 
     public ServerCompareConfig fromPlanRequest(PlanRequest request) {
@@ -71,6 +78,15 @@ public class ServerCompareConfigService {
             return fromArtifact(request.getConfigArtifactId());
         }
         return fromContent(request.getConfigContent());
+    }
+
+    public ServerCompareConfig fromRunRequest(RunRequest request) {
+        boolean hasArtifact = request.getConfigArtifactId() != null && !request.getConfigArtifactId().isBlank();
+        boolean hasContent = request.getConfigContent() != null && !isBlankString(request.getConfigContent());
+        if (hasArtifact == hasContent) {
+            throw new InvalidInputException("configArtifactId and configContent must contain exactly one value");
+        }
+        return hasArtifact ? fromArtifact(request.getConfigArtifactId()) : fromContent(request.getConfigContent());
     }
 
     public ServerCompareConfig fromArtifact(String artifactId) {
@@ -158,13 +174,161 @@ public class ServerCompareConfigService {
         if (content == null || content.isBlank()) {
             throw new InvalidInputException("configContent cannot be blank");
         }
+        Map<String, Object> raw;
         try {
-            ServerCompareConfig config = objectMapper.readValue(content, ServerCompareConfig.class);
+            raw = yamlMapper.readValue(content, MAP_TYPE);
+        } catch (JsonProcessingException exception) {
+            throw new InvalidInputException("configContent is not valid YAML or JSON");
+        }
+
+        if (isCliConfig(raw)) {
+            return fromCliConfig(resolveEnvironment(raw));
+        }
+
+        ServerCompareConfig config;
+        try {
+            config = objectMapper.convertValue(raw, ServerCompareConfig.class);
             validate(config);
             return config;
-        } catch (JsonProcessingException exception) {
+        } catch (IllegalArgumentException exception) {
             throw new InvalidInputException("configContent is not valid server config JSON");
         }
+    }
+
+    private boolean isCliConfig(Map<String, Object> raw) {
+        Map<String, Object> comparison = raw.get("comparison") instanceof Map
+                ? (Map<String, Object>) raw.get("comparison") : Map.of();
+        Map<String, Object> source = raw.get("source") instanceof Map
+                ? (Map<String, Object>) raw.get("source") : Map.of();
+        Map<String, Object> target = raw.get("target") instanceof Map
+                ? (Map<String, Object>) raw.get("target") : Map.of();
+        return source.containsKey("resource")
+                || target.containsKey("resource")
+                || comparison.get("keys") instanceof Map
+                || comparison.get("fields") instanceof Map;
+    }
+
+    private ServerCompareConfig fromCliConfig(Map<String, Object> raw) {
+        Map<String, Object> sourceMap = mapFrom(raw.get("source"));
+        Map<String, Object> targetMap = mapFrom(raw.get("target"));
+        if (sourceMap.isEmpty() || targetMap.isEmpty()) {
+            throw new InvalidInputException("config.source and config.target are required");
+        }
+        Map<String, Object> comparison = mapFrom(raw.get("comparison"));
+        Map<String, Object> strategy = mapFrom(raw.get("strategy"));
+        Map<String, Object> executionOptions = new LinkedHashMap<>();
+        putIfPresent(executionOptions, "bisectionFactor", strategy.get("bisectionFactor"));
+        putIfPresent(executionOptions, "bisectionThreshold", strategy.get("bisectionThreshold"));
+        putIfPresent(executionOptions, "enableProfiling", strategy.get("enableProfiling"));
+        putIfPresent(executionOptions, "checksumAlgorithm", strategy.get("algorithm"));
+        ServerCompareConfig config = ServerCompareConfig.builder()
+                .source(endpointFromCli("source", sourceMap, comparison))
+                .target(endpointFromCli("target", targetMap, comparison))
+                .keys(cliKeys(comparison))
+                .comparison(ComparisonConfig.builder()
+                        .fields(cliFields(comparison))
+                        .ignoreColumns(cliIgnoreColumns(comparison))
+                        .build())
+                .executionOptions(executionOptions)
+                .build();
+        validate(config);
+        return config;
+    }
+
+    private EndpointConfig endpointFromCli(String side, Map<String, Object> endpoint, Map<String, Object> comparison) {
+        Map<String, Object> resource = mapFrom(endpoint.get("resource"));
+        String resourceType = string(resource.get("type"));
+        String resourceName = string(resource.get("name"));
+        String query = string(resource.get("query"));
+        if (isBlank(query) && "sql".equals(resourceType)) {
+            query = resourceName;
+        }
+        String table = isBlank(resourceType) || "table".equals(resourceType) ? resourceName : null;
+        Map<String, Object> filters = mapFrom(comparison.get("filters"));
+        return EndpointConfig.builder()
+                .type(string(endpoint.get("type")))
+                .table(table)
+                .query(query)
+                .filter(string(filters.get(side)))
+                .connection(mapFrom(endpoint.get("connection")))
+                .readOptions(mapFrom(endpoint.get("readOptions")))
+                .build();
+    }
+
+    private List<String> cliKeys(Map<String, Object> comparison) {
+        Map<String, Object> keys = mapFrom(comparison.get("keys"));
+        List<String> result = listFrom(keys.get("source"));
+        if (result.isEmpty()) {
+            result = listFrom(keys.get("target"));
+        }
+        return result;
+    }
+
+    private List<String> cliFields(Map<String, Object> comparison) {
+        Map<String, Object> fields = mapFrom(comparison.get("fields"));
+        List<String> result = new ArrayList<>(listFrom(fields.get("source")));
+        for (String field : listFrom(fields.get("target"))) {
+            if (!result.contains(field)) {
+                result.add(field);
+            }
+        }
+        return result;
+    }
+
+    private List<String> cliIgnoreColumns(Map<String, Object> comparison) {
+        Map<String, Object> exclude = mapFrom(comparison.get("exclude"));
+        List<String> result = new ArrayList<>(listFrom(exclude.get("source")));
+        for (String column : listFrom(exclude.get("target"))) {
+            if (!result.contains(column)) {
+                result.add(column);
+            }
+        }
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> resolveEnvironment(Map<String, Object> raw) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> entry : raw.entrySet()) {
+            result.put(entry.getKey(), resolveEnvironmentValue(entry.getValue()));
+        }
+        return result;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Object resolveEnvironmentValue(Object value) {
+        if (value instanceof Map) {
+            return resolveEnvironment((Map<String, Object>) value);
+        }
+        if (value instanceof List) {
+            List<Object> result = new ArrayList<>();
+            for (Object item : (List<Object>) value) {
+                result.add(resolveEnvironmentValue(item));
+            }
+            return result;
+        }
+        if (value instanceof String) {
+            return resolveEnvironmentPlaceholders((String) value);
+        }
+        return value;
+    }
+
+    private String resolveEnvironmentPlaceholders(String value) {
+        Matcher matcher = ENV_PLACEHOLDER.matcher(value);
+        if (!matcher.find()) {
+            return value;
+        }
+        matcher.reset();
+        StringBuffer resolved = new StringBuffer();
+        while (matcher.find()) {
+            String replacement = System.getenv(matcher.group(1));
+            if (replacement == null) {
+                replacement = matcher.group(0);
+            }
+            matcher.appendReplacement(resolved, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(resolved);
+        return resolved.toString();
     }
 
     private EndpointConfig endpoint(String side, PlanRequest.Endpoint endpoint, Map<String, Object> hints) {

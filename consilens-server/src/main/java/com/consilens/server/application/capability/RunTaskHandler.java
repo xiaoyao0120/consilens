@@ -41,7 +41,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
     public TaskExecutionResult handle(TaskExecutionContext context, RunRequest request) {
         Instant startedAt = Instant.now();
         try {
-            ServerCompareConfig config = configService.fromArtifact(request.getConfigArtifactId());
+            ServerCompareConfig config = configService.fromRunRequest(request);
             if (Boolean.TRUE.equals(options(request).getDryRun())) {
                 return writeSuccess(context, request, startedAt, true, configService.validateContent(config));
             }

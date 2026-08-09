@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mock;
 
@@ -48,6 +49,83 @@ class ServerCompareConfigServiceTest {
                 .build();
 
         assertThrows(InvalidInputException.class, () -> service.toCompareRequest(config, new RunRequest.Options()));
+    }
+
+    @Test
+    void shouldParseCliConfigFileStringIntoServerConfig() {
+        ServerCompareConfigService service = new ServerCompareConfigService(mock(ArtifactService.class),
+                new ObjectMapper());
+        RunRequest request = new RunRequest();
+        request.setSerialNo("serial-1");
+        request.setConfigContent("source:\n"
+                + "  type: mysql\n"
+                + "  connection:\n"
+                + "    url: jdbc:mysql://localhost/test\n"
+                + "    username: demo\n"
+                + "    password: demo\n"
+                + "  resource:\n"
+                + "    type: table\n"
+                + "    name: orders\n"
+                + "target:\n"
+                + "  type: postgresql\n"
+                + "  connection:\n"
+                + "    url: jdbc:postgresql://localhost/test\n"
+                + "    username: demo\n"
+                + "    password: demo\n"
+                + "  resource:\n"
+                + "    type: table\n"
+                + "    name: orders\n"
+                + "comparison:\n"
+                + "  keys:\n"
+                + "    source: [id]\n"
+                + "    target: [id]\n"
+                + "  fields:\n"
+                + "    source: [name, amount]\n"
+                + "    target: [name, amount]\n"
+                + "  filters:\n"
+                + "    source: \"id > 0\"\n"
+                + "    target: \"id > 0\"");
+
+        ServerCompareConfig config = service.fromRunRequest(request);
+
+        assertThat(config.getSource().getType()).isEqualTo("mysql");
+        assertThat(config.getSource().getTable()).isEqualTo("orders");
+        assertThat(config.getSource().getFilter()).isEqualTo("id > 0");
+        assertThat(config.getSource().getConnection()).containsEntry("url", "jdbc:mysql://localhost/test");
+        assertThat(config.getTarget().getType()).isEqualTo("postgresql");
+        assertThat(config.getKeys()).containsExactly("id");
+        assertThat(config.getComparison().getFields()).containsExactly("name", "amount");
+    }
+
+    @Test
+    void shouldRejectCliConfigFileWithoutTarget() {
+        ServerCompareConfigService service = new ServerCompareConfigService(mock(ArtifactService.class),
+                new ObjectMapper());
+        RunRequest request = new RunRequest();
+        request.setSerialNo("serial-1");
+        request.setConfigContent("source:\n"
+                + "  type: mysql\n"
+                + "  resource:\n"
+                + "    type: table\n"
+                + "    name: orders\n"
+                + "comparison:\n"
+                + "  keys:\n"
+                + "    source: [id]\n"
+                + "    target: [id]");
+
+        assertThrows(InvalidInputException.class, () -> service.fromRunRequest(request));
+    }
+
+    @Test
+    void shouldRejectRunRequestWithBothArtifactAndContent() {
+        ServerCompareConfigService service = new ServerCompareConfigService(mock(ArtifactService.class),
+                new ObjectMapper());
+        RunRequest request = new RunRequest();
+        request.setSerialNo("serial-1");
+        request.setConfigArtifactId("artifact-config");
+        request.setConfigContent("source: {}");
+
+        assertThrows(InvalidInputException.class, () -> service.fromRunRequest(request));
     }
 
     private PlanRequest.Endpoint endpoint(String type, String table) {
