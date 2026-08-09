@@ -19,6 +19,9 @@ import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import java.time.Instant;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
@@ -32,7 +35,9 @@ public class RunTaskExecuteManager {
     private final ServerTopologyService serverTopologyService;
     private final RunTaskRecoveryService runTaskRecoveryService;
     private final ObjectMapper objectMapper;
+    private final ConsilensServerProperties properties;
     private final ThreadPoolExecutor executorService;
+    private final ScheduledExecutorService heartbeatScheduler;
 
     public RunTaskExecuteManager(TaskRepository taskRepository,
                                  ServerCapabilityFacade serverCapabilityFacade,
@@ -45,6 +50,7 @@ public class RunTaskExecuteManager {
         this.serverTopologyService = serverTopologyService;
         this.runTaskRecoveryService = runTaskRecoveryService;
         this.objectMapper = objectMapper;
+        this.properties = properties;
         int executeThreads = Math.max(properties.getScheduler().getExecuteThreads(), 1);
         int queueCapacity = Math.max(properties.getScheduler().getExecuteQueueCapacity(), 1);
         this.executorService = new ThreadPoolExecutor(executeThreads,
@@ -53,7 +59,9 @@ public class RunTaskExecuteManager {
                 TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<>(queueCapacity),
                 new SchedulerThreadFactory("run-task-execute-"),
-                new ThreadPoolExecutor.AbortPolicy());
+                new ThreadPoolExecutor.CallerRunsPolicy());
+        this.heartbeatScheduler = Executors.newSingleThreadScheduledExecutor(
+                new SchedulerThreadFactory("run-task-heartbeat-"));
     }
 
     @PostConstruct
@@ -64,6 +72,7 @@ public class RunTaskExecuteManager {
     @PreDestroy
     public void stop() {
         executorService.shutdownNow();
+        heartbeatScheduler.shutdownNow();
     }
 
     public void addExecuteCommand(TaskCommandRecord command) {
@@ -81,15 +90,20 @@ public class RunTaskExecuteManager {
             if (!taskRepository.updateRunning(task.getId(), serverTopologyService.currentNodeKey(), startTime)) {
                 return;
             }
+            ScheduledFuture<?> heartbeat = startHeartbeat(task);
             RunRequest runRequest = objectMapper.readValue(task.getRequestPayload(), RunRequest.class);
-            ArtifactRefDto artifact = serverCapabilityFacade.run(runRequest, TaskExecutionContext.builder()
-                    .taskKey(task.getTaskKey())
-                    .taskId(task.getId())
-                    .traceId(task.getTraceId())
-                    .nodeKey(serverTopologyService.currentNodeKey())
-                    .startTime(startTime)
-                    .build());
-            taskRepository.updateSuccess(task.getId(), artifact.getId(), Instant.now());
+            try {
+                ArtifactRefDto artifact = serverCapabilityFacade.run(runRequest, TaskExecutionContext.builder()
+                        .taskKey(task.getTaskKey())
+                        .taskId(task.getId())
+                        .traceId(task.getTraceId())
+                        .nodeKey(serverTopologyService.currentNodeKey())
+                        .startTime(startTime)
+                        .build());
+                taskRepository.updateSuccess(task.getId(), artifact.getId(), Instant.now());
+            } finally {
+                heartbeat.cancel(false);
+            }
         } catch (CapabilityExecutionException exception) {
             if (exception.isRetryable()) {
                 runTaskRecoveryService.retryOrFail(task,
@@ -106,5 +120,20 @@ public class RunTaskExecuteManager {
             log.warn("Failed to dispatch run task {}", task.getTaskKey(), exception);
             runTaskRecoveryService.retryOrFail(task, "RUN_DISPATCH_ERROR", exception.getMessage(), Instant.now());
         }
+    }
+
+    /**
+     * Renew the task start time periodically so the recovery guard treats a
+     * long-running comparison as alive and only reclaims tasks whose heartbeat
+     * actually stopped.
+     */
+    private ScheduledFuture<?> startHeartbeat(TaskRecord task) {
+        long leaseSeconds = Math.max(properties.getScheduler().getClaimLeaseSeconds(), 1L);
+        long heartbeatIntervalSeconds = Math.max(leaseSeconds / 3, 1L);
+        return heartbeatScheduler.scheduleAtFixedRate(
+                () -> taskRepository.renewRunning(task.getId(), Instant.now()),
+                heartbeatIntervalSeconds,
+                heartbeatIntervalSeconds,
+                TimeUnit.SECONDS);
     }
 }

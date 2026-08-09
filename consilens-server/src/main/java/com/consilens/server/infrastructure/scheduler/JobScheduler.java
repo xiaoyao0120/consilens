@@ -78,6 +78,7 @@ public class JobScheduler extends Thread {
                     startupRecovered = true;
                 }
                 runTaskRecoveryService.recoverExpiredClaims(now);
+                runTaskRecoveryService.recoverStaleRunningTasks(now);
 
                 ServerTopologySnapshot snapshot = topologyService.snapshot();
                 if (!snapshot.isDispatchable()) {

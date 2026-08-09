@@ -53,8 +53,16 @@ public class RunTaskRecoveryService {
     public void recoverCurrentNodeStartupTasks(Instant now) {
         String currentNodeKey = serverTopologyService.currentNodeKey();
         int limit = properties.getScheduler().getRecoveryBatchSize();
-        taskCommandRepository.listClaimedByExecuteNode(currentNodeKey, limit)
-                .forEach(command -> releaseCommandAndClaimedTask(command, now));
+        // Keep draining until this batch is empty so more than recoveryBatchSize
+        // commands on a busy node are not left waiting for lease expiry.
+        int rounds = 0;
+        while (rounds++ < MAX_STARTUP_RECOVERY_ROUNDS) {
+            List<TaskCommandRecord> claimed = taskCommandRepository.listClaimedByExecuteNode(currentNodeKey, limit);
+            if (claimed.isEmpty()) {
+                break;
+            }
+            claimed.forEach(command -> releaseCommandAndClaimedTask(command, now));
+        }
         taskRepository.listByExecuteNodeAndStatuses(currentNodeKey, RECOVERABLE_STATUSES, limit)
                 .forEach(task -> retryOrFail(task, "NODE_RESTARTED", "Execution node restarted before task completed", now));
     }
@@ -63,6 +71,14 @@ public class RunTaskRecoveryService {
     public void recoverExpiredClaims(Instant now) {
         taskCommandRepository.listExpiredClaims(now, properties.getScheduler().getRecoveryBatchSize())
                 .forEach(command -> releaseCommandAndClaimedTask(command, now));
+    }
+
+    @Transactional
+    public void recoverStaleRunningTasks(Instant now) {
+        long staleAfterSeconds = properties.getScheduler().getClaimLeaseSeconds() * 3L;
+        taskRepository.listStaleRunning(now.minusSeconds(staleAfterSeconds),
+                        properties.getScheduler().getRecoveryBatchSize())
+                .forEach(task -> retryOrFail(task, "EXECUTE_HEARTBEAT_LOST", "Execution heartbeat expired", now));
     }
 
     @Transactional
@@ -125,4 +141,6 @@ public class RunTaskRecoveryService {
                 : task.getMaxRetryCount();
         return retryCount < maxRetryCount;
     }
+
+    private static final int MAX_STARTUP_RECOVERY_ROUNDS = 10;
 }

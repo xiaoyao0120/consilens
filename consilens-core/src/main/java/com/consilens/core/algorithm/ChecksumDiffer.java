@@ -43,6 +43,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     private final AtomicLong segmentSequence = new AtomicLong(0);
     private final Map<DatabaseAdapter, TableSegmenter> segmenterCache = new ConcurrentHashMap<>();
     private final SegmentPermitController activeSegmentBudget;
+    private static final int KEY_QUERY_BATCH_SIZE = 500;
 
     /**
      * Creates a new ChecksumDiffer with the given configuration.
@@ -561,118 +562,133 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             log.debug("Using row-hash based comparison for segment: {}", segmentId);
             Map<String, DataType> columnTypes1 = extractColumnTypes(table1);
             Map<String, DataType> columnTypes2 = extractColumnTypes(table2);
-            RowHashSide hashes1 = indexRowHashes(table1, table1.getRowHashes(), columnTypes1);
-            RowHashSide hashes2 = indexRowHashes(table2, table2.getRowHashes(), columnTypes2);
-            return new RowHashSnapshot(hashes1, hashes2);
+
+            // Only one side is fully indexed in memory; the other side is streamed and
+            // matched incrementally so large segments do not hold both hash maps at once.
+            RowHashSide index1 = new RowHashSide();
+            table1.getDatabase().forEachSegmentRowHash(table1, (rawKey, hash) -> {
+                List<Object> normalizedKey = normalizeKeyValues(rawKey, table1.getKeyColumns(), columnTypes1);
+                index1.put(normalizedKey, rawKey, hash);
+            });
+
+            Set<List<Object>> keysOnlyInTable2 = new HashSet<>();
+            Map<List<Object>, List<Object>> rawKeysOnlyInTable2 = new HashMap<>();
+            Set<List<Object>> mismatchedKeys = new HashSet<>();
+            Map<List<Object>, List<Object>> rawKeysMismatchedIn1 = new HashMap<>();
+            Map<List<Object>, List<Object>> rawKeysMismatchedIn2 = new HashMap<>();
+            Map<List<Object>, String> mismatchHashesIn1 = new HashMap<>();
+            Map<List<Object>, String> mismatchHashesIn2 = new HashMap<>();
+
+            long[] table2RowCount = new long[1];
+            table2.getDatabase().forEachSegmentRowHash(table2, (rawKey2, hash2) -> {
+                table2RowCount[0]++;
+                List<Object> normalizedKey = normalizeKeyValues(rawKey2, table2.getKeyColumns(), columnTypes2);
+                RowHashEntry entry1 = index1.remove(normalizedKey);
+                if (entry1 == null) {
+                    keysOnlyInTable2.add(normalizedKey);
+                    rawKeysOnlyInTable2.put(normalizedKey, rawKey2);
+                } else if (!entry1.hash.equals(hash2)) {
+                    mismatchedKeys.add(normalizedKey);
+                    rawKeysMismatchedIn1.put(normalizedKey, entry1.rawKey);
+                    rawKeysMismatchedIn2.put(normalizedKey, rawKey2);
+                    mismatchHashesIn1.put(normalizedKey, entry1.hash);
+                    mismatchHashesIn2.put(normalizedKey, hash2);
+                }
+            });
+
+            Map<List<Object>, List<Object>> rawKeysOnlyInTable1 = index1.remainingRawKeys();
+            Set<List<Object>> keysOnlyInTable1 = new HashSet<>(rawKeysOnlyInTable1.keySet());
+
+            int totalDifferences = keysOnlyInTable1.size() + keysOnlyInTable2.size() + mismatchedKeys.size();
+            log.info("Hash comparison found {} differences: {} only in table1, {} only in table2, {} mismatched",
+                    totalDifferences, keysOnlyInTable1.size(), keysOnlyInTable2.size(), mismatchedKeys.size());
+
+            // Log first few mismatched keys for diagnosis
+            if (!mismatchedKeys.isEmpty()) {
+                int debugCount = 0;
+                for (List<Object> key : mismatchedKeys) {
+                    if (debugCount++ < 5) {
+                        log.debug("Hash mismatch for key {}: source_hash={}, target_hash={}",
+                                key, mismatchHashesIn1.get(key), mismatchHashesIn2.get(key));
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            return new RowHashSnapshot(keysOnlyInTable1, rawKeysOnlyInTable1,
+                    keysOnlyInTable2, rawKeysOnlyInTable2,
+                    mismatchedKeys, rawKeysMismatchedIn1, rawKeysMismatchedIn2,
+                    index1.total(), table2RowCount[0], columnTypes1, columnTypes2);
         }, executorProvider.getIoExecutor())
                 .thenApplyAsync(snapshot -> {
-                    Set<List<Object>> keysOnlyInTable1 = new HashSet<>(snapshot.table1.hashesByKey.keySet());
-                    keysOnlyInTable1.removeAll(snapshot.table2.hashesByKey.keySet());
-
-                    Set<List<Object>> keysOnlyInTable2 = new HashSet<>(snapshot.table2.hashesByKey.keySet());
-                    keysOnlyInTable2.removeAll(snapshot.table1.hashesByKey.keySet());
-
-                    Set<List<Object>> mismatchedKeys = new HashSet<>();
-                    for (Map.Entry<List<Object>, String> entry : snapshot.table1.hashesByKey.entrySet()) {
-                        List<Object> key = entry.getKey();
-                        if (snapshot.table2.hashesByKey.containsKey(key)) {
-                            String hash1 = entry.getValue();
-                            String hash2 = snapshot.table2.hashesByKey.get(key);
-                            if (!hash1.equals(hash2)) {
-                                mismatchedKeys.add(key);
-                            }
-                        }
-                    }
-
-                    int totalDifferences = keysOnlyInTable1.size() + keysOnlyInTable2.size() + mismatchedKeys.size();
-                    log.info("Hash comparison found {} differences: {} only in table1, {} only in table2, {} mismatched",
-                            totalDifferences, keysOnlyInTable1.size(), keysOnlyInTable2.size(), mismatchedKeys.size());
-
-                    // Log first few mismatched keys for diagnosis
-                    if (!mismatchedKeys.isEmpty()) {
-                        int debugCount = 0;
-                        for (List<Object> key : mismatchedKeys) {
-                            if (debugCount++ < 5) {
-                                String hash1 = snapshot.table1.hashesByKey.get(key);
-                                String hash2 = snapshot.table2.hashesByKey.get(key);
-                                log.debug("Hash mismatch for key {}: source_hash={}, target_hash={}",
-                                        key, hash1, hash2);
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-
-                    return new RowChecksumDiffPlan(snapshot, keysOnlyInTable1, keysOnlyInTable2, mismatchedKeys);
-                }, executorProvider.getCpuExecutor())
-                .thenApplyAsync(plan -> {
-                    Map<String, DataType> columnTypes1 = extractColumnTypes(table1);
-                    Map<String, DataType> columnTypes2 = extractColumnTypes(table2);
-                    if (plan.totalDifferences() == 0) {
+                    if (snapshot.totalDifferences() == 0) {
                         return new RowChecksumDiffData(
-                                plan,
+                                snapshot,
                                 Collections.emptyMap(),
                                 Collections.emptyMap(),
-                                columnTypes1,
-                                columnTypes2);
+                                snapshot.columnTypes1,
+                                snapshot.columnTypes2);
                     }
-                    Map<List<Object>, Object[]> data1 = queryRowsByKeys(table1,
-                            rawKeysFor(plan.snapshot.table1, plan.keysOnlyInTable1, plan.mismatchedKeys),
-                            columnTypes1);
-                    Map<List<Object>, Object[]> data2 = queryRowsByKeys(table2,
-                            rawKeysFor(plan.snapshot.table2, plan.keysOnlyInTable2, plan.mismatchedKeys),
-                            columnTypes2);
-                    return new RowChecksumDiffData(plan, data1, data2, columnTypes1, columnTypes2);
+                    Set<List<Object>> rawKeys1 = new LinkedHashSet<>(snapshot.rawKeysOnlyInTable1.values());
+                    rawKeys1.addAll(snapshot.rawKeysMismatchedIn1.values());
+                    Set<List<Object>> rawKeys2 = new LinkedHashSet<>(snapshot.rawKeysOnlyInTable2.values());
+                    rawKeys2.addAll(snapshot.rawKeysMismatchedIn2.values());
+
+                    Map<List<Object>, Object[]> data1 = queryRowsByKeys(table1, rawKeys1, snapshot.columnTypes1);
+                    Map<List<Object>, Object[]> data2 = queryRowsByKeys(table2, rawKeys2, snapshot.columnTypes2);
+                    return new RowChecksumDiffData(snapshot, data1, data2,
+                            snapshot.columnTypes1, snapshot.columnTypes2);
                 }, executorProvider.getIoExecutor())
                 .thenAcceptAsync(diffData -> {
                     try {
-                        RowChecksumDiffPlan plan = diffData.plan;
+                        RowHashSnapshot snapshot = diffData.plan;
                         List<DiffRow> differences = new ArrayList<>();
 
-                        if (plan.totalDifferences() > 0) {
-                            Map<String, DataType> columnTypes1 = diffData.columnTypes1;
-                            Map<String, DataType> columnTypes2 = diffData.columnTypes2;
-
-                            for (List<Object> key : plan.keysOnlyInTable1) {
+                        if (snapshot.totalDifferences() > 0) {
+                            for (List<Object> key : snapshot.keysOnlyInTable1) {
                                 Object[] row = diffData.data1.get(key);
                                 if (row != null) {
                                     differences.add(createDiffRow(key, row, null,
                                             table1.getKeyColumns(), table1.getExtraColumns(),
-                                            DiffOperation.TARGET_MISSING, columnTypes1, columnTypes2));
+                                            DiffOperation.TARGET_MISSING,
+                                            diffData.columnTypes1, diffData.columnTypes2));
                                 }
                             }
 
-                            for (List<Object> key : plan.keysOnlyInTable2) {
+                            for (List<Object> key : snapshot.keysOnlyInTable2) {
                                 Object[] row = diffData.data2.get(key);
                                 if (row != null) {
                                     differences.add(createDiffRow(key, null, row,
                                             table2.getKeyColumns(), table2.getExtraColumns(),
-                                            DiffOperation.SOURCE_MISSING, columnTypes1, columnTypes2));
+                                            DiffOperation.SOURCE_MISSING,
+                                            diffData.columnTypes1, diffData.columnTypes2));
                                 }
                             }
 
-                            for (List<Object> key : plan.mismatchedKeys) {
+                            for (List<Object> key : snapshot.mismatchedKeys) {
                                 Object[] row1 = diffData.data1.get(key);
                                 Object[] row2 = diffData.data2.get(key);
                                 if (row1 != null && row2 != null) {
                                     differences.add(createDiffRow(key, row1, row2,
                                             table1.getKeyColumns(), table1.getExtraColumns(),
-                                            DiffOperation.MISMATCH, columnTypes1, columnTypes2));
+                                            DiffOperation.MISMATCH,
+                                            diffData.columnTypes1, diffData.columnTypes2));
                                 }
                             }
                         }
 
                         performanceMonitor.recordLocalComparison(segmentId,
-                                plan.snapshot.table1.hashesByKey.size(),
-                                plan.snapshot.table2.hashesByKey.size(),
+                                (int) Math.min(snapshot.table1RowCount, Integer.MAX_VALUE),
+                                (int) Math.min(snapshot.table2RowCount, Integer.MAX_VALUE),
                                 differences.size());
 
                         storeDifferences(infoTreeRecorder, differences, segmentId);
                         infoTreeRecorder.addRowsFetched(segmentId,
-                                plan.snapshot.table1.hashesByKey.size() + plan.snapshot.table2.hashesByKey.size());
+                                snapshot.table1RowCount + snapshot.table2RowCount);
 
                         progressReporter.segmentCompleted(segmentId,
-                                plan.snapshot.table1.hashesByKey.size() + plan.snapshot.table2.hashesByKey.size(),
+                                snapshot.table1RowCount + snapshot.table2RowCount,
                                 differences.size());
 
                         log.info("Row-hash based comparison completed: {} differences for segment: {}",
@@ -737,47 +753,25 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             return Collections.emptyMap();
         }
 
-        List<Object[]> rows = segment.getValuesByKeys(keys);
         Map<List<Object>, Object[]> rowMap = new HashMap<>();
-
         int keyColumnCount = segment.getKeyColumns().size();
 
-        for (Object[] row : rows) {
-            List<Object> primaryKey = normalizeKeyValues(
-                    Arrays.asList(row).subList(0, Math.min(keyColumnCount, row.length)),
-                    segment.getKeyColumns(),
-                    columnTypes);
-            rowMap.put(primaryKey, row);
+        // Query in bounded batches so a huge difference set never materializes
+        // every fetched row in an intermediate list at once.
+        List<List<Object>> keyList = new ArrayList<>(keys);
+        for (int i = 0; i < keyList.size(); i += KEY_QUERY_BATCH_SIZE) {
+            int end = Math.min(i + KEY_QUERY_BATCH_SIZE, keyList.size());
+            Set<List<Object>> batch = new HashSet<>(keyList.subList(i, end));
+            for (Object[] row : segment.getValuesByKeys(batch)) {
+                List<Object> primaryKey = normalizeKeyValues(
+                        Arrays.asList(row).subList(0, Math.min(keyColumnCount, row.length)),
+                        segment.getKeyColumns(),
+                        columnTypes);
+                rowMap.put(primaryKey, row);
+            }
         }
 
         return rowMap;
-    }
-
-    private RowHashSide indexRowHashes(TableSegment segment,
-                                       Map<List<Object>, String> rowHashes,
-                                       Map<String, DataType> columnTypes) {
-        Map<List<Object>, String> hashesByKey = new LinkedHashMap<>();
-        Map<List<Object>, List<Object>> rawKeysByKey = new LinkedHashMap<>();
-        for (Map.Entry<List<Object>, String> entry : rowHashes.entrySet()) {
-            List<Object> normalizedKey = normalizeKeyValues(entry.getKey(), segment.getKeyColumns(), columnTypes);
-            hashesByKey.put(normalizedKey, entry.getValue());
-            rawKeysByKey.put(normalizedKey, entry.getKey());
-        }
-        return new RowHashSide(hashesByKey, rawKeysByKey);
-    }
-
-    @SafeVarargs
-    private final Set<List<Object>> rawKeysFor(RowHashSide side, Set<List<Object>>... normalizedKeySets) {
-        Set<List<Object>> rawKeys = new LinkedHashSet<>();
-        for (Set<List<Object>> normalizedKeySet : normalizedKeySets) {
-            for (List<Object> normalizedKey : normalizedKeySet) {
-                List<Object> rawKey = side.rawKeysByKey.get(normalizedKey);
-                if (rawKey != null) {
-                    rawKeys.add(rawKey);
-                }
-            }
-        }
-        return rawKeys;
     }
 
     private List<Object> normalizeKeyValues(List<?> keyValues,
@@ -795,37 +789,40 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     }
 
     private static class RowHashSnapshot {
-        private final RowHashSide table1;
-        private final RowHashSide table2;
-
-        private RowHashSnapshot(RowHashSide table1, RowHashSide table2) {
-            this.table1 = table1;
-            this.table2 = table2;
-        }
-    }
-
-    private static class RowHashSide {
-        private final Map<List<Object>, String> hashesByKey;
-        private final Map<List<Object>, List<Object>> rawKeysByKey;
-
-        private RowHashSide(Map<List<Object>, String> hashesByKey, Map<List<Object>, List<Object>> rawKeysByKey) {
-            this.hashesByKey = hashesByKey;
-            this.rawKeysByKey = rawKeysByKey;
-        }
-    }
-
-    private static class RowChecksumDiffPlan {
-        private final RowHashSnapshot snapshot;
         private final Set<List<Object>> keysOnlyInTable1;
+        private final Map<List<Object>, List<Object>> rawKeysOnlyInTable1;
         private final Set<List<Object>> keysOnlyInTable2;
+        private final Map<List<Object>, List<Object>> rawKeysOnlyInTable2;
         private final Set<List<Object>> mismatchedKeys;
+        private final Map<List<Object>, List<Object>> rawKeysMismatchedIn1;
+        private final Map<List<Object>, List<Object>> rawKeysMismatchedIn2;
+        private final long table1RowCount;
+        private final long table2RowCount;
+        private final Map<String, DataType> columnTypes1;
+        private final Map<String, DataType> columnTypes2;
 
-        private RowChecksumDiffPlan(RowHashSnapshot snapshot, Set<List<Object>> keysOnlyInTable1,
-                                    Set<List<Object>> keysOnlyInTable2, Set<List<Object>> mismatchedKeys) {
-            this.snapshot = snapshot;
+        private RowHashSnapshot(Set<List<Object>> keysOnlyInTable1,
+                                Map<List<Object>, List<Object>> rawKeysOnlyInTable1,
+                                Set<List<Object>> keysOnlyInTable2,
+                                Map<List<Object>, List<Object>> rawKeysOnlyInTable2,
+                                Set<List<Object>> mismatchedKeys,
+                                Map<List<Object>, List<Object>> rawKeysMismatchedIn1,
+                                Map<List<Object>, List<Object>> rawKeysMismatchedIn2,
+                                long table1RowCount,
+                                long table2RowCount,
+                                Map<String, DataType> columnTypes1,
+                                Map<String, DataType> columnTypes2) {
             this.keysOnlyInTable1 = keysOnlyInTable1;
+            this.rawKeysOnlyInTable1 = rawKeysOnlyInTable1;
             this.keysOnlyInTable2 = keysOnlyInTable2;
+            this.rawKeysOnlyInTable2 = rawKeysOnlyInTable2;
             this.mismatchedKeys = mismatchedKeys;
+            this.rawKeysMismatchedIn1 = rawKeysMismatchedIn1;
+            this.rawKeysMismatchedIn2 = rawKeysMismatchedIn2;
+            this.table1RowCount = table1RowCount;
+            this.table2RowCount = table2RowCount;
+            this.columnTypes1 = columnTypes1;
+            this.columnTypes2 = columnTypes2;
         }
 
         private int totalDifferences() {
@@ -833,14 +830,50 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         }
     }
 
+    private static class RowHashSide {
+        private final Map<List<Object>, RowHashEntry> entries = new LinkedHashMap<>();
+        private long total;
+
+        private void put(List<Object> normalizedKey, List<Object> rawKey, String hash) {
+            entries.put(normalizedKey, new RowHashEntry(rawKey, hash));
+            total++;
+        }
+
+        private RowHashEntry remove(List<Object> normalizedKey) {
+            return entries.remove(normalizedKey);
+        }
+
+        private Map<List<Object>, List<Object>> remainingRawKeys() {
+            Map<List<Object>, List<Object>> rawKeys = new LinkedHashMap<>();
+            for (Map.Entry<List<Object>, RowHashEntry> entry : entries.entrySet()) {
+                rawKeys.put(entry.getKey(), entry.getValue().rawKey);
+            }
+            return rawKeys;
+        }
+
+        private long total() {
+            return total;
+        }
+    }
+
+    private static class RowHashEntry {
+        private final List<Object> rawKey;
+        private final String hash;
+
+        private RowHashEntry(List<Object> rawKey, String hash) {
+            this.rawKey = rawKey;
+            this.hash = hash;
+        }
+    }
+
     private static class RowChecksumDiffData {
-        private final RowChecksumDiffPlan plan;
+        private final RowHashSnapshot plan;
         private final Map<List<Object>, Object[]> data1;
         private final Map<List<Object>, Object[]> data2;
         private final Map<String, DataType> columnTypes1;
         private final Map<String, DataType> columnTypes2;
 
-        private RowChecksumDiffData(RowChecksumDiffPlan plan, Map<List<Object>, Object[]> data1,
+        private RowChecksumDiffData(RowHashSnapshot plan, Map<List<Object>, Object[]> data1,
                                     Map<List<Object>, Object[]> data2,
                                     Map<String, DataType> columnTypes1,
                                     Map<String, DataType> columnTypes2) {
@@ -974,9 +1007,11 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
      * Extract column types from table segment schema.
      */
     private Map<String, DataType> extractColumnTypes(TableSegment segment) {
-        Map<String, DataType> types = new HashMap<>();
         Optional<TableSchema> schema = segment.getSchema();
-
+        if (!schema.isPresent()) {
+            schema = discoverSchema(segment);
+        }
+        Map<String, DataType> types = new HashMap<>();
         if (schema.isPresent()) {
             // Only expose datatypes for relevant columns so the local diff can normalize values correctly.
             for (String column : segment.getRelevantColumns()) {
@@ -985,8 +1020,24 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                     types.put(column, type);
                 }
             }
+        } else {
+            log.warn("Schema unavailable for segment {}, values normalize as UNKNOWN",
+                    segment.getDisplayName());
         }
         return types;
+    }
+
+    private Optional<TableSchema> discoverSchema(TableSegment segment) {
+        if (segment.hasRelationSource() || segment.getTablePath() == null || segment.getDatabase() == null) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.ofNullable(
+                    segment.getDatabase().getTableSchema(segment.getTablePath().getComponents()));
+        } catch (Exception e) {
+            log.warn("Failed to discover schema for segment {}", segment.getDisplayName(), e);
+            return Optional.empty();
+        }
     }
 
     /**

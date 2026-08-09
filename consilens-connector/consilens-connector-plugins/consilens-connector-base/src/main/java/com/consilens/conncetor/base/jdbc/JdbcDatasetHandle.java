@@ -296,10 +296,27 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
             config.addDataSourceProperty(propertyName, properties.getProperty(propertyName));
         }
         config.setMinimumIdle(1);
-        config.setMaximumPoolSize(8);
+        config.setMaximumPoolSize(resolveMaxPoolSize(connection));
         config.setPoolName("connector-" + connectorName + "-" + Integer.toHexString(System.identityHashCode(this)));
         return config;
     }
+
+    private int resolveMaxPoolSize(Map<String, Object> connection) {
+        Object raw = connection.get("maxPoolSize");
+        if (raw instanceof Number) {
+            return Math.max(((Number) raw).intValue(), 1);
+        }
+        if (raw != null) {
+            try {
+                return Math.max(Integer.parseInt(raw.toString().trim()), 1);
+            } catch (NumberFormatException e) {
+                log.warn("Invalid maxPoolSize '{}', falling back to default", raw);
+            }
+        }
+        return DEFAULT_MAX_POOL_SIZE;
+    }
+
+    private static final int DEFAULT_MAX_POOL_SIZE = 10;
 
     private String requireJdbcUrl() {
         Object rawUrl = connection.get("url");

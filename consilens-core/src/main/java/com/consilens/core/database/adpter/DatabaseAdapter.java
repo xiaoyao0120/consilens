@@ -90,6 +90,28 @@ public interface DatabaseAdapter {
     java.util.Map<List<Object>, String> querySegmentRowHashes(TableSegment segment);
 
     /**
+     * Stream row hashes from a table segment without materializing the whole map.
+     *
+     * <p>Implementations should stream the result set row by row so that large
+     * segments do not need to hold every primary key and hash in memory at once.
+     *
+     * @param segment the table segment to query
+     * @param consumer invoked once per row with the primary key values and row hash
+     * @since 1.1.0
+     */
+    default void forEachSegmentRowHash(TableSegment segment, RowHashConsumer consumer) {
+        querySegmentRowHashes(segment).forEach((key, hash) -> consumer.accept(key, hash));
+    }
+
+    /**
+     * Callback for streaming row hash reads.
+     */
+    @FunctionalInterface
+    interface RowHashConsumer {
+        void accept(List<Object> primaryKey, String rowHash);
+    }
+
+    /**
      * Query rows from a table segment for specific primary keys only.
      * This is used to fetch detailed data for rows that have differences.
      * 

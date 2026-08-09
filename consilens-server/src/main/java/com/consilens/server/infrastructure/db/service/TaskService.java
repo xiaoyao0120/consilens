@@ -23,6 +23,8 @@ public interface TaskService extends IService<TaskEntity> {
 
     boolean updateRunning(Long taskId, String executeNodeKey, LocalDateTime now);
 
+    boolean renewRunning(Long taskId, LocalDateTime now);
+
     boolean updateSuccess(Long taskId, String artifactId, LocalDateTime now);
 
     boolean updateFailure(Long taskId, TaskStatus status, String errorCode, String errorMessage, LocalDateTime now);
@@ -45,4 +47,6 @@ public interface TaskService extends IService<TaskEntity> {
     List<TaskEntity> listByStatusesExcludingExecuteNodes(Collection<TaskStatus> statuses,
                                                         Set<String> executeNodeKeys,
                                                         int limit);
+
+    List<TaskEntity> listStaleRunning(LocalDateTime before, int limit);
 }

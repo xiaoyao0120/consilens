@@ -24,6 +24,8 @@ import java.util.stream.Collectors;
 @Component
 public class RunTaskHandler implements CapabilityHandler<RunRequest> {
 
+    private static final int MAX_DIFF_ROWS_IN_RESULT = 1000;
+
     private final ArtifactService artifactService;
     private final ServerCompareConfigService configService;
 
@@ -100,15 +102,25 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         return content;
     }
 
-    private Map<String, Object> runResult(DiffResult diffResult) {
+    Map<String, Object> runResult(DiffResult diffResult) {
         Map<String, Object> content = new LinkedHashMap<>();
-        content.put("hasDifferences", diffResult != null && diffResult.hasDifferences());
-        content.put("differenceCount", diffResult != null ? diffResult.getDifferenceCount() : 0);
+        boolean hasDifferences = diffResult != null && diffResult.hasDifferences();
+        long differenceCount = diffResult != null ? diffResult.getDifferenceCount() : 0L;
+        content.put("hasDifferences", hasDifferences);
+        content.put("differenceCount", differenceCount);
         content.put("statistics", diffResult != null ? diffResult.getStatisticsMap() : Map.of());
         content.put("metadata", diffResult != null ? diffResult.getMetadata() : Map.of());
-        content.put("differences", diffResult != null && diffResult.getDifferences() != null
-                ? diffResult.getDifferences().stream().map(this::diffRow).collect(Collectors.toList())
-                : List.of());
+        List<DiffRow> allDifferences = diffResult != null && diffResult.getDifferences() != null
+                ? diffResult.getDifferences()
+                : List.of();
+        // Keep the artifact bounded: persist the full statistics plus a sampled
+        // detail list instead of serializing millions of diff rows into a 50MB cap.
+        content.put("differenceSampleSize", (int) Math.min(differenceCount, MAX_DIFF_ROWS_IN_RESULT));
+        content.put("differenceSampleTruncated", allDifferences.size() > MAX_DIFF_ROWS_IN_RESULT);
+        content.put("differences", allDifferences.stream()
+                .limit(MAX_DIFF_ROWS_IN_RESULT)
+                .map(this::diffRow)
+                .collect(Collectors.toList()));
         return content;
     }
 

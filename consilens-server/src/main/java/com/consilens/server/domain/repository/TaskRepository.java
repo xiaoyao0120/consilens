@@ -25,6 +25,8 @@ public interface TaskRepository {
 
     boolean updateRunning(Long taskId, String executeNodeKey, Instant now);
 
+    boolean renewRunning(Long taskId, Instant now);
+
     boolean updateSuccess(Long taskId, String artifactId, Instant now);
 
     boolean updateFailure(Long taskId, String errorCode, String errorMessage, Instant now);
@@ -54,4 +56,6 @@ public interface TaskRepository {
     List<TaskRecord> listByStatusesExcludingExecuteNodes(Collection<TaskStatus> statuses,
                                                          Set<String> executeNodeKeys,
                                                          int limit);
+
+    List<TaskRecord> listStaleRunning(Instant before, int limit);
 }
