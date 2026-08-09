@@ -38,6 +38,10 @@ class ConsilensToolExecutorTest {
                     .setResponseCode(202)
                     .setBody("{\"success\":true,\"data\":{\"taskId\":\"task-1\",\"status\":\"PENDING\"},\"traceId\":\"trace-1\"}")
                     .addHeader("Content-Type", "application/json"));
+            server.enqueue(new MockResponse()
+                    .setResponseCode(200)
+                    .setBody("{\"success\":true,\"data\":{\"taskId\":\"task-1\",\"status\":\"SUCCEEDED\"},\"traceId\":\"trace-1\"}")
+                    .addHeader("Content-Type", "application/json"));
             server.start();
             JacksonMcpJsonMapper jsonMapper = new JacksonMcpJsonMapper(ConsilensJson.objectMapper());
             ConsilensToolExecutor executor = new ConsilensToolExecutor(
@@ -50,6 +54,7 @@ class ConsilensToolExecutorTest {
 
             assertThat(result.isError()).isFalse();
             assertThat(server.takeRequest().getBody().readUtf8()).contains("\"serialNo\":\"run-001\"");
+            assertThat(server.takeRequest().getPath()).isEqualTo("/v1/tasks/task-1");
         }
     }
 }

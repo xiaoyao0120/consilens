@@ -399,8 +399,8 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
         sql.append("SELECT ");
         sql.append("SUM(CASE WHEN ").append(t1KeysNull).append(" THEN 0 ELSE 1 END) AS source_count, ");
         sql.append("SUM(CASE WHEN ").append(t2KeysNull).append(" THEN 0 ELSE 1 END) AS target_count, ");
-        sql.append("SUM(CASE WHEN ").append(t1KeysNull).append(" THEN 1 ELSE 0 END) AS source_missing, ");
-        sql.append("0 AS target_missing, ");
+        sql.append("0 AS source_missing, ");
+        sql.append("SUM(CASE WHEN ").append(t2KeysNull).append(" THEN 1 ELSE 0 END) AS target_missing, ");
         sql.append("SUM(CASE WHEN NOT ").append(t1KeysNull).append(" AND NOT ").append(t2KeysNull)
                 .append(" AND ").append(diffPredicate).append(" THEN 1 ELSE 0 END) AS mismatch ");
         sql.append("FROM ").append(t1).append(" LEFT OUTER JOIN ").append(t2);
@@ -411,11 +411,12 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
         sql.append("SELECT ");
         sql.append("0 AS source_count, ");
         sql.append("SUM(CASE WHEN ").append(t2KeysNull).append(" THEN 0 ELSE 1 END) AS target_count, ");
-        sql.append("0 AS source_missing, ");
-        sql.append("SUM(CASE WHEN ").append(t2KeysNull).append(" THEN 1 ELSE 0 END) AS target_missing, ");
+        sql.append("SUM(CASE WHEN ").append(t1KeysNull).append(" THEN 1 ELSE 0 END) AS source_missing, ");
+        sql.append("0 AS target_missing, ");
         sql.append("0 AS mismatch ");
         sql.append("FROM ").append(t2).append(" LEFT OUTER JOIN ").append(t1);
         sql.append(" ON ").append(joinCondition);
+        sql.append(" WHERE ").append(t1KeysNull);
 
         sql.append(") s");
         return sql.toString();

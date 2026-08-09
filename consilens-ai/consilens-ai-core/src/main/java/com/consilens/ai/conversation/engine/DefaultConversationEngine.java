@@ -9,6 +9,8 @@ import com.consilens.ai.conversation.api.model.PendingQuestionDto;
 import com.consilens.ai.conversation.api.model.SessionSnapshot;
 import com.consilens.ai.conversation.engine.model.ActionPlan;
 import com.consilens.ai.conversation.engine.model.PlannerContext;
+import com.consilens.ai.conversation.engine.model.PlannerResult;
+import com.consilens.ai.conversation.engine.model.PlannerType;
 import com.consilens.ai.conversation.engine.model.TurnDecision;
 import com.consilens.ai.conversation.error.ConversationErrorCode;
 import com.consilens.ai.runtime.intent.DefaultIntentRouter;
@@ -162,14 +164,18 @@ public class DefaultConversationEngine implements ConversationEngine {
             return turnPlanner.plan(context);
         }
         if (plannerAgent != null) {
-            return plannerBridge.toTurnDecision(plannerAgent.plan(context), context, planContextAssembler);
+            PlannerResult result = plannerAgent.plan(context);
+            if (result != null && result.getType() == PlannerType.ERROR && turnPlanner != null) {
+                return turnPlanner.plan(context);
+            }
+            return plannerBridge.toTurnDecision(result, context, planContextAssembler);
         }
         // plannerAgent not configured — use TurnPlanner directly (test/legacy path)
         if (turnPlanner != null) {
             return turnPlanner.plan(context);
         }
         return TurnDecision.builder()
-                .type(TurnDecision.Type.MESSAGE)
+                .type(TurnDecision.Type.ERROR)
                 .message("[AI ERROR] No LLM planner configured. Please check your backend settings with `consilens ai doctor`.")
                 .build();
     }
@@ -225,6 +231,9 @@ public class DefaultConversationEngine implements ConversationEngine {
                     .suggestedNextStep(nextStep("plan", "Describe a comparison goal."))
                     .session(snapshot(session))
                     .build();
+        }
+        if (decision.getType() == TurnDecision.Type.ERROR) {
+            return error(session, ConversationErrorCode.INTERNAL_ERROR, decision.getMessage());
         }
         if (decision.getType() == TurnDecision.Type.QUESTION) {
             PendingQuestionState pendingQuestion = clarificationManager.create(decision.getQuestion());

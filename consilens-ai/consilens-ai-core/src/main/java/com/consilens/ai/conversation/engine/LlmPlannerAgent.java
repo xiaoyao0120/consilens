@@ -64,6 +64,9 @@ public class LlmPlannerAgent implements PlannerAgent {
                 if (response == null) {
                     throw new IllegalStateException("Planner backend returned no response.");
                 }
+                if (response.isError()) {
+                    throw new IllegalStateException(response.getText());
+                }
                 if (response.hasToolCalls() && toolExecutor != null) {
                     messages.add(ChatMessage.assistantWithToolCalls(response.getText(), response.getToolCalls()));
                     for (ChatMessage.ToolCall toolCall : response.getToolCalls()) {

@@ -31,7 +31,7 @@ class StarRocksDataTypeHandlerTest {
     void testNormalizeColumn_Timestamp() {
         String result = handler.normalizeColumn("created_at", DataType.TIMESTAMP);
         assertEquals(
-                "COALESCE(DATE_FORMAT(CONVERT_TZ(`created_at`, 'Asia/Shanghai', '+00:00'), '%Y-%m-%d %H:%i:%s'), '')",
+                "COALESCE(DATE_FORMAT(CONVERT_TZ(`created_at`, @@session.time_zone, '+00:00'), '%Y-%m-%d %H:%i:%s'), '')",
                 result);
     }
 

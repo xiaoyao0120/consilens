@@ -248,8 +248,8 @@ public class StarRocksDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeFloat(String quotedCol) {
-        // Get precision from config, default to 4
-        int precision = getPrecision("float", 4);
+        // Get precision from config, default to 6
+        int precision = getPrecision("float", 6);
         // Get rounding from config, default to true (round half up)
         boolean rounding = getRounding("float", true);
         
@@ -305,9 +305,8 @@ public class StarRocksDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeDateTime(String quotedCol) {
-        String sourceTimezone = resolveStarRocksSourceTimezone("Asia/Shanghai");
         String targetTimezone = resolveStarRocksTimezone("datetime", "+00:00");
-        return "COALESCE(DATE_FORMAT(CONVERT_TZ(" + quotedCol + ", '" + sourceTimezone + "', '"
+        return "COALESCE(DATE_FORMAT(CONVERT_TZ(" + quotedCol + ", @@session.time_zone, '"
                 + targetTimezone + "'), '" + resolveStarRocksTemporalFormat("datetime",
                 "%Y-%m-%d %H:%i:%s", "%Y-%m-%d") + "'), '')";
     }
@@ -322,9 +321,8 @@ public class StarRocksDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeTimestamp(String quotedCol) {
-        String sourceTimezone = resolveStarRocksSourceTimezone("Asia/Shanghai");
         String targetTimezone = resolveStarRocksTimezone("timestamp", "+00:00");
-        return "COALESCE(DATE_FORMAT(CONVERT_TZ(" + quotedCol + ", '" + sourceTimezone + "', '"
+        return "COALESCE(DATE_FORMAT(CONVERT_TZ(" + quotedCol + ", @@session.time_zone, '"
                 + targetTimezone + "'), '" + resolveStarRocksTemporalFormat("timestamp",
                 "%Y-%m-%d %H:%i:%s", "%Y-%m-%d") + "'), '')";
     }
@@ -338,10 +336,6 @@ public class StarRocksDataTypeHandler extends BaseDataTypeHandler {
         return "COALESCE(DATE_FORMAT(CONVERT_TZ(" + quotedCol + ", @@session.time_zone, '"
                 + resolveStarRocksTimezone("timestamp_with_timezone", "+00:00") + "'), '" + resolveStarRocksTemporalFormat("timestamp_with_timezone",
                 "%Y-%m-%d %H:%i:%s", "%Y-%m-%d") + "'), '')";
-    }
-
-    private String resolveStarRocksSourceTimezone(String defaultTimezone) {
-        return escapeSqlLiteral(defaultTimezone);
     }
 
     private String resolveStarRocksTimezone(String dataTypeName, String defaultTimezone) {

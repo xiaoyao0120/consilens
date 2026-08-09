@@ -33,8 +33,14 @@ public class PlannerBridge {
                                        PlanContextAssembler assembler) {
         if (result == null || result.getType() == null) {
             return TurnDecision.builder()
-                    .type(TurnDecision.Type.MESSAGE)
+                    .type(TurnDecision.Type.ERROR)
                     .message("Planner returned no decision.")
+                    .build();
+        }
+        if (result.getType() == PlannerType.ERROR) {
+            return TurnDecision.builder()
+                    .type(TurnDecision.Type.ERROR)
+                    .message(firstNonBlank(result.getAnswer(), "Planner failed to classify the request."))
                     .build();
         }
         if (result.getType() == PlannerType.CHAT) {

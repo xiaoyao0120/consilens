@@ -20,6 +20,8 @@ import java.util.Map;
 public class HttpLLMClient {
 
     private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
+    private static final int MAX_RETRY_ATTEMPTS = 3;
+    private static final long INITIAL_RETRY_DELAY_MS = 250L;
 
     private final OkHttpClient client;
     private final ObjectMapper objectMapper;
@@ -72,6 +74,28 @@ public class HttpLLMClient {
             String responseBody = response.body() != null ? response.body().string() : "{}";
             return objectMapper.readTree(responseBody);
         }
+    }
+
+    /**
+     * Sends a POST request and retries transient transport and server failures.
+     */
+    public JsonNode postWithRetry(String url, Object body, Map<String, String> headers) throws IOException {
+        IOException lastFailure = null;
+        for (int attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
+            try {
+                return post(url, body, headers);
+            } catch (IOException e) {
+                lastFailure = e;
+                if (!isRetryable(e) || attempt == MAX_RETRY_ATTEMPTS) {
+                    throw e;
+                }
+                long delayMs = INITIAL_RETRY_DELAY_MS * (1L << (attempt - 1));
+                log.warn("LLM request to {} failed on attempt {}/{}; retrying in {}ms: {}",
+                        url, attempt, MAX_RETRY_ATTEMPTS, delayMs, e.getMessage());
+                sleepBeforeRetry(delayMs);
+            }
+        }
+        throw lastFailure;
     }
 
     /**
@@ -131,5 +155,32 @@ public class HttpLLMClient {
                 requestBuilder.header(key, value);
             }
         });
+    }
+
+    private boolean isRetryable(IOException exception) {
+        String message = exception.getMessage();
+        if (message == null || !message.startsWith("HTTP ")) {
+            return true;
+        }
+        int firstSpace = message.indexOf(' ');
+        int secondSpace = message.indexOf(' ', firstSpace + 1);
+        if (secondSpace < 0) {
+            return true;
+        }
+        try {
+            int status = Integer.parseInt(message.substring(firstSpace + 1, secondSpace));
+            return status == 408 || status == 429 || status >= 500;
+        } catch (NumberFormatException ignored) {
+            return true;
+        }
+    }
+
+    private void sleepBeforeRetry(long delayMs) throws IOException {
+        try {
+            Thread.sleep(delayMs);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting to retry LLM request", e);
+        }
     }
 }

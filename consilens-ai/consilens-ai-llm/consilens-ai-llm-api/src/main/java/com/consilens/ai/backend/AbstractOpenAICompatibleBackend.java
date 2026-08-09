@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Base backend for OpenAI-compatible chat completion APIs.
@@ -115,7 +116,7 @@ public abstract class AbstractOpenAICompatibleBackend implements LLMBackend {
                 requestBody.put("tool_choice", "auto");
             }
 
-            JsonNode response = httpClient.post(baseUrl + chatPath(), requestBody, headers());
+            JsonNode response = httpClient.postWithRetry(baseUrl + chatPath(), requestBody, headers());
             return parseResponse(response);
         } catch (Exception e) {
             log.error("{} chat request failed: {}", backendName(), e.getMessage(), e);
@@ -138,7 +139,7 @@ public abstract class AbstractOpenAICompatibleBackend implements LLMBackend {
             messagesArray.add(buildMessageNode(ChatMessage.Role.USER, prompt, null, null, null));
             requestBody.set("messages", messagesArray);
 
-            JsonNode response = httpClient.post(baseUrl + completionPath(), requestBody, headers());
+            JsonNode response = httpClient.postWithRetry(baseUrl + completionPath(), requestBody, headers());
             return extractText(response);
         } catch (Exception e) {
             log.error("{} completion request failed: {}", backendName(), e.getMessage(), e);
@@ -271,7 +272,7 @@ public abstract class AbstractOpenAICompatibleBackend implements LLMBackend {
         List<ChatMessage.ToolCall> toolCalls = new ArrayList<>();
         for (JsonNode tc : toolCallsNode) {
             JsonNode func = tc.path("function");
-            String id = tc.path("id").asText("tc_" + System.currentTimeMillis());
+            String id = tc.path("id").asText("tc_" + UUID.randomUUID());
             String name = func.path("name").asText(null);
             Map<String, Object> arguments = new HashMap<>();
             JsonNode argsNode = func.path("arguments");

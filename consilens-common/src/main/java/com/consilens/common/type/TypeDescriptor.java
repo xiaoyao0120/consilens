@@ -48,8 +48,10 @@ public final class TypeDescriptor implements Serializable {
         this.nullable = builder.nullable;
         this.bitWidth = builder.bitWidth;
         this.unsigned = builder.unsigned;
-        this.numericPrecision = builder.numericPrecision;
-        this.numericScale = builder.numericScale;
+        this.numericPrecision = type == DataType.DECIMAL_TYPE && builder.numericPrecision == null
+                ? Integer.valueOf(38) : builder.numericPrecision;
+        this.numericScale = type == DataType.DECIMAL_TYPE && builder.numericScale == null
+                ? Integer.valueOf(0) : builder.numericScale;
         this.length = builder.length;
         this.charset = builder.charset;
         this.collation = builder.collation;
@@ -83,9 +85,6 @@ public final class TypeDescriptor implements Serializable {
     }
 
     private void validate() {
-        if (type == DataType.DECIMAL_TYPE && numericPrecision == null) {
-            throw new IllegalArgumentException("DECIMAL_TYPE requires numericPrecision");
-        }
         if (type == DataType.ARRAY_TYPE && elementType == null) {
             throw new IllegalArgumentException("ARRAY_TYPE requires elementType");
         }

@@ -70,6 +70,19 @@ class PlannerBridgeTest {
         assertTrue(decision.getMessage().contains("source:"));
     }
 
+    @Test
+    void shouldConvertPlannerFailureToErrorDecision() {
+        PlannerResult result = PlannerResult.builder()
+                .type(PlannerType.ERROR)
+                .answer("planner unavailable")
+                .build();
+
+        TurnDecision decision = bridge.toTurnDecision(result, context("compare users"), assembler);
+
+        assertEquals(TurnDecision.Type.ERROR, decision.getType());
+        assertEquals("planner unavailable", decision.getMessage());
+    }
+
     private PlannerContext context(String rawInput) {
         return PlannerContext.builder()
                 .session(AiSession.builder()

@@ -44,4 +44,8 @@ public class LLMResponse {
     public boolean hasToolCalls() {
         return toolCalls != null && !toolCalls.isEmpty();
     }
+
+    public boolean isError() {
+        return "error".equalsIgnoreCase(finishReason);
+    }
 }
