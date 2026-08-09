@@ -51,6 +51,10 @@ public interface TaskRepository {
 
     boolean cancel(Long taskId, String traceId, Instant now);
 
+    boolean requestCancellation(Long taskId, String traceId, Instant now);
+
+    boolean confirmCancellation(Long taskId, Instant now);
+
     List<TaskRecord> listByExecuteNodeAndStatuses(String executeNodeKey, Collection<TaskStatus> statuses, int limit);
 
     List<TaskRecord> listByStatusesExcludingExecuteNodes(Collection<TaskStatus> statuses,

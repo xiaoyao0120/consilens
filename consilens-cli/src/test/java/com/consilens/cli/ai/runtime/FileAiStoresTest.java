@@ -1,5 +1,8 @@
 package com.consilens.cli.ai.runtime;
 
+import com.consilens.ai.conversation.engine.DefaultApprovalManager;
+import com.consilens.ai.conversation.engine.model.ActionPlan;
+import com.consilens.ai.execution.model.ConfigGenerationRequest;
 import com.consilens.ai.session.model.AiSession;
 import com.consilens.ai.session.model.ArtifactRef;
 import com.consilens.ai.session.model.ArtifactType;
@@ -15,6 +18,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FileAiStoresTest {
@@ -50,5 +54,48 @@ class FileAiStoresTest {
 
         assertEquals(1, memories.size());
         assertEquals(Instant.EPOCH, memories.get(0).getCreatedAt());
+    }
+
+    @Test
+    void shouldPersistPendingApprovalConfigRequestWithItsType() {
+        AiRuntimePaths paths = new AiRuntimePaths(tempDir.toString());
+        FileAiSessionStore sessionStore = new FileAiSessionStore(paths);
+        DefaultApprovalManager approvalManager = new DefaultApprovalManager();
+        ConfigGenerationRequest request = ConfigGenerationRequest.builder()
+                .sessionId("test-session")
+                .goal("compare users")
+                .hint("source=mysql")
+                .build();
+        ActionPlan plan = ActionPlan.builder()
+                .sessionId("test-session")
+                .commandName("run")
+                .userInput("compare users")
+                .attribute("configRequest", request)
+                .build();
+        AiSession session = AiSession.builder()
+                .sessionId("test-session")
+                .pendingApproval(approvalManager.create(plan, "approval required"))
+                .createdAt(Instant.now())
+                .updatedAt(Instant.now())
+                .build();
+
+        sessionStore.save(session);
+
+        AiSession loaded = sessionStore.load("test-session").orElseThrow();
+        assertEquals(request, loaded.getPendingApproval().getConfigRequest());
+        assertEquals(request, approvalManager.restore("test-session", loaded.getPendingApproval())
+                .getAttributes().get("configRequest"));
+    }
+
+    @Test
+    void shouldRejectSessionIdThatEscapesRuntimeDirectory() {
+        AiRuntimePaths paths = new AiRuntimePaths(tempDir.toString());
+        FileAiSessionStore sessionStore = new FileAiSessionStore(paths);
+        FileAiArtifactStore artifactStore = new FileAiArtifactStore(paths);
+
+        assertThrows(IllegalArgumentException.class, () -> sessionStore.create("../outside"));
+        assertThrows(IllegalArgumentException.class,
+                () -> artifactStore.write("../outside", ArtifactType.CONFIG, new byte[0], Map.of()));
+        assertThrows(IllegalArgumentException.class, () -> paths.sessionRunDir("../outside"));
     }
 }

@@ -84,7 +84,15 @@ class ServerCompareConfigServiceTest {
                 + "    target: [name, amount]\n"
                 + "  filters:\n"
                 + "    source: \"id > 0\"\n"
-                + "    target: \"id > 0\"");
+                + "    target: \"id > 0\"\n"
+                + "result:\n"
+                + "  failOnSinkError: true\n"
+                + "  sinks:\n"
+                + "    - format: table\n"
+                + "      type: result\n"
+                + "      properties:\n"
+                + "        tableName: dv_job_execution_result\n"
+                + "        url: jdbc:mysql://localhost/results");
 
         ServerCompareConfig config = service.fromRunRequest(request);
 
@@ -95,6 +103,10 @@ class ServerCompareConfigServiceTest {
         assertThat(config.getTarget().getType()).isEqualTo("postgresql");
         assertThat(config.getKeys()).containsExactly("id");
         assertThat(config.getComparison().getFields()).containsExactly("name", "amount");
+        assertThat(config.getResult().isFailOnSinkError()).isTrue();
+        assertThat(config.getResult().getSinks()).hasSize(1);
+        assertThat(config.getResult().getSinks().get(0).getProperties())
+                .contains("dv_job_execution_result");
     }
 
     @Test

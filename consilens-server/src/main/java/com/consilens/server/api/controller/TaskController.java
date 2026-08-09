@@ -9,6 +9,7 @@ import com.consilens.server.application.task.RunTaskCancelService;
 import com.consilens.server.application.task.RunTaskQueryService;
 import com.consilens.server.application.task.RunTaskRetryService;
 import com.consilens.server.application.task.RunTaskSubmissionService;
+import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.support.trace.TraceIdSupport;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -67,7 +68,10 @@ public class TaskController {
             @PathVariable @Pattern(regexp = ApiValidationRules.SAFE_ID_PATTERN) String taskId,
                                                     HttpServletRequest httpServletRequest) {
         String traceId = TraceIdSupport.getOrCreateTraceId(httpServletRequest);
-        runTaskCancelService.cancel(taskId, traceId);
+        TaskStatus status = runTaskCancelService.cancel(taskId, traceId);
+        if (status == TaskStatus.CANCEL_REQUESTED) {
+            return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.success(null, traceId));
+        }
         return ResponseEntity.ok(ApiResponse.success(null, traceId));
     }
 }

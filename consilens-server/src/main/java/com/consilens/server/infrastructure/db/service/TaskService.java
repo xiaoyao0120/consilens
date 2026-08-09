@@ -42,6 +42,10 @@ public interface TaskService extends IService<TaskEntity> {
 
     boolean cancel(Long taskId, LocalDateTime now);
 
+    boolean requestCancellation(Long taskId, LocalDateTime now);
+
+    boolean confirmCancellation(Long taskId, LocalDateTime now);
+
     List<TaskEntity> listByExecuteNodeAndStatuses(String executeNodeKey, Collection<TaskStatus> statuses, int limit);
 
     List<TaskEntity> listByStatusesExcludingExecuteNodes(Collection<TaskStatus> statuses,

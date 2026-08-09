@@ -5,6 +5,7 @@ import com.consilens.server.application.task.RunTaskCancelService;
 import com.consilens.server.application.task.RunTaskQueryService;
 import com.consilens.server.application.task.RunTaskRetryService;
 import com.consilens.server.application.task.RunTaskSubmissionService;
+import com.consilens.server.domain.enums.TaskStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
@@ -15,6 +16,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -94,6 +96,23 @@ class TaskControllerTest {
                 .andExpect(jsonPath("$.errorCode").value("INVALID_INPUT"));
 
         verify(submissionService, never()).submit(any(), any());
+    }
+
+    @Test
+    void shouldReturnAcceptedWhenRunningTaskCancellationIsOnlyRequested() throws Exception {
+        RunTaskCancelService cancelService = mock(RunTaskCancelService.class);
+        when(cancelService.cancel(any(), any())).thenReturn(TaskStatus.CANCEL_REQUESTED);
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(new TaskController(
+                        mock(RunTaskQueryService.class),
+                        mock(RunTaskRetryService.class),
+                        cancelService,
+                        mock(RunTaskSubmissionService.class)))
+                .setControllerAdvice(new GlobalExceptionHandler())
+                .setValidator(validator())
+                .build();
+
+        mockMvc.perform(post("/v1/tasks/task-running/cancel"))
+                .andExpect(status().isAccepted());
     }
 
     private MockMvc mockMvc(RunTaskSubmissionService submissionService) {

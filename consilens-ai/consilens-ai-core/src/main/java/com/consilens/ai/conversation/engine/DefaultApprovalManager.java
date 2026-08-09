@@ -1,15 +1,20 @@
 package com.consilens.ai.conversation.engine;
 
 import com.consilens.ai.conversation.engine.model.ActionPlan;
+import com.consilens.ai.execution.model.ConfigGenerationRequest;
 import com.consilens.ai.session.model.PendingApprovalState;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Minimal approval manager for run-style side effects.
  */
 public class DefaultApprovalManager implements ApprovalManager {
+
+    private static final String CONFIG_REQUEST_KEY = "configRequest";
 
     @Override
     public PendingApprovalState create(ActionPlan plan, String prompt) {
@@ -18,6 +23,9 @@ public class DefaultApprovalManager implements ApprovalManager {
                 .prompt(prompt)
                 .commandName(plan.getCommandName())
                 .commandArgument(plan.getCommandArgument())
+                .userInput(plan.getUserInput())
+                .attributes(copyAttributes(plan.getAttributes()))
+                .configRequest(configRequest(plan.getAttributes()))
                 .createdAt(Instant.now())
                 .build();
     }
@@ -45,11 +53,29 @@ public class DefaultApprovalManager implements ApprovalManager {
 
     @Override
     public ActionPlan restore(String sessionId, PendingApprovalState pendingApproval) {
+        Map<String, Object> attributes = copyAttributes(pendingApproval.getAttributes());
+        if (pendingApproval.getConfigRequest() != null) {
+            attributes.put(CONFIG_REQUEST_KEY, pendingApproval.getConfigRequest());
+        }
         return ActionPlan.builder()
                 .sessionId(sessionId)
                 .commandName(pendingApproval.getCommandName())
                 .commandArgument(pendingApproval.getCommandArgument())
+                .userInput(pendingApproval.getUserInput())
+                .attributes(attributes)
                 .build();
+    }
+
+    private Map<String, Object> copyAttributes(Map<String, Object> attributes) {
+        return attributes == null ? new LinkedHashMap<>() : new LinkedHashMap<>(attributes);
+    }
+
+    private ConfigGenerationRequest configRequest(Map<String, Object> attributes) {
+        if (attributes == null) {
+            return null;
+        }
+        Object value = attributes.get(CONFIG_REQUEST_KEY);
+        return value instanceof ConfigGenerationRequest ? (ConfigGenerationRequest) value : null;
     }
 
     private String normalize(String input) {

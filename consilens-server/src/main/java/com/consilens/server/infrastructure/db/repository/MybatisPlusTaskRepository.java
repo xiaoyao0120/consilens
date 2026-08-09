@@ -132,6 +132,16 @@ public class MybatisPlusTaskRepository implements TaskRepository {
     }
 
     @Override
+    public boolean requestCancellation(Long taskId, String traceId, Instant now) {
+        return taskService.requestCancellation(taskId, DbTimeSupport.toLocalDateTime(now));
+    }
+
+    @Override
+    public boolean confirmCancellation(Long taskId, Instant now) {
+        return taskService.confirmCancellation(taskId, DbTimeSupport.toLocalDateTime(now));
+    }
+
+    @Override
     public List<TaskRecord> listByExecuteNodeAndStatuses(String executeNodeKey,
                                                          Collection<TaskStatus> statuses,
                                                          int limit) {

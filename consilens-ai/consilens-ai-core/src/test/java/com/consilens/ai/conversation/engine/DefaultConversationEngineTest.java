@@ -6,6 +6,7 @@ import com.consilens.ai.conversation.engine.model.ActionType;
 import com.consilens.ai.conversation.engine.model.PlannerContext;
 import com.consilens.ai.conversation.engine.model.QuestionSpec;
 import com.consilens.ai.conversation.engine.model.TurnDecision;
+import com.consilens.ai.execution.model.ConfigGenerationRequest;
 import com.consilens.ai.runtime.model.AiTaskResult;
 import com.consilens.ai.runtime.model.AiTurnResult;
 import com.consilens.ai.runtime.task.AiTaskType;
@@ -19,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -65,6 +67,59 @@ class DefaultConversationEngineTest {
         assertEquals(ConversationResponse.Type.MESSAGE, approved.getType());
         assertTrue(approvedExecution.get());
         assertNull(sessionStore.load("session-1").orElseThrow().getPendingApproval());
+    }
+
+    @Test
+    void shouldPreserveActionPlanAttributesAfterApproval() {
+        InMemorySessionStore sessionStore = new InMemorySessionStore();
+        AtomicReference<ActionPlan> executedPlan = new AtomicReference<>();
+        ConfigGenerationRequest configRequest = ConfigGenerationRequest.builder()
+                .sessionId("session-approval-attributes")
+                .goal("compare users")
+                .hint("source=mysql")
+                .hint("target=postgresql")
+                .build();
+        DefaultConversationEngine engine = new DefaultConversationEngine(
+                sessionStore,
+                context -> TurnDecision.builder()
+                        .type(TurnDecision.Type.ACTION)
+                        .actionPlan(ActionPlan.builder()
+                                .sessionId(context.getSession().getSessionId())
+                                .commandName("run")
+                                .commandArgument("users")
+                                .userInput("compare users")
+                                .actionType(ActionType.RUN_DIFF)
+                                .attribute("configRequest", configRequest)
+                                .build())
+                        .build(),
+                new DefaultClarificationManager(),
+                new DefaultApprovalManager(),
+                plan -> {
+                    if (!plan.isRequiresApproval()) {
+                        return AiTaskResult.builder()
+                                .success(false)
+                                .taskType(AiTaskType.RUN_DIFF)
+                                .status(AiTurnResult.Status.REQUIRES_APPROVAL)
+                                .summary("Approval required")
+                                .build();
+                    }
+                    executedPlan.set(plan);
+                    return AiTaskResult.builder()
+                            .success(true)
+                            .taskType(AiTaskType.RUN_DIFF)
+                            .status(AiTurnResult.Status.COMPLETED)
+                            .summary("executed")
+                            .build();
+                });
+
+        assertEquals(ConversationResponse.Type.APPROVAL,
+                engine.handleUserTurn("session-approval-attributes", "run it").getType());
+
+        engine.approve("session-approval-attributes");
+
+        assertNotNull(executedPlan.get());
+        assertEquals(configRequest, executedPlan.get().getAttributes().get("configRequest"));
+        assertEquals("compare users", executedPlan.get().getUserInput());
     }
 
     @Test

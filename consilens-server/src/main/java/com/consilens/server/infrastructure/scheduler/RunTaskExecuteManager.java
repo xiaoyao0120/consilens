@@ -4,6 +4,7 @@ import com.consilens.server.api.dto.ArtifactRefDto;
 import com.consilens.server.api.dto.RunRequest;
 import com.consilens.server.application.capability.CapabilityExecutionException;
 import com.consilens.server.application.capability.ServerCapabilityFacade;
+import com.consilens.server.application.capability.TaskCancellationException;
 import com.consilens.server.application.topology.ServerTopologyService;
 import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.model.TaskCommandRecord;
@@ -86,44 +87,67 @@ public class RunTaskExecuteManager {
         }
 
         Instant startTime = Instant.now();
+        ScheduledFuture<?> heartbeat = null;
         try {
             if (!taskRepository.updateRunning(task.getId(), serverTopologyService.currentNodeKey(), startTime)) {
                 return;
             }
-            ScheduledFuture<?> heartbeat = startHeartbeat(task);
+            heartbeat = startHeartbeat(task);
             RunRequest runRequest = objectMapper.readValue(task.getRequestPayload(), RunRequest.class);
-            try {
-                ArtifactRefDto artifact = serverCapabilityFacade.run(runRequest, TaskExecutionContext.builder()
-                        .taskKey(task.getTaskKey())
-                        .taskId(task.getId())
-                        .traceId(task.getTraceId())
-                        .nodeKey(serverTopologyService.currentNodeKey())
-                        .startTime(startTime)
-                        .build());
-                taskRepository.updateSuccess(task.getId(), artifact.getId(), Instant.now());
-            } finally {
-                heartbeat.cancel(false);
+            ArtifactRefDto artifact = serverCapabilityFacade.run(runRequest, TaskExecutionContext.builder()
+                    .taskKey(task.getTaskKey())
+                    .taskId(task.getId())
+                    .traceId(task.getTraceId())
+                    .nodeKey(serverTopologyService.currentNodeKey())
+                    .startTime(startTime)
+                    .build());
+            if (!taskRepository.updateSuccess(task.getId(), artifact.getId(), Instant.now())) {
+                confirmCancellation(task);
             }
+        } catch (TaskCancellationException exception) {
+            confirmCancellation(task);
         } catch (CapabilityExecutionException exception) {
+            if (confirmCancellation(task)) {
+                return;
+            }
             if (exception.isRetryable()) {
                 runTaskRecoveryService.retryOrFail(task,
                         exception.getErrorCode(),
                         exception.getMessage(),
                         Instant.now());
             } else {
-                taskRepository.updateFailure(task.getId(),
+                if (!taskRepository.updateFailure(task.getId(),
                         exception.getErrorCode(),
                         exception.getMessage(),
-                        Instant.now());
+                        Instant.now())) {
+                    confirmCancellation(task);
+                }
             }
+            confirmCancellation(task);
         } catch (Exception exception) {
+            if (confirmCancellation(task)) {
+                return;
+            }
             log.warn("Failed to dispatch run task {}", task.getTaskKey(), exception);
             runTaskRecoveryService.retryOrFail(task, "RUN_DISPATCH_ERROR", exception.getMessage(), Instant.now());
+            confirmCancellation(task);
+        } finally {
+            if (heartbeat != null) {
+                heartbeat.cancel(false);
+            }
         }
     }
 
+    private boolean confirmCancellation(TaskRecord task) {
+        if (taskRepository.confirmCancellation(task.getId(), Instant.now())) {
+            log.info("Run task {} cancelled after execution stopped", task.getTaskKey());
+            return true;
+        }
+        return false;
+    }
+
     /**
-     * Renew the task start time periodically so the recovery guard treats a
+     * Renew the task update time periodically so the recovery guard treats a
      * long-running comparison as alive and only reclaims tasks whose heartbeat
      * actually stopped.
      */

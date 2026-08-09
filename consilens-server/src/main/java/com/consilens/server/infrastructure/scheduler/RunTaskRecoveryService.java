@@ -64,7 +64,10 @@ public class RunTaskRecoveryService {
             claimed.forEach(command -> releaseCommandAndClaimedTask(command, now));
         }
         taskRepository.listByExecuteNodeAndStatuses(currentNodeKey, RECOVERABLE_STATUSES, limit)
-                .forEach(task -> retryOrFail(task, "NODE_RESTARTED", "Execution node restarted before task completed", now));
+                .forEach(task -> retryOrFail(task,
+                        "NODE_RESTARTED",
+                        "Execution node restarted before task completed",
+                        now));
     }
 
     @Transactional
@@ -89,7 +92,10 @@ public class RunTaskRecoveryService {
         taskRepository.listByStatusesExcludingExecuteNodes(RECOVERABLE_STATUSES,
                         aliveNodeKeys,
                         properties.getScheduler().getRecoveryBatchSize())
-                .forEach(task -> retryOrFail(task, "EXECUTE_NODE_LOST", "Execution node heartbeat expired", now));
+                .forEach(task -> retryOrFail(task,
+                        "EXECUTE_NODE_LOST",
+                        "Execution node heartbeat expired",
+                        now));
     }
 
     @Transactional

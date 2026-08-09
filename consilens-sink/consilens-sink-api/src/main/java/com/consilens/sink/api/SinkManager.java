@@ -34,13 +34,17 @@ public class SinkManager {
             if (!sinkConfig.isEnabled()) {
                 continue;
             }
-            Sink sink = registry.create(sinkConfig.getFormat(), sinkConfig.getType());
-            sink.open(sinkConfig, context);
-            SinkHolder holder = new SinkHolder(sinkConfig, sink);
-            if ("diff-record".equalsIgnoreCase(sinkConfig.getType())) {
-                diffRecordSinks.add(holder);
-            } else if ("result".equalsIgnoreCase(sinkConfig.getType())) {
-                resultSinks.add(holder);
+            try {
+                Sink sink = registry.create(sinkConfig.getFormat(), sinkConfig.getType());
+                sink.open(sinkConfig, context);
+                SinkHolder holder = new SinkHolder(sinkConfig, sink);
+                if ("diff-record".equalsIgnoreCase(sinkConfig.getType())) {
+                    diffRecordSinks.add(holder);
+                } else if ("result".equalsIgnoreCase(sinkConfig.getType())) {
+                    resultSinks.add(holder);
+                }
+            } catch (Exception exception) {
+                handleSinkFailure(exception);
             }
         }
     }
@@ -75,11 +79,15 @@ public class SinkManager {
         try {
             runnable.run();
         } catch (Exception e) {
-            if (config != null && config.isFailOnSinkError()) {
-                throw new RuntimeException("Sink execution failed", e);
-            }
-            log.warn("Sink execution failed: {}", e.getMessage(), e);
+            handleSinkFailure(e);
         }
+    }
+
+    private void handleSinkFailure(Exception exception) {
+        if (config != null && config.isFailOnSinkError()) {
+            throw new RuntimeException("Sink execution failed", exception);
+        }
+        log.warn("Sink execution failed: {}", exception.getMessage(), exception);
     }
 
     private static class SinkHolder {

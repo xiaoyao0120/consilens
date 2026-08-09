@@ -15,6 +15,7 @@ import com.consilens.server.api.dto.RunRequest;
 import com.consilens.server.api.dto.ValidateRequest;
 import com.consilens.server.application.artifact.ArtifactService;
 import com.consilens.server.domain.exception.InvalidInputException;
+import com.consilens.sink.api.model.ResultConfig;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -230,6 +231,7 @@ public class ServerCompareConfigService {
                         .ignoreColumns(cliIgnoreColumns(comparison))
                         .build())
                 .executionOptions(executionOptions)
+                .result(resultConfig(raw.get("result")))
                 .build();
         validate(config);
         return config;
@@ -284,6 +286,17 @@ public class ServerCompareConfigService {
             }
         }
         return result;
+    }
+
+    private ResultConfig resultConfig(Object value) {
+        if (value == null) {
+            return new ResultConfig();
+        }
+        try {
+            return objectMapper.convertValue(value, ResultConfig.class);
+        } catch (IllegalArgumentException exception) {
+            throw new InvalidInputException("config.result is not valid");
+        }
     }
 
     @SuppressWarnings("unchecked")
