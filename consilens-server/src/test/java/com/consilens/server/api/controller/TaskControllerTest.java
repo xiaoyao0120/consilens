@@ -36,6 +36,35 @@ class TaskControllerTest {
     }
 
     @Test
+    void shouldSubmitTaskWithInlineConfigContent() throws Exception {
+        RunTaskSubmissionService submissionService = mock(RunTaskSubmissionService.class);
+        MockMvc mockMvc = mockMvc(submissionService);
+
+        mockMvc.perform(post("/v1/tasks/execute")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"serialNo\":\"serial-1\",\"configContent\":\"source:\\n"
+                                + "  type: mysql\\n  resource:\\n    type: table\\n    name: orders\"}"))
+                .andExpect(status().isAccepted());
+
+        verify(submissionService).submit(any(), any());
+    }
+
+    @Test
+    void shouldRejectTaskWithoutConfigReference() throws Exception {
+        RunTaskSubmissionService submissionService = mock(RunTaskSubmissionService.class);
+        MockMvc mockMvc = mockMvc(submissionService);
+
+        mockMvc.perform(post("/v1/tasks/execute")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"serialNo\":\"serial-1\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.errorCode").value("INVALID_INPUT"));
+
+        verify(submissionService, never()).submit(any(), any());
+    }
+
+    @Test
     void shouldRejectTaskWhenSerialNoExceedsDatabaseLimit() throws Exception {
         RunTaskSubmissionService submissionService = mock(RunTaskSubmissionService.class);
         MockMvc mockMvc = mockMvc(submissionService);

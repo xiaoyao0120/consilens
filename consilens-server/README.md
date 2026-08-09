@@ -53,8 +53,9 @@ For local smoke tests:
 
 ## Create Task
 
-`POST /v1/tasks/execute` creates an asynchronous run task from a server configuration
-artifact and returns its task ID.
+`POST /v1/tasks/execute` creates an asynchronous run task and returns its task ID.
+The task configuration is referenced by `configArtifactId`, or passed inline as a
+`configContent` string (YAML or JSON) when no artifact is available.
 
 ```bash
 curl -X POST http://localhost:18080/v1/tasks/execute \
@@ -70,6 +71,24 @@ curl -X POST http://localhost:18080/v1/tasks/execute \
 
 The response has HTTP status `202 Accepted` and includes
 `data.taskId`. Query progress and results with `GET /v1/tasks/{taskId}`.
+
+Callers holding a configuration file can pass its content directly as a string:
+
+```bash
+curl -X POST http://localhost:18080/v1/tasks/execute \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "serialNo": "orders-compare-20260808",
+    "configContent": "source:\n  type: mysql\n  name: source-mysql\n  connection:\n    url: jdbc:mysql://127.0.0.1:13306/consilens_demo\n    username: demo\n    password: demo\n  resource:\n    type: table\n    name: orders\ntarget:\n  type: postgresql\n  name: target-postgresql\n  connection:\n    url: jdbc:postgresql://127.0.0.1:5432/consilens_demo\n    username: demo\n    password: demo\n  resource:\n    type: table\n    name: orders\ncomparison:\n  keys:\n    source: [id]\n    target: [id]\n  fields:\n    source: [name, amount]\n    target: [name, amount]",
+    "options": {
+      "dryRun": false
+    }
+  }'
+```
+
+Inline config content supports `server-native` JSON, the CLI configuration file
+format (YAML or JSON), and `${env.NAME}` environment placeholders resolved from
+the server process environment.
 
 ## Operations
 
