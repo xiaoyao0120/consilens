@@ -18,7 +18,7 @@ Consilens CLI 是一个跨数据库数据一致性校验工具，通过 YAML/JSO
 ### 1. 构建并解包发行版
 
 ```bash
-mvn clean package -DskipTests -Prelease
+./mvnw -B clean package -Prelease
 tar -xzf consilens-dist/target/consilens-*.tar.gz -C /opt/consilens
 ```
 

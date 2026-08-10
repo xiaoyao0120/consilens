@@ -57,8 +57,7 @@ checksum 比对
 ### 构建
 
 ```bash
-./mvnw test
-./mvnw -Prelease -pl consilens-dist -am package -DskipTests
+./mvnw -B package
 JAVA_HOME=$(/usr/libexec/java_home -v 17) ./mvnw -Pconsilens-mcp -pl consilens-mcp package
 ```
 

@@ -16,10 +16,7 @@ git clone https://github.com/NoeticLens/consilens.git
 cd consilens
 
 # 构建项目
-mvn clean package -DskipTests
-
-# 运行测试
-mvn test
+./mvnw -B clean package
 ```
 
 ## 项目结构
