@@ -209,6 +209,10 @@ class ChecksumDifferTest {
                                         .thenReturn(Map.of(List.of(1), "source-row-hash"));
                         when(mockAdapter2.querySegmentRowHashes(any(TableSegment.class)))
                                         .thenReturn(Map.of(List.of(1), "target-row-hash"));
+                        doCallRealMethod().when(mockAdapter1)
+                                        .forEachSegmentRowHash(any(TableSegment.class), any());
+                        doCallRealMethod().when(mockAdapter2)
+                                        .forEachSegmentRowHash(any(TableSegment.class), any());
 
                         when(mockAdapter1.querySegmentByKeys(any(TableSegment.class), anySet()))
                                         .thenReturn(Collections.singletonList(

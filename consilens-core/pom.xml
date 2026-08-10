@@ -17,6 +17,13 @@
     <name>consilens core</name>
     <description>Core domain logic and business entities</description>
 
+    <properties>
+        <!-- Fixed external services are opt-in; Testcontainers tests remain in the default verify suite. -->
+        <failsafe.external-database.exclude.1>**/CrossDatabaseDockerITest.java</failsafe.external-database.exclude.1>
+        <failsafe.external-database.exclude.2>**/OceanBaseSameDbComparisonTest.java</failsafe.external-database.exclude.2>
+        <failsafe.external-database.exclude.3>**/OceanBaseCrossDbComparisonTest.java</failsafe.external-database.exclude.3>
+    </properties>
+
     <dependencies>
         <!-- Internal Dependencies -->
         <dependency>
@@ -321,6 +328,11 @@
                         <include>**/OceanBaseSameDbComparisonTest.java</include>
                         <include>**/OceanBaseCrossDbComparisonTest.java</include>
                     </includes>
+                    <excludes>
+                        <exclude>${failsafe.external-database.exclude.1}</exclude>
+                        <exclude>${failsafe.external-database.exclude.2}</exclude>
+                        <exclude>${failsafe.external-database.exclude.3}</exclude>
+                    </excludes>
                 </configuration>
                 <executions>
                     <execution>
@@ -372,4 +384,16 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>external-databases</id>
+            <properties>
+                <!-- Use non-matching patterns to include the fixed-service integration tests. -->
+                <failsafe.external-database.exclude.1>__no_external_database_test_excluded__</failsafe.external-database.exclude.1>
+                <failsafe.external-database.exclude.2>__no_external_database_test_excluded__</failsafe.external-database.exclude.2>
+                <failsafe.external-database.exclude.3>__no_external_database_test_excluded__</failsafe.external-database.exclude.3>
+            </properties>
+        </profile>
+    </profiles>
 </project>

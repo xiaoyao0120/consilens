@@ -1,5 +1,6 @@
 package com.consilens.cli.service;
 
+import com.consilens.common.enums.ChecksumAlgorithm;
 import com.consilens.connector.api.DatabaseDialect;
 import com.consilens.connector.api.DatabaseDialectProvider;
 import com.consilens.connector.api.MetadataQueryGenerator;
@@ -57,20 +58,86 @@ class ConnectorDialectContractTest {
 
         SqlQueryGenerator sql = dialect.getSqlQueryGenerator();
         assertNotNull(sql, type + " 缺少 SQL generator");
-        assertSql(type, "count", sql.getCountSQL("regression", "orders", "id > 0"));
-        assertSql(type, "select", sql.getSelectSQL(
-                "regression", "orders", List.of("id", "amount"), "id > 0", List.of("id")));
+        verifySqlGeneratorContract(type, sql);
 
         MetadataQueryGenerator metadata = dialect.getMetadataQueryGenerator();
         assertNotNull(metadata, type + " 缺少 metadata generator");
-        assertSql(type, "table exists", metadata.getTableExistsSQL("regression", "orders"));
-        assertSql(type, "table columns", metadata.getTableColumnsSQL("regression", "orders"));
-        assertSql(type, "health check", metadata.getHealthCheckSQL());
+        verifyMetadataGeneratorContract(type, metadata);
 
         assertSql(type, "timestamp normalization",
                 dialect.getDataTypeHandler().normalizeColumn("created_at", DataType.TIMESTAMP));
         assertNotNull(dialect.getDataTypeHandler().convertToTypeDescriptor("VARCHAR(255)"),
                 type + " 无法转换 VARCHAR 类型");
+    }
+
+    private void verifySqlGeneratorContract(String type, SqlQueryGenerator sql) {
+        List<String> keys = List.of("id");
+        List<String> columns = List.of("id", "amount");
+        List<List<Object>> primaryKeys = List.of(List.of(1));
+        Map<String, DataType> dataTypes = Map.of("id", DataType.INTEGER, "amount", DataType.DECIMAL);
+        String sourceSql = "SELECT id, amount FROM orders";
+
+        assertSql(type, "limit", sql.getLimitClause(10, 20));
+        assertSql(type, "limit without offset", sql.getLimitClause(20));
+        assertSql(type, "count", sql.getCountSQL("regression", "orders", "id > 0"));
+        assertSql(type, "count from SQL resource", sql.getCountSQLFromSql(sourceSql, "id > 0"));
+        assertSql(type, "select", sql.getSelectSQL("regression", "orders", columns, "id > 0", keys));
+        assertSql(type, "select from SQL resource", sql.getSelectSQLFromSql(sourceSql, columns, "id > 0", keys));
+        assertSql(type, "select by keys", sql.getSelectByKeysSQL(
+                "regression", "orders", columns, keys, primaryKeys, "id > 0", keys));
+        assertSql(type, "select by keys from SQL resource", sql.getSelectByKeysSQLFromSql(
+                sourceSql, columns, keys, primaryKeys, "id > 0", keys));
+        assertSql(type, "min key", sql.getMinMaxKeySQL("regression", "orders", keys, true, "id > 0"));
+        assertSql(type, "max key from SQL resource", sql.getMinMaxKeySQLFromSql(sourceSql, keys, false, "id > 0"));
+        assertSql(type, "checksum concat", sql.getChecksumSQL(
+                "regression", "orders", keys, columns, dataTypes, "id > 0", ChecksumAlgorithm.CONCAT));
+        assertSql(type, "checksum concat from SQL resource", sql.getChecksumSQLFromSql(
+                sourceSql, keys, columns, dataTypes, "id > 0", ChecksumAlgorithm.CONCAT));
+        assertSql(type, "backward-compatible checksum", sql.getChecksumSQL(
+                "regression", "orders", keys, columns, dataTypes, "id > 0"));
+        if (sql.supportsChecksumAlgorithm(ChecksumAlgorithm.XOR)) {
+            assertSql(type, "checksum xor", sql.getChecksumSQL(
+                    "regression", "orders", keys, columns, dataTypes, "id > 0", ChecksumAlgorithm.XOR));
+        }
+        assertSql(type, "distinct count", sql.getDistinctCountSQL("regression", "orders", columns, "id > 0"));
+        assertSql(type, "distinct count from SQL resource", sql.getDistinctCountSQLFromSql(
+                sourceSql, columns, "id > 0"));
+        assertSql(type, "full outer join", sql.getFullOuterJoinSQL("source_orders", "target_orders", keys, "id > 0"));
+        assertSql(type, "left outer join", sql.getLeftOuterJoinSQL("source_orders", "target_orders", keys, "id > 0"));
+        assertSql(type, "right outer join", sql.getRightOuterJoinSQL("source_orders", "target_orders", keys, "id > 0"));
+        assertSql(type, "insert", sql.getInsertSQL("orders", columns));
+        assertSql(type, "batch insert", sql.getBatchInsertSQL("orders", columns, 2));
+        assertSql(type, "drop table", sql.getDropTableSQL("orders", true));
+        assertSql(type, "create temp table", sql.getCreateTempTableSQL("orders_tmp", sourceSql));
+        assertSql(type, "row hash", sql.getRowHashSQL(
+                "regression", "orders", keys, columns, dataTypes, "id > 0"));
+        assertSql(type, "row hash from SQL resource", sql.getRowHashSQLFromSql(
+                sourceSql, keys, columns, dataTypes, "id > 0"));
+        assertSql(type, "join diff stats", sql.getJoinDiffStatsSQL(
+                "regression", "source_orders", "s", keys, columns, "s.id > 0",
+                "regression", "target_orders", "t", keys, columns, "t.id > 0"));
+        assertSql(type, "join diff detail", sql.getJoinDiffDetailSQL(
+                "regression", "source_orders", "s", keys, columns, columns, "s.id > 0",
+                "regression", "target_orders", "t", keys, columns, columns, "t.id > 0"));
+        assertEquals("NULL", sql.formatValue(null), type + " 未正确格式化 null SQL 字面量");
+        assertEquals("'O''Hara'", sql.formatValue("O'Hara"), type + " 未正确转义字符串 SQL 字面量");
+    }
+
+    private void verifyMetadataGeneratorContract(String type, MetadataQueryGenerator metadata) {
+        assertSql(type, "table exists", metadata.getTableExistsSQL("regression", "orders"));
+        assertSql(type, "column exists", metadata.getColumnExistsSQL("regression", "orders", "amount"));
+        assertSql(type, "primary key", metadata.getPrimaryKeySQL("regression", "orders"));
+        assertSql(type, "table columns", metadata.getTableColumnsSQL("regression", "orders"));
+        assertSql(type, "primary keys", metadata.getPrimaryKeysSQL("regression", "orders"));
+        assertSql(type, "foreign keys", metadata.getForeignKeysSQL("regression", "orders"));
+        assertSql(type, "indexes", metadata.getIndexesSQL("regression", "orders"));
+        assertSql(type, "database metadata", metadata.getDatabaseMetadataSQL());
+        assertSql(type, "schemas", metadata.getSchemasSQL());
+        assertSql(type, "tables", metadata.getTablesSQL("regression"));
+        assertSql(type, "views", metadata.getViewsSQL("regression"));
+        assertSql(type, "health check", metadata.getHealthCheckSQL());
+        assertSql(type, "analyze table", metadata.getAnalyzeTableSQL("regression", "orders"));
+        assertSql(type, "optimize table", metadata.getOptimizeTableSQL("regression", "orders"));
     }
 
     private void assertSql(String type, String capability, String sql) {

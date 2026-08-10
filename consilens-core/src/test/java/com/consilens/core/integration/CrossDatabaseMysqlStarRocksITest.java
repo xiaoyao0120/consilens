@@ -47,7 +47,6 @@ class CrossDatabaseMysqlStarRocksITest {
     @Container
     private static final GenericContainer<?> STARROCKS = new GenericContainer<>(
             DockerImageName.parse("starrocks/allin1-ubuntu:latest").asCompatibleSubstituteFor("starrocks/allin1-ubuntu"))
-            .withCreateContainerCmdModifier(cmd -> cmd.withPlatform("linux/arm64"))
             .withExposedPorts(9030, 8030)
             .waitingFor(new LogMessageWaitStrategy()
                     .withRegEx(".*Enjoy the journey to StarRocks blazing-fast lake-house engine!.*\\s")

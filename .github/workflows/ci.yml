@@ -90,11 +90,30 @@ jobs:
           test -n "$jar"
           java -jar "$jar" --version
 
+  docker-verify:
+    name: CI-Docker-Verify
+    needs: paths-filter
+    if: ${{ (needs.paths-filter.outputs.not-ignore == 'true') || (github.event_name == 'push') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+      - name: Verify Testcontainers integration suite
+        run: scripts/release/release-check.sh --docker-verify-only
+
   result:
     name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [ build, mcp, paths-filter ]
+    needs: [ build, mcp, docker-verify, paths-filter ]
     if: always()
     steps:
       - name: Status
@@ -109,5 +128,9 @@ jobs:
           fi
           if [[ '${{ needs.mcp.result }}' != 'success' ]]; then
             echo "MCP Build Failed!"
+            exit 1
+          fi
+          if [[ '${{ needs.docker-verify.result }}' != 'success' ]]; then
+            echo "Docker Verify Failed!"
             exit 1
           fi

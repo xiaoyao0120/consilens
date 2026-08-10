@@ -81,9 +81,39 @@ normalization:
       falseValue: "N"
       nullValue: "<BOOL_NULL>"
   source:
+    decimal:
+      precision: 2
+      rounding: true
+    date:
+      format: yyyy-MM-dd
+      comparisonMode: DATE_ONLY
+    datetime:
+      format: yyyy-MM-dd HH:mm:ss
+      timezone: Asia/Shanghai
+    binary:
+      encoding: hex
+      uppercase: true
+    boolean:
+      trueValue: "Y"
+      falseValue: "N"
     varchar:
       nullValue: "<SRC_NULL>"
   target:
+    decimal:
+      precision: 2
+      rounding: true
+    date:
+      format: yyyy-MM-dd
+      comparisonMode: DATE_ONLY
+    datetime:
+      format: yyyy-MM-dd HH:mm:ss
+      timezone: Asia/Shanghai
+    binary:
+      encoding: hex
+      uppercase: true
+    boolean:
+      trueValue: "Y"
+      falseValue: "N"
     varchar:
       nullValue: "<TGT_NULL>"
 

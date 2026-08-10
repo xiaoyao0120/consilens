@@ -6,16 +6,27 @@ import com.consilens.connector.api.normalization.DefaultNormalizationSpecValidat
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.fasterxml.jackson.annotation.JsonAnyGetter;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -126,45 +137,29 @@ class ExampleCoverageMatrixTest {
     @Test
     void shouldCoverAllConfigurationFieldsAcrossExamples() {
         List<JsonNode> configs = parseAllConfigs();
-        List<String> requiredPaths = List.of(
-                "source.type", "source.name", "source.connection.url",
-                "source.connection.username", "source.connection.password",
-                "source.resource.type", "source.resource.name", "source.resource.path",
-                "source.readOptions",
-                "target.type", "target.connection.url", "target.resource.type",
-                "comparison.keys.source", "comparison.keys.target",
-                "comparison.fields.source", "comparison.fields.target",
-                "comparison.exclude.source", "comparison.exclude.target",
-                "comparison.mappings", "comparison.extraColumns",
-                "comparison.filters.source", "comparison.filters.target",
-                "strategy.mode", "strategy.algorithm",
-                "strategy.bisectionFactor", "strategy.bisectionThreshold",
-                "strategy.batchSize", "strategy.enableProfiling",
-                "strategy.localCompare.mode", "strategy.maxDifferences",
-                "concurrency.io.core", "concurrency.io.max",
-                "concurrency.io.queueSize", "concurrency.io.keepAliveSeconds",
-                "concurrency.io.threadNamePrefix",
-                "concurrency.cpu.core", "concurrency.cpu.max",
-                "concurrency.cpu.queueSize", "concurrency.cpu.keepAliveSeconds",
-                "concurrency.cpu.threadNamePrefix",
-                "normalization.global", "normalization.source", "normalization.target",
-                "result.failOnSinkError", "result.sinks");
-
-        for (String requiredPath : requiredPaths) {
+        for (String requiredPath : configurationFieldPaths()) {
             assertTrue(configs.stream().anyMatch(node -> hasPath(node, requiredPath)),
                     "examples 目录缺少配置字段覆盖: " + requiredPath);
         }
     }
 
     @Test
+    void shouldDeriveNestedCollectionAndMapFieldsFromConfigurationModel() {
+        Set<String> paths = configurationFieldPaths();
+        assertTrue(paths.contains("comparison.mappings[*].name"), "未派生 mapping 元素字段");
+        assertTrue(paths.contains("result.sinks[*].format"), "未派生 sink 元素字段");
+        assertTrue(paths.contains("normalization.global.*.precision"), "未派生 normalization 规则字段");
+    }
+
+    @Test
     void shouldCoverAllEnumValuesAcrossExamples() {
         List<JsonNode> configs = parseAllConfigs();
-        assertTrue(hasValue(configs, "strategy.mode", "checksum"), "缺少 strategy.mode=checksum");
-        assertTrue(hasValue(configs, "strategy.mode", "join"), "缺少 strategy.mode=join");
-        assertTrue(hasValue(configs, "strategy.algorithm", "concat"), "缺少 strategy.algorithm=concat");
-        assertTrue(hasValue(configs, "strategy.algorithm", "xor"), "缺少 strategy.algorithm=xor");
-        assertTrue(hasValue(configs, "strategy.localCompare.mode", "full"), "缺少 localCompare.mode=full");
-        assertTrue(hasValue(configs, "strategy.localCompare.mode", "row-hash"), "缺少 localCompare.mode=row-hash");
+        for (Map.Entry<String, Set<String>> entry : configurationEnumValues().entrySet()) {
+            for (String value : entry.getValue()) {
+                assertTrue(hasValue(configs, entry.getKey(), value),
+                        "examples 目录缺少 " + entry.getKey() + "=" + value);
+            }
+        }
         assertTrue(hasValue(configs, "source.resource.type", "table"), "缺少 resource.type=table");
         assertTrue(hasValue(configs, "source.resource.type", "sql"), "缺少 resource.type=sql");
 
@@ -290,20 +285,9 @@ class ExampleCoverageMatrixTest {
         assertTrue(Files.exists(baselineFile), "缺少 test-baselines.json");
         JsonNode baselines = new ObjectMapper().readTree(baselineFile.toFile()).get("baselines");
 
-        Set<String> expectedKeys = new HashSet<>();
-        for (String pair : EXPECTED_PAIRS) {
-            for (String scenario : EXPECTED_SCENARIOS) {
-                expectedKeys.add("cross-db/" + pair + "/" + scenario);
-            }
-        }
-        expectedKeys.add("cross-db/mysql-pg/08-output-postgres.yaml");
-        expectedKeys.add("cross-db/mysql-doris/10-partition-filter.yaml");
-        for (String name : EXPECTED_SAME_DB) {
-            for (String scenario : SAME_DB_SCENARIOS) {
-                expectedKeys.add("same-db/" + name + "/" + scenario);
-            }
-        }
-        expectedKeys.add("same-db/mysql/03-normalization.yaml");
+        Set<String> expectedKeys = allExampleConfigs().stream()
+                .map(path -> examplesDirectory().relativize(path).toString().replace('\\', '/'))
+                .collect(Collectors.toSet());
         Set<String> actualKeys = new HashSet<>();
         baselines.fieldNames().forEachRemaining(actualKeys::add);
 
@@ -327,32 +311,211 @@ class ExampleCoverageMatrixTest {
     }
 
     private static boolean hasPath(JsonNode node, String path) {
-        JsonNode current = node;
-        for (String segment : path.split("\\.")) {
-            current = current.get(segment);
-            if (current == null) {
-                return false;
-            }
-        }
-        return true;
+        return !nodesAtPath(node, path).isEmpty();
     }
 
     private static boolean hasValue(List<JsonNode> configs, String path, String value) {
         for (JsonNode config : configs) {
-            JsonNode node = config;
-            boolean found = true;
-            for (String segment : path.split("\\.")) {
-                node = node.get(segment);
-                if (node == null) {
-                    found = false;
-                    break;
-                }
-            }
-            if (found && node.asText().equals(value)) {
+            if (nodesAtPath(config, path).stream().anyMatch(node -> node.asText().equals(value))) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static Set<String> configurationFieldPaths() {
+        Set<String> paths = new HashSet<>();
+        collectConfigurationFieldPaths(CliConfiguration.class, "", paths, new HashSet<>());
+        return paths;
+    }
+
+    private static void collectConfigurationFieldPaths(Class<?> type, String prefix, Set<String> paths,
+            Set<Class<?>> ancestors) {
+        if (!ancestors.add(type)) {
+            return;
+        }
+        for (Field field : type.getDeclaredFields()) {
+            if (!isConfigurationField(field)) {
+                continue;
+            }
+            String path = joinPath(prefix, propertyName(field));
+            paths.add(path);
+            collectNestedFieldPaths(field.getGenericType(), path, paths, ancestors);
+        }
+        ancestors.remove(type);
+    }
+
+    private static void collectNestedFieldPaths(Type fieldType, String path, Set<String> paths,
+            Set<Class<?>> ancestors) {
+        Class<?> rawType = rawType(fieldType);
+        if (rawType == null) {
+            return;
+        }
+        if (Iterable.class.isAssignableFrom(rawType)) {
+            Type elementType = typeArgument(fieldType, 0);
+            collectNestedFieldPaths(elementType, path + "[*]", paths, ancestors);
+            return;
+        }
+        if (Map.class.isAssignableFrom(rawType)) {
+            Type valueType = typeArgument(fieldType, 1);
+            collectNestedFieldPaths(valueType, path + ".*", paths, ancestors);
+            return;
+        }
+        if (isScalar(rawType) || rawType.isEnum()) {
+            return;
+        }
+        collectConfigurationFieldPaths(rawType, path, paths, ancestors);
+    }
+
+    private static Map<String, Set<String>> configurationEnumValues() {
+        Map<String, Set<String>> valuesByPath = new LinkedHashMap<>();
+        collectConfigurationEnumValues(CliConfiguration.class, "", valuesByPath, new HashSet<>());
+        return valuesByPath;
+    }
+
+    private static void collectConfigurationEnumValues(Class<?> type, String prefix,
+            Map<String, Set<String>> valuesByPath, Set<Class<?>> ancestors) {
+        if (!ancestors.add(type)) {
+            return;
+        }
+        Map<String, Field> fieldsByProperty = new HashMap<>();
+        for (Field field : type.getDeclaredFields()) {
+            if (isConfigurationField(field)) {
+                fieldsByProperty.put(propertyName(field), field);
+                Class<?> rawType = rawType(field.getGenericType());
+                if (rawType != null && rawType.isEnum()) {
+                    valuesByPath.put(joinPath(prefix, propertyName(field)), enumCodes(rawType));
+                }
+            }
+        }
+        for (Method method : type.getDeclaredMethods()) {
+            Class<?> enumType = method.getReturnType();
+            String property = enumProperty(method);
+            Field field = fieldsByProperty.get(property);
+            if (property != null && enumType.isEnum() && isEnumInputField(field)) {
+                valuesByPath.put(joinPath(prefix, property), enumCodes(enumType));
+            }
+        }
+        for (Field field : fieldsByProperty.values()) {
+            String path = joinPath(prefix, propertyName(field));
+            collectNestedEnumValues(field.getGenericType(), path, valuesByPath, ancestors);
+        }
+        ancestors.remove(type);
+    }
+
+    private static void collectNestedEnumValues(Type fieldType, String path, Map<String, Set<String>> valuesByPath,
+            Set<Class<?>> ancestors) {
+        Class<?> rawType = rawType(fieldType);
+        if (rawType == null) {
+            return;
+        }
+        if (Iterable.class.isAssignableFrom(rawType)) {
+            collectNestedEnumValues(typeArgument(fieldType, 0), path + "[*]", valuesByPath, ancestors);
+            return;
+        }
+        if (Map.class.isAssignableFrom(rawType)) {
+            collectNestedEnumValues(typeArgument(fieldType, 1), path + ".*", valuesByPath, ancestors);
+            return;
+        }
+        if (isScalar(rawType) || rawType.isEnum()) {
+            return;
+        }
+        collectConfigurationEnumValues(rawType, path, valuesByPath, ancestors);
+    }
+
+    private static boolean isConfigurationField(Field field) {
+        if (Modifier.isStatic(field.getModifiers()) || field.isSynthetic()
+                || field.isAnnotationPresent(JsonIgnore.class) || field.isAnnotationPresent(JsonAnyGetter.class)) {
+            return false;
+        }
+        JsonProperty property = field.getAnnotation(JsonProperty.class);
+        return property == null || property.access() != JsonProperty.Access.READ_ONLY;
+    }
+
+    private static String propertyName(Field field) {
+        JsonProperty property = field.getAnnotation(JsonProperty.class);
+        return property != null && !property.value().isEmpty() ? property.value() : field.getName();
+    }
+
+    private static String enumProperty(Method method) {
+        String name = method.getName();
+        if (!name.startsWith("get") || !name.endsWith("Enum") || name.length() <= "getEnum".length()) {
+            return null;
+        }
+        String property = name.substring(3, name.length() - "Enum".length());
+        return Character.toLowerCase(property.charAt(0)) + property.substring(1);
+    }
+
+    private static boolean isEnumInputField(Field field) {
+        return field != null && rawType(field.getGenericType()) == String.class;
+    }
+
+    private static Set<String> enumCodes(Class<?> enumType) {
+        Set<String> codes = new HashSet<>();
+        try {
+            Method getCode = enumType.getMethod("getCode");
+            for (Object value : enumType.getEnumConstants()) {
+                codes.add(String.valueOf(getCode.invoke(value)));
+            }
+        } catch (ReflectiveOperationException e) {
+            for (Object value : enumType.getEnumConstants()) {
+                codes.add(((Enum<?>) value).name().toLowerCase());
+            }
+        }
+        return codes;
+    }
+
+    private static Class<?> rawType(Type type) {
+        if (type instanceof Class<?>) {
+            return (Class<?>) type;
+        }
+        if (type instanceof ParameterizedType) {
+            Type raw = ((ParameterizedType) type).getRawType();
+            return raw instanceof Class<?> ? (Class<?>) raw : null;
+        }
+        return null;
+    }
+
+    private static Type typeArgument(Type type, int index) {
+        if (type instanceof ParameterizedType) {
+            Type[] arguments = ((ParameterizedType) type).getActualTypeArguments();
+            if (arguments.length > index) {
+                return arguments[index];
+            }
+        }
+        return Object.class;
+    }
+
+    private static boolean isScalar(Class<?> type) {
+        return type.isPrimitive() || type.getName().startsWith("java.") || type.getName().startsWith("javax.");
+    }
+
+    private static String joinPath(String prefix, String property) {
+        return prefix.isEmpty() ? property : prefix + "." + property;
+    }
+
+    private static List<JsonNode> nodesAtPath(JsonNode node, String path) {
+        List<JsonNode> current = Collections.singletonList(node);
+        for (String segment : path.split("\\.")) {
+            List<JsonNode> next = new ArrayList<>();
+            for (JsonNode candidate : current) {
+                if ("*".equals(segment) && candidate.isObject()) {
+                    candidate.elements().forEachRemaining(next::add);
+                } else if (segment.endsWith("[*]")) {
+                    JsonNode array = candidate.get(segment.substring(0, segment.length() - 3));
+                    if (array != null && array.isArray()) {
+                        array.elements().forEachRemaining(next::add);
+                    }
+                } else {
+                    JsonNode child = candidate.get(segment);
+                    if (child != null) {
+                        next.add(child);
+                    }
+                }
+            }
+            current = next;
+        }
+        return current;
     }
 
     private static boolean anyFieldContainsKey(JsonNode node, String key) {
