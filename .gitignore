@@ -140,7 +140,7 @@ scripts/*
 design/
 .zcode
 output
-.orchelon
+.orchelon/*
 .consilens-server/artifacts
 .reasonix
 
@@ -149,3 +149,6 @@ consilens-server/src/main/resources/static/
 consilens-ui/dist/
 consilens-ui/node
 consilens-ui/node_modules
+consilens-ui/.vite
+.consilens-server
+
