@@ -9,7 +9,7 @@ import com.consilens.server.application.topology.ServerTopologyService;
 import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.model.TaskCommandRecord;
 import com.consilens.server.domain.model.TaskExecutionContext;
-import com.consilens.server.domain.model.TaskRecord;
+import com.consilens.server.domain.model.TaskInstanceRecord;
 import com.consilens.server.domain.repository.TaskRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -81,7 +81,7 @@ public class RunTaskExecuteManager {
     }
 
     private void dispatch(TaskCommandRecord command) {
-        TaskRecord task = taskRepository.findById(command.getTaskId()).orElse(null);
+        TaskInstanceRecord task = taskRepository.findById(command.getTaskId()).orElse(null);
         if (task == null) {
             return;
         }
@@ -95,7 +95,7 @@ public class RunTaskExecuteManager {
             heartbeat = startHeartbeat(task);
             RunRequest runRequest = objectMapper.readValue(task.getRequestPayload(), RunRequest.class);
             ArtifactRefDto artifact = serverCapabilityFacade.run(runRequest, TaskExecutionContext.builder()
-                    .taskKey(task.getTaskKey())
+                    .instanceKey(task.getInstanceKey())
                     .taskId(task.getId())
                     .traceId(task.getTraceId())
                     .nodeKey(serverTopologyService.currentNodeKey())
@@ -128,7 +128,7 @@ public class RunTaskExecuteManager {
             if (confirmCancellation(task)) {
                 return;
             }
-            log.warn("Failed to dispatch run task {}", task.getTaskKey(), exception);
+            log.warn("Failed to dispatch run task {}", task.getInstanceKey(), exception);
             runTaskRecoveryService.retryOrFail(task, "RUN_DISPATCH_ERROR", exception.getMessage(), Instant.now());
             confirmCancellation(task);
         } finally {
@@ -138,9 +138,9 @@ public class RunTaskExecuteManager {
         }
     }
 
-    private boolean confirmCancellation(TaskRecord task) {
+    private boolean confirmCancellation(TaskInstanceRecord task) {
         if (taskRepository.confirmCancellation(task.getId(), Instant.now())) {
-            log.info("Run task {} cancelled after execution stopped", task.getTaskKey());
+            log.info("Run task {} cancelled after execution stopped", task.getInstanceKey());
             return true;
         }
         return false;
@@ -151,7 +151,7 @@ public class RunTaskExecuteManager {
      * long-running comparison as alive and only reclaims tasks whose heartbeat
      * actually stopped.
      */
-    private ScheduledFuture<?> startHeartbeat(TaskRecord task) {
+    private ScheduledFuture<?> startHeartbeat(TaskInstanceRecord task) {
         long leaseSeconds = Math.max(properties.getScheduler().getClaimLeaseSeconds(), 1L);
         long heartbeatIntervalSeconds = Math.max(leaseSeconds / 3, 1L);
         return heartbeatScheduler.scheduleAtFixedRate(

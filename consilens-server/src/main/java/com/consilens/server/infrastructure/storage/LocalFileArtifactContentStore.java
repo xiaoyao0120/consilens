@@ -55,6 +55,20 @@ public class LocalFileArtifactContentStore implements ArtifactContentStore {
         }
     }
 
+    @Override
+    public long size(String storageUri) {
+        try {
+            Path baseDir = baseDir().toRealPath();
+            Path file = Path.of(storageUri).toAbsolutePath().normalize().toRealPath();
+            if (!file.startsWith(baseDir)) {
+                throw new IllegalArgumentException("Artifact path escapes local storage directory");
+            }
+            return Files.size(file);
+        } catch (Exception exception) {
+            throw new IllegalStateException("Failed to read artifact size from " + storageUri, exception);
+        }
+    }
+
     private Path baseDir() {
         return Path.of(properties.getArtifact().getLocalBaseDir()).toAbsolutePath().normalize();
     }

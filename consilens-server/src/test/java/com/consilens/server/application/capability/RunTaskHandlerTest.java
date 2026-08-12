@@ -38,7 +38,11 @@ class RunTaskHandlerTest {
 
     @Test
     void shouldNotExposeRawDiffValuesByDefault() {
-        RunTaskHandler handler = new RunTaskHandler(null, null, null);
+        RunTaskHandler handler = new RunTaskHandler(null, null, null,
+                        mock(com.consilens.server.domain.repository.DataSourceRepository.class),
+                        new com.consilens.server.support.crypto.CryptoSupport(""),
+                        new com.consilens.server.application.datasource.DialectSupport(),
+                        new com.fasterxml.jackson.databind.ObjectMapper());
         DiffRow row = DiffRow.modified(List.of(1),
                 List.of("sensitive-source"),
                 List.of("sensitive-target"),
@@ -52,8 +56,121 @@ class RunTaskHandlerTest {
     }
 
     @Test
+    void shouldInjectConnectionFromDatasource() {
+        com.consilens.server.domain.repository.DataSourceRepository dataSourceRepository =
+                mock(com.consilens.server.domain.repository.DataSourceRepository.class);
+        com.consilens.server.application.artifact.ArtifactService artifactService =
+                mock(com.consilens.server.application.artifact.ArtifactService.class);
+        com.consilens.server.application.capability.config.ServerCompareConfigService configService =
+                new com.consilens.server.application.capability.config.ServerCompareConfigService(
+                        mock(com.consilens.server.application.artifact.ArtifactService.class),
+                        new com.fasterxml.jackson.databind.ObjectMapper());
+        RunTaskHandler handler = new RunTaskHandler(artifactService, configService,
+                mock(com.consilens.server.domain.repository.TaskRepository.class),
+                dataSourceRepository,
+                new com.consilens.server.support.crypto.CryptoSupport(""),
+                new com.consilens.server.application.datasource.DialectSupport(),
+                new com.fasterxml.jackson.databind.ObjectMapper());
+
+        com.consilens.server.domain.model.DataSourceRecord ds = com.consilens.server.domain.model.DataSourceRecord.builder()
+                .id(5L).name("ds-5").type("mysql")
+                .paramJson("{\"host\":\"10.0.0.5\",\"port\":3306,\"database\":\"orders\","
+                        + "\"username\":\"root\",\"password\":\"p@ss\"}")
+                .build();
+        when(dataSourceRepository.findById(5L)).thenReturn(java.util.Optional.of(ds));
+
+        com.consilens.server.application.capability.config.ServerCompareConfig config =
+                configService.fromContent(java.util.Map.of(
+                        "version", "1.0",
+                        "goal", "check",
+                        "source", java.util.Map.of("type", "mysql", "table", "orders", "datasourceId", 5),
+                        "target", java.util.Map.of("type", "mysql", "table", "orders", "datasourceId", 5),
+                        "keys", java.util.List.of("id")));
+
+        handler.injectConnections(config);
+
+        java.util.Map<String, Object> connection = config.getSource().getConnection();
+        assertThat(connection.get("url")).isEqualTo("jdbc:mysql://10.0.0.5:3306/orders");
+        assertThat(connection.get("password")).isEqualTo("p@ss");
+        assertThat(config.getTarget().getConnection().get("url")).isEqualTo("jdbc:mysql://10.0.0.5:3306/orders");
+    }
+
+    @Test
+    void shouldPreferEndpointDatabaseOverDatasourceParam() {
+        com.consilens.server.domain.repository.DataSourceRepository dataSourceRepository =
+                mock(com.consilens.server.domain.repository.DataSourceRepository.class);
+        com.consilens.server.application.capability.config.ServerCompareConfigService configService =
+                new com.consilens.server.application.capability.config.ServerCompareConfigService(
+                        mock(com.consilens.server.application.artifact.ArtifactService.class),
+                        new com.fasterxml.jackson.databind.ObjectMapper());
+        RunTaskHandler handler = new RunTaskHandler(
+                mock(com.consilens.server.application.artifact.ArtifactService.class),
+                configService,
+                mock(com.consilens.server.domain.repository.TaskRepository.class),
+                dataSourceRepository,
+                new com.consilens.server.support.crypto.CryptoSupport(""),
+                new com.consilens.server.application.datasource.DialectSupport(),
+                new com.fasterxml.jackson.databind.ObjectMapper());
+        when(dataSourceRepository.findById(5L)).thenReturn(java.util.Optional.of(
+                com.consilens.server.domain.model.DataSourceRecord.builder()
+                        .id(5L).type("mysql")
+                        .paramJson("{\"host\":\"10.0.0.5\",\"port\":3306,\"database\":\"param-db\"}")
+                        .build()));
+
+        com.consilens.server.application.capability.config.ServerCompareConfig config =
+                configService.fromContent(java.util.Map.of(
+                        "version", "1.0",
+                        "source", java.util.Map.of("type", "mysql", "table", "t",
+                                "datasourceId", 5, "database", "endpoint-db"),
+                        "target", java.util.Map.of("type", "mysql", "table", "t"),
+                        "keys", java.util.List.of("id")));
+
+        handler.injectConnections(config);
+
+        assertThat(config.getSource().getConnection().get("url"))
+                .isEqualTo("jdbc:mysql://10.0.0.5:3306/endpoint-db");
+    }
+
+    @Test
+    void shouldRevealEncryptedDirectConnectionPassword() {
+        com.consilens.server.support.crypto.CryptoSupport crypto =
+                new com.consilens.server.support.crypto.CryptoSupport(
+                        java.util.Base64.getEncoder().encodeToString(new byte[32]));
+        com.consilens.server.application.capability.config.ServerCompareConfigService configService =
+                new com.consilens.server.application.capability.config.ServerCompareConfigService(
+                        mock(com.consilens.server.application.artifact.ArtifactService.class),
+                        new com.fasterxml.jackson.databind.ObjectMapper());
+        RunTaskHandler handler = new RunTaskHandler(
+                mock(com.consilens.server.application.artifact.ArtifactService.class),
+                configService,
+                mock(com.consilens.server.domain.repository.TaskRepository.class),
+                mock(com.consilens.server.domain.repository.DataSourceRepository.class),
+                crypto,
+                new com.consilens.server.application.datasource.DialectSupport(),
+                new com.fasterxml.jackson.databind.ObjectMapper());
+
+        com.consilens.server.application.capability.config.ServerCompareConfig config =
+                configService.fromContent(java.util.Map.of(
+                        "version", "1.0",
+                        "source", java.util.Map.of("type", "mysql", "table", "t",
+                                "connection", java.util.Map.of(
+                                        "url", "jdbc:mysql://10.0.0.5:3306/db",
+                                        "password", crypto.protect("real-pass"))),
+                        "target", java.util.Map.of("type", "mysql", "table", "t"),
+                        "keys", java.util.List.of("id")));
+
+        handler.injectConnections(config);
+
+        assertThat(config.getSource().getConnection().get("password")).isEqualTo("real-pass");
+    }
+
+    @Test
     void shouldBoundDiffRowsInResultArtifact() {
-        RunTaskHandler handler = new RunTaskHandler(null, null, null);
+        RunTaskHandler handler = new RunTaskHandler(null, null, null,
+                        mock(com.consilens.server.domain.repository.DataSourceRepository.class),
+                        new com.consilens.server.support.crypto.CryptoSupport(""),
+                        new com.consilens.server.application.datasource.DialectSupport(),
+                        new com.fasterxml.jackson.databind.ObjectMapper());
         List<DiffRow> rows = new ArrayList<>();
         for (int i = 0; i < 2500; i++) {
             rows.add(DiffRow.added(List.of(i), List.of("v" + i), List.of("id", "value")));
@@ -91,7 +208,11 @@ class RunTaskHandlerTest {
                 .completedAt(java.time.Instant.now())
                 .build();
         RecordingLifecycle lifecycle = new RecordingLifecycle();
-        RunTaskHandler handler = new RunTaskHandler(artifactService, configService, null) {
+        RunTaskHandler handler = new RunTaskHandler(artifactService, configService, null,
+                        mock(com.consilens.server.domain.repository.DataSourceRepository.class),
+                        new com.consilens.server.support.crypto.CryptoSupport(""),
+                        new com.consilens.server.application.datasource.DialectSupport(),
+                        new com.fasterxml.jackson.databind.ObjectMapper()) {
             @Override
             protected CompareRuntime createCompareRuntime() {
                 return compareRequest -> result;
@@ -107,7 +228,7 @@ class RunTaskHandlerTest {
         when(artifactService.writeArtifact(any(), any(), any(), any(), any()))
                 .thenReturn(ArtifactRefDto.builder().id("run-result").type("RUN_RESULT").format("json").build());
 
-        handler.handle(TaskExecutionContext.builder().taskId(1L).taskKey("task-1").build(), request);
+        handler.handle(TaskExecutionContext.builder().taskId(1L).instanceKey("task-1").build(), request);
 
         assertThat(lifecycle.started).isTrue();
         assertThat(lifecycle.publishedDifferences).isTrue();
@@ -165,7 +286,11 @@ class RunTaskHandlerTest {
         when(configService.toCompareRequest(any(), any())).thenReturn(mock(CompareRequest.class));
         when(artifactService.writeArtifact(any(), any(), any(), any(), any()))
                 .thenReturn(ArtifactRefDto.builder().id("run-result").type("RUN_RESULT").format("json").build());
-        return new RunTaskHandler(artifactService, configService, null) {
+        return new RunTaskHandler(artifactService, configService, null,
+                        mock(com.consilens.server.domain.repository.DataSourceRepository.class),
+                        new com.consilens.server.support.crypto.CryptoSupport(""),
+                        new com.consilens.server.application.datasource.DialectSupport(),
+                        new com.fasterxml.jackson.databind.ObjectMapper()) {
             @Override
             protected CompareRuntime createCompareRuntime() {
                 return compareRequest -> result;
@@ -209,7 +334,7 @@ class RunTaskHandlerTest {
     }
 
     private TaskExecutionContext context() {
-        return TaskExecutionContext.builder().taskId(1L).taskKey("task-1").build();
+        return TaskExecutionContext.builder().taskId(1L).instanceKey("task-1").build();
     }
 
     private RunRequest request() {

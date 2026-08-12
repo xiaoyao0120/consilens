@@ -5,7 +5,7 @@ import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.model.ServerTopologySnapshot;
 import com.consilens.server.domain.model.TaskCommandRecord;
-import com.consilens.server.domain.model.TaskRecord;
+import com.consilens.server.domain.model.TaskInstanceRecord;
 import com.consilens.server.domain.repository.TaskCommandRepository;
 import com.consilens.server.domain.repository.TaskRepository;
 import org.junit.jupiter.api.Test;
@@ -51,7 +51,7 @@ class JobSchedulerTest {
         when(taskCommandRepository.getStartCommand(eq(4), eq(2), any(Instant.class)))
                 .thenReturn(command)
                 .thenReturn(null);
-        when(taskRepository.findById(200L)).thenReturn(Optional.of(TaskRecord.builder()
+        when(taskRepository.findById(200L)).thenReturn(Optional.of(TaskInstanceRecord.builder()
                 .id(200L)
                 .status(TaskStatus.PENDING)
                 .build()));
@@ -105,7 +105,7 @@ class JobSchedulerTest {
         when(taskCommandRepository.getStartCommand(eq(4), eq(2), any(Instant.class)))
                 .thenReturn(command)
                 .thenReturn(null);
-        when(taskRepository.findById(202L)).thenReturn(Optional.of(TaskRecord.builder()
+        when(taskRepository.findById(202L)).thenReturn(Optional.of(TaskInstanceRecord.builder()
                 .id(202L)
                 .status(TaskStatus.PENDING)
                 .build()));
@@ -200,7 +200,7 @@ class JobSchedulerTest {
         when(taskCommandRepository.getStartCommand(eq(4), eq(2), any(Instant.class)))
                 .thenReturn(command)
                 .thenReturn(null);
-        when(taskRepository.findById(201L)).thenReturn(Optional.of(TaskRecord.builder()
+        when(taskRepository.findById(201L)).thenReturn(Optional.of(TaskInstanceRecord.builder()
                 .id(201L)
                 .status(TaskStatus.PENDING)
                 .build()));

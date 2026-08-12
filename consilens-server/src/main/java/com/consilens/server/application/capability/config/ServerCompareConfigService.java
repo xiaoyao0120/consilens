@@ -58,15 +58,70 @@ public class ServerCompareConfigService {
                 .source(endpoint("source", request.getSource(), hints))
                 .target(endpoint("target", request.getTarget(), hints))
                 .keys(normalizedStrings(request.getKeys()))
-                .comparison(ComparisonConfig.builder()
-                        .ignoreColumns(listFrom(hints.get("ignoreColumns")))
-                        .fields(listFrom(hints.get("compareColumns")))
-                        .build())
+                .comparison(comparison(hints))
                 .hints(hints)
                 .executionOptions(mapFrom(hints.get("executionOptions")))
                 .build();
         validate(config);
         return config;
+    }
+
+    /**
+     * Builds the comparison config from plan hints:
+     * <ul>
+     * <li>{@code compareColumns}: list of column names (compared by same name)
+     * or list of {source, target} maps (one-to-one mappings)</li>
+     * <li>{@code ignoreColumns}: column names excluded on both sides</li>
+     * <li>{@code keyMappings}: list of {source, target} maps for primary keys
+     * whose names differ between the two tables</li>
+     * </ul>
+     */
+    private ComparisonConfig comparison(Map<String, Object> hints) {
+        Object compareColumns = hints.get("compareColumns");
+        boolean mappingForm = isMappingList(compareColumns);
+        return ComparisonConfig.builder()
+                .fields(mappingForm ? List.of() : listFrom(compareColumns))
+                .ignoreColumns(listFrom(hints.get("ignoreColumns")))
+                .fieldMappings(mappingForm ? parseMappings(compareColumns) : List.of())
+                .keyMappings(parseMappings(hints.get("keyMappings")))
+                .build();
+    }
+
+    private boolean isMappingList(Object raw) {
+        if (!(raw instanceof List)) {
+            return false;
+        }
+        for (Object item : (List<?>) raw) {
+            if (item instanceof Map) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Parses a list of {source, target} maps into mappings (string items are ignored).
+     */
+    private List<FieldMapping> parseMappings(Object raw) {
+        if (raw == null) {
+            return List.of();
+        }
+        List<FieldMapping> mappings = new ArrayList<>();
+        if (raw instanceof List) {
+            for (Object item : (List<?>) raw) {
+                if (item instanceof Map) {
+                    Map<?, ?> map = (Map<?, ?>) item;
+                    Object sourceValue = map.get("source");
+                    Object targetValue = map.get("target");
+                    String source = sourceValue == null ? null : trim(String.valueOf(sourceValue));
+                    String target = targetValue == null ? null : trim(String.valueOf(targetValue));
+                    if (source != null && target != null) {
+                        mappings.add(FieldMapping.builder().source(source).target(target).build());
+                    }
+                }
+            }
+        }
+        return mappings;
     }
 
     public ServerCompareConfig fromValidateRequest(ValidateRequest request) {
@@ -135,22 +190,66 @@ public class ServerCompareConfigService {
             throw new InvalidInputException("config.target.connection is required for non-dry-run execution");
         }
         KeySpec keys = KeySpec.builder().fields(normalizedStrings(config.getKeys())).build();
-        ComparisonSpec comparisons = ComparisonSpec.builder()
-                .fields(emptyToNull(config.getComparison() != null ? config.getComparison().getFields() : null))
-                .exclude(emptyToNull(config.getComparison() != null ? config.getComparison().getIgnoreColumns() : null))
+        ComparisonConfig comparison = config.getComparison();
+        boolean hasFieldMappings = comparison != null
+                && comparison.getFieldMappings() != null && !comparison.getFieldMappings().isEmpty();
+        boolean hasKeyMappings = comparison != null
+                && comparison.getKeyMappings() != null && !comparison.getKeyMappings().isEmpty();
+
+        List<String> sourceFields = hasFieldMappings
+                ? mappingSources(comparison.getFieldMappings())
+                : comparisonFields(comparison);
+        List<String> targetFields = hasFieldMappings
+                ? mappingTargets(comparison.getFieldMappings())
+                : comparisonFields(comparison);
+        List<String> excluded = comparison != null ? comparison.getIgnoreColumns() : null;
+
+        ComparisonSpec sourceComparisons = ComparisonSpec.builder()
+                .fields(emptyToNull(sourceFields))
+                .exclude(emptyToNull(excluded))
                 .build();
+        ComparisonSpec targetComparisons = ComparisonSpec.builder()
+                .fields(emptyToNull(targetFields))
+                .exclude(emptyToNull(excluded))
+                .build();
+
+        // 主键映射：两侧主键列名不同时按映射分别指定
+        KeySpec sourceKeys = hasKeyMappings
+                ? KeySpec.builder().fields(emptyToNull(mappingSources(comparison.getKeyMappings()))).build()
+                : keys;
+        KeySpec targetKeys = hasKeyMappings
+                ? KeySpec.builder().fields(emptyToNull(mappingTargets(comparison.getKeyMappings()))).build()
+                : keys;
+
         return CompareRequest.builder()
                 .source(connectorConfig("source", config.getSource()))
                 .target(connectorConfig("target", config.getTarget()))
-                .sourceKeySpec(keys)
-                .targetKeySpec(keys)
-                .sourceComparisons(comparisons)
-                .targetComparisons(comparisons)
+                .sourceKeySpec(sourceKeys)
+                .targetKeySpec(targetKeys)
+                .sourceComparisons(sourceComparisons)
+                .targetComparisons(targetComparisons)
                 .sourceFilter(filter(config.getSource()))
                 .targetFilter(filter(config.getTarget()))
                 .strategyPreference(strategyPreference(config.getHints()))
                 .executionOptions(executionOptions(config, options))
                 .build();
+    }
+
+    private List<String> comparisonFields(ComparisonConfig comparison) {
+        if (comparison == null) {
+            return null;
+        }
+        return comparison.getFields() == null || comparison.getFields().isEmpty()
+                ? null
+                : comparison.getFields();
+    }
+
+    private List<String> mappingSources(List<FieldMapping> mappings) {
+        return mappings.stream().map(FieldMapping::getSource).collect(Collectors.toList());
+    }
+
+    private List<String> mappingTargets(List<FieldMapping> mappings) {
+        return mappings.stream().map(FieldMapping::getTarget).collect(Collectors.toList());
     }
 
     public Map<String, Object> validateContent(ServerCompareConfig config) {

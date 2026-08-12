@@ -1,0 +1,290 @@
+// ===== shadcn 风格设计 token（与 common/theme.js 的 naive overrides 配合） =====
+
+.bright {
+  --bg: #fafafa;
+  --card: #ffffff;
+  --border: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --text: #18181b;
+  --text-secondary: #71717a;
+  --text-muted: #a1a1aa;
+  --primary: #2563eb;
+  --success: #16a34a;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --card-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
+
+.dark {
+  --bg: #09090b;
+  --card: #18181b;
+  --border: #27272a;
+  --border-strong: #3f3f46;
+  --text: #fafafa;
+  --text-secondary: #a1a1aa;
+  --text-muted: #71717a;
+  --primary: #3b82f6;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --card-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.4);
+}
+
+// ===== 全局基础 =====
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Helvetica Neue",
+    Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+// ===== 布局工具类 =====
+
+.page-container {
+  padding: 24px;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+
+  .page-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .page-desc {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+}
+
+.card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+.flex {
+  display: flex;
+}
+
+.flex-ac {
+  display: flex;
+  align-items: center;
+}
+
+.flex-bc {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.flex-1 {
+  flex: 1;
+  min-width: 0;
+}
+
+.cp {
+  cursor: pointer;
+}
+
+.mt-8 {
+  margin-top: 8px;
+}
+
+.mt-16 {
+  margin-top: 16px;
+}
+
+.mb-16 {
+  margin-bottom: 16px;
+}
+
+.ml-8 {
+  margin-left: 8px;
+}
+
+.ml-16 {
+  margin-left: 16px;
+}
+
+.mr-8 {
+  margin-right: 8px;
+}
+
+// 日志面板等宽字体
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+// ===== 页面切换过渡 =====
+
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+// ===== render 函数使用的类（h() 创建的元素不带 scoped 属性，必须全局定义）=====
+
+.app-name-link {
+  color: var(--primary);
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.row-action {
+  font-size: 13px;
+  color: var(--primary);
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.row-action-danger {
+  font-size: 13px;
+  color: var(--danger);
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.diff-link {
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.ds-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.ds-icon {
+  color: var(--text-muted);
+}
+
+.tree-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tree-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.tree-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.col-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.col-tag {
+  padding: 1px 8px;
+  font-size: 12px;
+  line-height: 18px;
+  border-radius: 4px;
+  background: var(--warning-soft, rgba(240, 160, 32, 0.12));
+  color: var(--warning, #f0a020);
+  white-space: nowrap;
+}
+
+.detail-text {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.pct-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pct-bar-wrap {
+  flex: 1;
+  max-width: 160px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.pct-bar {
+  height: 100%;
+  border-radius: 3px;
+}
+
+.pct-text {
+  min-width: 48px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}

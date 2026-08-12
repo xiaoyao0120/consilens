@@ -2,20 +2,20 @@ package com.consilens.server.infrastructure.db.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.consilens.server.domain.enums.TaskStatus;
-import com.consilens.server.infrastructure.db.entity.TaskEntity;
+import com.consilens.server.infrastructure.db.entity.TaskInstanceEntity;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
-public interface TaskService extends IService<TaskEntity> {
+public interface TaskService extends IService<TaskInstanceEntity> {
 
-    TaskEntity getByTaskKey(String taskKey);
+    TaskInstanceEntity getByTaskKey(String instanceKey);
 
-    TaskEntity getBySerialNo(String serialNo);
+    TaskInstanceEntity getBySerialNo(String serialNo);
 
-    TaskEntity lockBySerialNo(String serialNo);
+    TaskInstanceEntity lockBySerialNo(String serialNo);
 
     boolean updateStatus(Long taskId, TaskStatus status, LocalDateTime now);
 
@@ -46,11 +46,11 @@ public interface TaskService extends IService<TaskEntity> {
 
     boolean confirmCancellation(Long taskId, LocalDateTime now);
 
-    List<TaskEntity> listByExecuteNodeAndStatuses(String executeNodeKey, Collection<TaskStatus> statuses, int limit);
+    List<TaskInstanceEntity> listByExecuteNodeAndStatuses(String executeNodeKey, Collection<TaskStatus> statuses, int limit);
 
-    List<TaskEntity> listByStatusesExcludingExecuteNodes(Collection<TaskStatus> statuses,
+    List<TaskInstanceEntity> listByStatusesExcludingExecuteNodes(Collection<TaskStatus> statuses,
                                                         Set<String> executeNodeKeys,
                                                         int limit);
 
-    List<TaskEntity> listStaleRunning(LocalDateTime before, int limit);
+    List<TaskInstanceEntity> listStaleRunning(LocalDateTime before, int limit);
 }

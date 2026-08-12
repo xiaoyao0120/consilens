@@ -22,6 +22,12 @@ public class EndpointConfig {
 
     private String filter;
 
+    /** Optional reference to a registered data source; used to inject connection params. */
+    private Long datasourceId;
+
+    /** Database / schema name (matches the CLI config semantics: the JDBC url must carry it). */
+    private String database;
+
     @Builder.Default
     private Map<String, Object> connection = new LinkedHashMap<>();
 

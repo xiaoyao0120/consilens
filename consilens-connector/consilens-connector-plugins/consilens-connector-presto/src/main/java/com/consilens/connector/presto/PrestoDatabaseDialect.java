@@ -37,6 +37,24 @@ public class PrestoDatabaseDialect extends AbstractDatabaseDialect {
     }
 
     @Override
+    public String getJdbcDriverClassName() {
+        return "io.prestosql.jdbc.PrestoDriver";
+    }
+
+    @Override
+    public int getDefaultPort() {
+        return 8080;
+    }
+
+    @Override
+    public String buildJdbcUrl(Map<String, Object> params) {
+        String host = String.valueOf(params.get("host"));
+        int port = params.get("port") != null ? ((Number) params.get("port")).intValue() : getDefaultPort();
+        String database = params.get("database") != null ? String.valueOf(params.get("database")) : "";
+        return "jdbc:presto://" + host + ":" + port + "/" + database;
+    }
+
+    @Override
     public CapabilityProvider getCapabilityProvider() {
         return capabilityProvider;
     }

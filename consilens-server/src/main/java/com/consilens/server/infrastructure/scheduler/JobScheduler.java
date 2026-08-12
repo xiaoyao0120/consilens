@@ -5,7 +5,7 @@ import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.model.ServerTopologySnapshot;
 import com.consilens.server.domain.model.TaskCommandRecord;
-import com.consilens.server.domain.model.TaskRecord;
+import com.consilens.server.domain.model.TaskInstanceRecord;
 import com.consilens.server.domain.repository.TaskCommandRepository;
 import com.consilens.server.domain.repository.TaskRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -120,7 +120,7 @@ public class JobScheduler extends Thread {
 
     private TaskCommandRecord claim(TaskCommandRecord command, Instant now) {
         String executeNodeKey = topologyService.currentNodeKey();
-        Optional<TaskRecord> task = taskRepository.findById(command.getTaskId());
+        Optional<TaskInstanceRecord> task = taskRepository.findById(command.getTaskId());
         if (task.isEmpty() || task.get().getStatus() != TaskStatus.PENDING) {
             taskCommandRepository.releaseOpenByTaskId(command.getTaskId(), now);
             return null;

@@ -2,6 +2,8 @@ package com.consilens.connector.api;
 
 import com.consilens.connector.api.write.TableWriteCompiler;
 
+import java.util.Map;
+
 /**
  * Database dialect interface - main entry point for database-specific
  * operations.
@@ -89,6 +91,46 @@ public interface DatabaseDialect {
      * @return connection pool optimizer for this dialect
      */
     ConnectionPoolOptimizer getConnectionPoolOptimizer();
+
+    // ========== JDBC Support (datasource management / connection test) ==========
+
+    /**
+     * JDBC driver class name for this connector type
+     * (e.g. "com.mysql.cj.jdbc.Driver"). Used by the server's connection-test
+     * and metadata-exploration flows. Returns {@code null} for connector types
+     * without JDBC support.
+     *
+     * @return fully qualified driver class name, or null
+     */
+    default String getJdbcDriverClassName() {
+        return null;
+    }
+
+    /**
+     * Default connection port used when no explicit port is given.
+     *
+     * @return default port for this connector type
+     */
+    default int getDefaultPort() {
+        return 3306;
+    }
+
+    /**
+     * Build the JDBC URL for a connection. The {@code params} map uses these
+     * keys (all optional except {@code host}):
+     * <ul>
+     * <li>{@code host} - resolved IP literal of the target (required)</li>
+     * <li>{@code port} - explicit port; falls back to {@link #getDefaultPort()}</li>
+     * <li>{@code database} - database / schema / service name</li>
+     * </ul>
+     * Returns {@code null} when the connector type cannot build a JDBC URL.
+     *
+     * @param params connection parameters
+     * @return JDBC URL, or null when unsupported
+     */
+    default String buildJdbcUrl(Map<String, Object> params) {
+        return null;
+    }
 
     default TableWriteCompiler getTableWriteCompiler() {
         throw new UnsupportedOperationException("Table sink write is not supported for connectorType=" + getConnectorType());

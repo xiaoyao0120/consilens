@@ -72,7 +72,8 @@ public class GlobalExceptionHandler {
             HttpMessageNotReadableException.class,
             MissingServletRequestParameterException.class,
             MethodArgumentTypeMismatchException.class,
-            ConstraintViolationException.class
+            ConstraintViolationException.class,
+            IllegalArgumentException.class
     })
     public ResponseEntity<ApiResponse<Void>> handleBadRequest(Exception exception, HttpServletRequest request) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)

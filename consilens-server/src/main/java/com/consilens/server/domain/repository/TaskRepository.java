@@ -1,6 +1,7 @@
 package com.consilens.server.domain.repository;
 
-import com.consilens.server.domain.model.TaskRecord;
+import com.consilens.server.domain.model.TaskPage;
+import com.consilens.server.domain.model.TaskInstanceRecord;
 import com.consilens.server.domain.enums.TaskStatus;
 
 import java.time.Instant;
@@ -11,15 +12,30 @@ import java.util.Set;
 
 public interface TaskRepository {
 
-    Optional<TaskRecord> findById(Long id);
+    Optional<TaskInstanceRecord> findById(Long id);
 
-    Optional<TaskRecord> findByTaskKey(String taskKey);
+    /**
+     * 按引用解析实例：纯数字视为数据库雪花 id（Long），否则视为 instance_key。
+     * 兼容列表用 id、旧链接用 inst_xxx 两种取数方式。
+     */
+    default Optional<TaskInstanceRecord> resolveByRef(String ref) {
+        if (ref != null && ref.matches("\\d+")) {
+            try {
+                return findById(Long.valueOf(ref));
+            } catch (NumberFormatException ignored) {
+                // fall through to key lookup
+            }
+        }
+        return findByTaskKey(ref);
+    }
 
-    Optional<TaskRecord> findBySerialNo(String serialNo);
+    Optional<TaskInstanceRecord> findByTaskKey(String instanceKey);
 
-    Optional<TaskRecord> lockBySerialNo(String serialNo);
+    Optional<TaskInstanceRecord> findBySerialNo(String serialNo);
 
-    TaskRecord save(TaskRecord taskRecord);
+    Optional<TaskInstanceRecord> lockBySerialNo(String serialNo);
+
+    TaskInstanceRecord save(TaskInstanceRecord taskRecord);
 
     boolean updateClaimed(Long taskId, String executeNodeKey, Instant now);
 
@@ -55,11 +71,28 @@ public interface TaskRepository {
 
     boolean confirmCancellation(Long taskId, Instant now);
 
-    List<TaskRecord> listByExecuteNodeAndStatuses(String executeNodeKey, Collection<TaskStatus> statuses, int limit);
+    List<TaskInstanceRecord> listByExecuteNodeAndStatuses(String executeNodeKey, Collection<TaskStatus> statuses, int limit);
 
-    List<TaskRecord> listByStatusesExcludingExecuteNodes(Collection<TaskStatus> statuses,
+    List<TaskInstanceRecord> listByStatusesExcludingExecuteNodes(Collection<TaskStatus> statuses,
                                                          Set<String> executeNodeKeys,
                                                          int limit);
 
-    List<TaskRecord> listStaleRunning(Instant before, int limit);
+    List<TaskInstanceRecord> listStaleRunning(Instant before, int limit);
+
+    TaskPage listTaskPage(int page,
+                          int pageSize,
+                          Collection<TaskStatus> statuses,
+                          String serialNoLike,
+                          String executeNodeKey,
+                          Instant startTime,
+                          Instant endTime,
+                          Long definitionId);
+
+    long countByStatuses(Collection<TaskStatus> statuses);
+
+    long countSubmittedSince(Instant start, Instant end);
+
+    List<TaskInstanceRecord> listSubmittedSince(Instant start);
+
+    List<TaskInstanceRecord> listByDefinitionId(Long definitionId, int limit);
 }

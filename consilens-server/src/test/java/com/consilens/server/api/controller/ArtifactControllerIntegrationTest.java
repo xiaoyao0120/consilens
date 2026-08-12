@@ -32,4 +32,35 @@ class ArtifactControllerIntegrationTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"));
     }
+
+    @Test
+    void shouldRejectArtifactListWhenPageSizeExceedsLimit() throws Exception {
+        mockMvc.perform(get("/v1/artifacts").param("pageSize", "1000"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"));
+    }
+
+    @Test
+    void shouldListArtifactsWithPageFilters() throws Exception {
+        mockMvc.perform(get("/v1/artifacts")
+                        .param("page", "1")
+                        .param("pageSize", "10")
+                        .param("artifactType", "CONFIG")
+                        .param("keyword", "cfg")
+                        .header("X-Trace-Id", "trace-artifacts"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.pageSize").value(10))
+                .andExpect(jsonPath("$.data.items").isArray());
+    }
+
+    @Test
+    void shouldRejectTaskListWhenPageSizeExceedsLimit() throws Exception {
+        mockMvc.perform(get("/v1/tasks").param("pageSize", "1000"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.errorCode").value("INVALID_REQUEST"));
+    }
 }
