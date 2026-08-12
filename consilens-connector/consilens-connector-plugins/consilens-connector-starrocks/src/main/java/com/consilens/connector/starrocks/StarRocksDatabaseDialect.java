@@ -62,6 +62,24 @@ public class StarRocksDatabaseDialect extends AbstractDatabaseDialect {
     }
 
     @Override
+    public String getJdbcDriverClassName() {
+        return "com.mysql.cj.jdbc.Driver";
+    }
+
+    @Override
+    public int getDefaultPort() {
+        return 9030;
+    }
+
+    @Override
+    public String buildJdbcUrl(Map<String, Object> params) {
+        String host = String.valueOf(params.get("host"));
+        int port = params.get("port") != null ? ((Number) params.get("port")).intValue() : getDefaultPort();
+        String database = params.get("database") != null ? String.valueOf(params.get("database")) : "";
+        return "jdbc:mysql://" + host + ":" + port + "/" + database;
+    }
+
+    @Override
     public CapabilityProvider getCapabilityProvider() {
         return capabilityProvider;
     }

@@ -19,6 +19,9 @@ public class RunRequest {
     @Size(max = ApiValidationRules.ID_MAX_LENGTH)
     private String configArtifactId;
 
+    /** Owning task definition (null for externally submitted runs). */
+    private Long definitionId;
+
     private Object configContent;
 
     @Valid

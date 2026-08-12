@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.Instant;
 import java.util.List;
 
 @Data
@@ -14,10 +15,17 @@ import java.util.List;
 public class TaskQueryResponse {
 
     private String taskId;
+    private String serialNo;
+    private String definitionId;
+    private String definitionName;
     private String taskType;
     private String status;
     private String traceId;
     private String executeNodeKey;
+    private Integer retryCount;
+    private Instant submitTime;
+    private Instant startTime;
+    private Instant endTime;
     private List<ArtifactRefDto> artifacts;
     private List<String> availableNextActions;
 }

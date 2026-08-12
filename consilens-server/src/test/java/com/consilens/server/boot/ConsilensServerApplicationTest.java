@@ -17,7 +17,7 @@ import com.consilens.server.application.task.RunTaskQueryService;
 import com.consilens.server.application.task.RunTaskSubmissionService;
 import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.domain.enums.TaskStatus;
-import com.consilens.server.domain.model.TaskRecord;
+import com.consilens.server.domain.model.TaskInstanceRecord;
 import com.consilens.server.domain.model.TaskExecutionContext;
 import com.consilens.server.domain.repository.TaskRepository;
 import com.consilens.server.infrastructure.db.entity.TaskCommandEntity;
@@ -89,9 +89,9 @@ class ConsilensServerApplicationTest {
 
         assertThat(secondResponse.getTaskId()).isEqualTo(firstResponse.getTaskId());
 
-        Optional<TaskRecord> task = taskRepository.findBySerialNo(request.getSerialNo());
+        Optional<TaskInstanceRecord> task = taskRepository.findBySerialNo(request.getSerialNo());
         assertThat(task).isPresent();
-        assertThat(task.get().getTaskKey()).isEqualTo(firstResponse.getTaskId());
+        assertThat(task.get().getInstanceKey()).isEqualTo(firstResponse.getTaskId());
 
         long commandCount = taskCommandService.count(new QueryWrapper<TaskCommandEntity>().lambda()
                 .eq(TaskCommandEntity::getTaskId, task.get().getId()));
@@ -106,14 +106,14 @@ class ConsilensServerApplicationTest {
         request.setConfigArtifactId("artifact-config");
 
         TaskAcceptedResponse accepted = runTaskSubmissionService.submit(request, traceId);
-        TaskRecord task = taskRepository.findByTaskKey(accepted.getTaskId()).orElseThrow();
+        TaskInstanceRecord task = taskRepository.resolveByRef(accepted.getTaskId()).orElseThrow();
 
         assertThat(task.getTraceId()).isEqualTo(traceId);
 
         ArtifactRefDto artifact = artifactService.writeArtifact(
                 TaskExecutionContext.builder()
                         .taskId(task.getId())
-                        .taskKey(task.getTaskKey())
+                        .instanceKey(task.getInstanceKey())
                         .traceId(traceId)
                         .build(),
                 ArtifactKind.RUN_RESULT,
@@ -193,12 +193,12 @@ class ConsilensServerApplicationTest {
         request.setSerialNo("serial-query-" + UUID.randomUUID());
         request.setConfigArtifactId("artifact-config-query");
         TaskAcceptedResponse accepted = runTaskSubmissionService.submit(request, "trace-query");
-        TaskRecord task = taskRepository.findByTaskKey(accepted.getTaskId()).orElseThrow();
+        TaskInstanceRecord task = taskRepository.resolveByRef(accepted.getTaskId()).orElseThrow();
 
         ArtifactRefDto artifact = artifactService.writeArtifact(
                 TaskExecutionContext.builder()
                         .taskId(task.getId())
-                        .taskKey(task.getTaskKey())
+                        .instanceKey(task.getInstanceKey())
                         .traceId("trace-query")
                         .build(),
                 ArtifactKind.RUN_RESULT,
@@ -219,7 +219,7 @@ class ConsilensServerApplicationTest {
         request.setSerialNo("serial-release-" + UUID.randomUUID());
         request.setConfigArtifactId("artifact-config-release");
         runTaskSubmissionService.submit(request, "trace-release");
-        TaskRecord task = taskRepository.findBySerialNo(request.getSerialNo()).orElseThrow();
+        TaskInstanceRecord task = taskRepository.findBySerialNo(request.getSerialNo()).orElseThrow();
         TaskCommandEntity command = taskCommandService.getOne(new QueryWrapper<TaskCommandEntity>().lambda()
                 .eq(TaskCommandEntity::getTaskId, task.getId()), false);
 

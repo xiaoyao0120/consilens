@@ -65,6 +65,24 @@ public class ClickHouseDatabaseDialect extends AbstractDatabaseDialect {
     }
 
     @Override
+    public String getJdbcDriverClassName() {
+        return "com.clickhouse.jdbc.ClickHouseDriver";
+    }
+
+    @Override
+    public int getDefaultPort() {
+        return 8123;
+    }
+
+    @Override
+    public String buildJdbcUrl(Map<String, Object> params) {
+        String host = String.valueOf(params.get("host"));
+        int port = params.get("port") != null ? ((Number) params.get("port")).intValue() : getDefaultPort();
+        String database = params.get("database") != null ? String.valueOf(params.get("database")) : "";
+        return "jdbc:clickhouse://" + host + ":" + port + "/" + database;
+    }
+
+    @Override
     public CapabilityProvider getCapabilityProvider() {
         return capabilityProvider;
     }

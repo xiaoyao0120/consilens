@@ -11,9 +11,14 @@ import com.consilens.server.application.capability.config.ServerCompareConfigSer
 import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.exception.InvalidInputException;
+import com.consilens.server.application.capability.config.EndpointConfig;
+import com.consilens.server.domain.model.DataSourceRecord;
 import com.consilens.server.domain.model.TaskExecutionContext;
 import com.consilens.server.domain.model.TaskExecutionResult;
+import com.consilens.server.application.datasource.DialectSupport;
+import com.consilens.server.domain.repository.DataSourceRepository;
 import com.consilens.server.domain.repository.TaskRepository;
+import com.consilens.server.support.crypto.CryptoSupport;
 import com.consilens.core.compare.DefaultCompareRuntime;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
@@ -27,6 +32,10 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -39,13 +48,106 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
     private final ArtifactService artifactService;
     private final ServerCompareConfigService configService;
     private final TaskRepository taskRepository;
+    private final DataSourceRepository dataSourceRepository;
+    private final CryptoSupport cryptoSupport;
+    private final DialectSupport dialectSupport;
+    private final ObjectMapper objectMapper;
 
     public RunTaskHandler(ArtifactService artifactService,
                           ServerCompareConfigService configService,
-                          TaskRepository taskRepository) {
+                          TaskRepository taskRepository,
+                          DataSourceRepository dataSourceRepository,
+                          CryptoSupport cryptoSupport,
+                          DialectSupport dialectSupport,
+                          ObjectMapper objectMapper) {
         this.artifactService = artifactService;
         this.configService = configService;
         this.taskRepository = taskRepository;
+        this.dataSourceRepository = dataSourceRepository;
+        this.cryptoSupport = cryptoSupport;
+        this.dialectSupport = dialectSupport;
+        this.objectMapper = objectMapper;
+    }
+
+    /**
+     * 执行端连接注入：定义运行/直传配置通过 source/target.datasourceId 引用数据源，
+     * 此处按需读取并解密连接参数（提交落库的 payload 不含真实密码）。
+     */
+    void injectConnections(ServerCompareConfig config) {
+        injectEndpoint(config.getSource());
+        injectEndpoint(config.getTarget());
+    }
+
+    void injectEndpoint(EndpointConfig endpoint) {
+        if (endpoint == null) {
+            return;
+        }
+        Map<String, Object> connection = endpoint.getConnection();
+        // 情况1：提交端加密存储的密码（enc: 前缀）→ 解密还原（外部直传场景）
+        if (connection != null && connection.get("password") instanceof String
+                && ((String) connection.get("password")).startsWith("enc:")) {
+            Map<String, Object> fixed = new LinkedHashMap<>(connection);
+            fixed.put("password", cryptoSupport.reveal((String) connection.get("password")));
+            endpoint.setConnection(fixed);
+            return;
+        }
+        // 情况2：connection 缺失且引用数据源 → 数据源注入
+        boolean needsInjection = connection == null || connection.isEmpty();
+        if (!needsInjection || endpoint.getDatasourceId() == null) {
+            return;
+        }
+        dataSourceRepository.findById(endpoint.getDatasourceId()).ifPresentOrElse(ds -> {
+            Map<String, Object> param = fromParamJson(ds.getParamJson());
+            Map<String, Object> injected = new LinkedHashMap<>();
+            String host = stringValue(param.get("host"));
+            Integer port = integerValue(param.get("port"));
+            // 与 CLI 配置一致：显式 database（向导保存）优先，其次数据源 param
+            String database = endpoint.getDatabase() != null && !endpoint.getDatabase().isBlank()
+                    ? endpoint.getDatabase()
+                    : stringValue(param.get("database"));
+            // connector 执行端需要完整 JDBC URL，按数据源类型经 dialect 构建
+            dialectSupport.find(ds.getType())
+                    .ifPresent(dialect -> injected.put("url", dialect.buildJdbcUrl(
+                            java.util.Map.of("host", host == null ? "" : host,
+                                    "port", port == null ? dialect.getDefaultPort() : port,
+                                    "database", database == null ? "" : database))));
+            injected.put("host", host);
+            injected.put("port", port);
+            injected.put("database", database);
+            injected.put("username", stringValue(param.get("username")));
+            injected.put("password", cryptoSupport.reveal(
+                    param.get("password") != null ? String.valueOf(param.get("password")) : null));
+            endpoint.setConnection(injected);
+        }, () -> org.slf4j.LoggerFactory.getLogger(RunTaskHandler.class)
+                .warn("datasourceId {} referenced by config not found; connection left empty",
+                        endpoint.getDatasourceId()));
+    }
+
+    private String stringValue(Object value) {
+        return value == null ? null : String.valueOf(value);
+    }
+
+    private Integer integerValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        try {
+            return Integer.valueOf(String.valueOf(value));
+        } catch (NumberFormatException exception) {
+            return null;
+        }
+    }
+
+    private Map<String, Object> fromParamJson(String json) {
+        try {
+            return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {
+            });
+        } catch (Exception exception) {
+            return Map.of();
+        }
     }
 
     @Override
@@ -58,6 +160,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         Instant startedAt = Instant.now();
         try {
             ServerCompareConfig config = configService.fromRunRequest(request);
+            injectConnections(config);
             if (Boolean.TRUE.equals(options(request).getDryRun())) {
                 return writeSuccess(context, request, startedAt, true, configService.validateContent(config));
             }
@@ -126,7 +229,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
 
     private DiffContext buildDiffContext(TaskExecutionContext taskContext, ServerCompareConfig config) {
         return DiffContext.builder()
-                .taskId(taskContext.getTaskKey())
+                .taskId(taskContext.getInstanceKey())
                 .startTime(taskContext.getStartTime())
                 .sourceTablePath(tablePath(config.getSource().getTable()))
                 .targetTablePath(tablePath(config.getTarget().getTable()))
@@ -153,10 +256,6 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         return columns;
     }
 
-    private String stringValue(Object value) {
-        return value == null ? null : String.valueOf(value);
-    }
-
     private void publishDifferences(DiffResult result,
                                     DiffLifecycle lifecycle,
                                     DiffContext context) throws Exception {
@@ -173,7 +272,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
                 .map(task -> task.getStatus() == TaskStatus.CANCEL_REQUESTED)
                 .orElse(false);
         if (cancellationRequested) {
-            throw new TaskCancellationException(context.getTaskKey());
+            throw new TaskCancellationException(context.getInstanceKey());
         }
     }
 

@@ -39,6 +39,24 @@ public class SQLServerDatabaseDialect extends AbstractDatabaseDialect {
     }
 
     @Override
+    public String getJdbcDriverClassName() {
+        return "com.microsoft.sqlserver.jdbc.SQLServerDriver";
+    }
+
+    @Override
+    public int getDefaultPort() {
+        return 1433;
+    }
+
+    @Override
+    public String buildJdbcUrl(Map<String, Object> params) {
+        String host = String.valueOf(params.get("host"));
+        int port = params.get("port") != null ? ((Number) params.get("port")).intValue() : getDefaultPort();
+        String database = params.get("database") != null ? String.valueOf(params.get("database")) : "";
+        return "jdbc:sqlserver://" + host + ":" + port + ";databaseName=" + database;
+    }
+
+    @Override
     public CapabilityProvider getCapabilityProvider() {
         return capabilityProvider;
     }

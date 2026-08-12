@@ -1,5 +1,7 @@
 package com.consilens.server.application.capability.config;
 
+import com.consilens.connector.api.model.ComparisonSpec;
+import com.consilens.connector.api.planner.CompareRequest;
 import com.consilens.server.api.dto.PlanRequest;
 import com.consilens.server.api.dto.RunRequest;
 import com.consilens.server.application.artifact.ArtifactService;
@@ -11,10 +13,73 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 class ServerCompareConfigServiceTest {
+
+    private ServerCompareConfigService service() {
+        return new ServerCompareConfigService(mock(ArtifactService.class), new ObjectMapper());
+    }
+
+    @Test
+    void shouldParseFieldAndKeyMappingsFromHints() {
+        ServerCompareConfig config = service().fromPlanRequest(planRequestWithHints(Map.of(
+                "compareColumns", List.of(
+                        Map.of("source", "price_eur", "target", "price"),
+                        Map.of("source", "qty", "target", "quantity")),
+                "ignoreColumns", List.of("updated_at"),
+                "keyMappings", List.of(Map.of("source", "order_id", "target", "id")))));
+
+        ComparisonConfig comparison = config.getComparison();
+        assertEquals(2, comparison.getFieldMappings().size());
+        assertEquals("price_eur", comparison.getFieldMappings().get(0).getSource());
+        assertEquals("price", comparison.getFieldMappings().get(0).getTarget());
+        assertEquals(List.of("updated_at"), comparison.getIgnoreColumns());
+        assertEquals(1, comparison.getKeyMappings().size());
+        assertEquals("order_id", comparison.getKeyMappings().get(0).getSource());
+        assertEquals("id", comparison.getKeyMappings().get(0).getTarget());
+        assertTrue(comparison.getFields().isEmpty());
+    }
+
+    @Test
+    void shouldParsePlainCompareColumnsAsSameNameFields() {
+        ServerCompareConfig config = service().fromPlanRequest(planRequestWithHints(Map.of(
+                "compareColumns", List.of("name", "status"))));
+
+        ComparisonConfig comparison = config.getComparison();
+        assertTrue(comparison.getFieldMappings().isEmpty());
+        assertEquals(List.of("name", "status"), comparison.getFields());
+    }
+
+    @Test
+    void shouldBuildSideSpecificKeyAndComparisonSpecsForMappings() {
+        ServerCompareConfig config = service().fromPlanRequest(planRequestWithHints(Map.of(
+                "compareColumns", List.of(
+                        Map.of("source", "price_eur", "target", "price")),
+                "keyMappings", List.of(Map.of("source", "order_id", "target", "id")))));
+        config.getSource().setConnection(Map.of("url", "jdbc:mysql://localhost/test"));
+        config.getTarget().setConnection(Map.of("url", "jdbc:postgresql://localhost/test"));
+
+        CompareRequest request = service().toCompareRequest(config, new RunRequest.Options());
+
+        assertEquals(List.of("order_id"), request.getSourceKeySpec().getFields());
+        assertEquals(List.of("id"), request.getTargetKeySpec().getFields());
+        assertEquals(List.of("price_eur"), request.getSourceComparisons().getFields());
+        assertEquals(List.of("price"), request.getTargetComparisons().getFields());
+    }
+
+    private PlanRequest planRequestWithHints(Map<String, Object> hints) {
+        PlanRequest request = new PlanRequest();
+        request.setGoal("compare orders");
+        request.setSource(endpoint("mysql", "orders"));
+        request.setTarget(endpoint("postgresql", "orders"));
+        request.setKeys(List.of("order_id"));
+        request.setHints(new java.util.LinkedHashMap<>(hints));
+        return request;
+    }
 
     @Test
     void shouldRejectPlanRequestWithOnlyBlankKeys() {

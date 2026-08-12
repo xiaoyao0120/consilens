@@ -13,7 +13,7 @@ import java.time.Instant;
 @AllArgsConstructor
 public class TaskExecutionContext {
 
-    private String taskKey;
+    private String instanceKey;
     private Long taskId;
     private String traceId;
     private String tenantId;

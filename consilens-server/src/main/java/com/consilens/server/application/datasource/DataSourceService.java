@@ -1,0 +1,34 @@
+package com.consilens.server.application.datasource;
+
+import com.consilens.server.api.dto.ConnectionTestResponse;
+import com.consilens.server.api.dto.DataSourceCreateRequest;
+import com.consilens.server.api.dto.DataSourceDto;
+import com.consilens.server.api.dto.DataSourceTypeDto;
+import com.consilens.server.api.dto.MetadataColumnDto;
+
+import java.util.List;
+
+public interface DataSourceService {
+
+    List<DataSourceTypeDto> listTypes();
+
+    DataSourceDto create(DataSourceCreateRequest request);
+
+    List<DataSourceDto> list();
+
+    DataSourceDto get(Long id);
+
+    DataSourceDto update(Long id, DataSourceCreateRequest request);
+
+    void delete(Long id);
+
+    /** Test connectivity using the stored parameters. */
+    ConnectionTestResponse test(Long id);
+
+    /** Live metadata exploration (reuses stored parameters + connector dialect). */
+    List<String> getDatabases(Long id);
+
+    List<String> getTables(Long id, String database);
+
+    List<MetadataColumnDto> getColumns(Long id, String database, String table);
+}

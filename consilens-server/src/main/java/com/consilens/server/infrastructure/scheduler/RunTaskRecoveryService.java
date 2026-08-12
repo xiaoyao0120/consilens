@@ -1,13 +1,13 @@
 package com.consilens.server.infrastructure.scheduler;
 
-import com.consilens.server.application.task.RunTaskCommandEnqueueService;
+import com.consilens.server.application.task.impl.RunTaskCommandEnqueueService;
 import com.consilens.server.application.topology.ServerNodeQueryService;
 import com.consilens.server.application.topology.ServerTopologyService;
 import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.model.ServerNodeRecord;
 import com.consilens.server.domain.model.TaskCommandRecord;
-import com.consilens.server.domain.model.TaskRecord;
+import com.consilens.server.domain.model.TaskInstanceRecord;
 import com.consilens.server.domain.repository.TaskCommandRepository;
 import com.consilens.server.domain.repository.TaskRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -99,7 +99,7 @@ public class RunTaskRecoveryService {
     }
 
     @Transactional
-    public void retryOrFail(TaskRecord task, String errorCode, String errorMessage, Instant now) {
+    public void retryOrFail(TaskInstanceRecord task, String errorCode, String errorMessage, Instant now) {
         if (task == null) {
             return;
         }
@@ -117,14 +117,14 @@ public class RunTaskRecoveryService {
             if (taskRepository.resetForRetry(task.getId(), traceId, now)) {
                 task.setTraceId(traceId);
                 runTaskCommandEnqueueService.enqueue(task, now);
-                log.info("Recovered run task {} for retry", task.getTaskKey());
+                log.info("Recovered run task {} for retry", task.getInstanceKey());
             }
         } else if (taskRepository.updateFailureFromStatuses(task.getId(),
                 RECOVERABLE_STATUSES,
                 errorCode,
                 errorMessage,
                 now)) {
-            log.warn("Failed run task {} after retry budget exhausted", task.getTaskKey());
+            log.warn("Failed run task {} after retry budget exhausted", task.getInstanceKey());
         }
     }
 
@@ -140,7 +140,7 @@ public class RunTaskRecoveryService {
         }
     }
 
-    private boolean hasRetryBudget(TaskRecord task) {
+    private boolean hasRetryBudget(TaskInstanceRecord task) {
         int retryCount = task.getRetryCount() == null ? 0 : task.getRetryCount();
         int maxRetryCount = task.getMaxRetryCount() == null
                 ? properties.getScheduler().getMaxRetryCount()

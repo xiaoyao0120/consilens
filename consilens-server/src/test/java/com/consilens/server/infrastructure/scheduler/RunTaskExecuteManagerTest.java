@@ -8,7 +8,7 @@ import com.consilens.server.application.capability.TaskCancellationException;
 import com.consilens.server.application.topology.ServerTopologyService;
 import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.model.TaskCommandRecord;
-import com.consilens.server.domain.model.TaskRecord;
+import com.consilens.server.domain.model.TaskInstanceRecord;
 import com.consilens.server.domain.repository.TaskRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -39,9 +39,9 @@ class RunTaskExecuteManagerTest {
         RunRequest request = new RunRequest();
         request.setSerialNo("serial-test");
         request.setConfigArtifactId("artifact-config");
-        TaskRecord task = TaskRecord.builder()
+        TaskInstanceRecord task = TaskInstanceRecord.builder()
                 .id(10L)
-                .taskKey("task-test")
+                .instanceKey("task-test")
                 .traceId("trace-test")
                 .requestPayload(objectMapper.writeValueAsString(request))
                 .build();
@@ -86,9 +86,9 @@ class RunTaskExecuteManagerTest {
         RunRequest request = new RunRequest();
         request.setSerialNo("serial-retry");
         request.setConfigArtifactId("artifact-config");
-        TaskRecord task = TaskRecord.builder()
+        TaskInstanceRecord task = TaskInstanceRecord.builder()
                 .id(11L)
-                .taskKey("task-retry")
+                .instanceKey("task-retry")
                 .traceId("trace-retry")
                 .requestPayload(objectMapper.writeValueAsString(request))
                 .retryCount(0)
@@ -133,9 +133,9 @@ class RunTaskExecuteManagerTest {
         RunTaskRecoveryService runTaskRecoveryService = mock(RunTaskRecoveryService.class);
         ConsilensServerProperties properties = new ConsilensServerProperties();
         properties.getScheduler().setClaimLeaseSeconds(1);
-        TaskRecord task = TaskRecord.builder()
+        TaskInstanceRecord task = TaskInstanceRecord.builder()
                 .id(12L)
-                .taskKey("task-invalid-payload")
+                .instanceKey("task-invalid-payload")
                 .requestPayload("not-json")
                 .build();
         when(taskRepository.findById(12L)).thenReturn(Optional.of(task));
@@ -173,9 +173,9 @@ class RunTaskExecuteManagerTest {
         RunRequest request = new RunRequest();
         request.setSerialNo("serial-cancel");
         request.setConfigArtifactId("artifact-config");
-        TaskRecord task = TaskRecord.builder()
+        TaskInstanceRecord task = TaskInstanceRecord.builder()
                 .id(13L)
-                .taskKey("task-cancel")
+                .instanceKey("task-cancel")
                 .traceId("trace-cancel")
                 .requestPayload(objectMapper.writeValueAsString(request))
                 .build();
@@ -216,9 +216,9 @@ class RunTaskExecuteManagerTest {
         RunRequest request = new RunRequest();
         request.setSerialNo("serial-cancel-race");
         request.setConfigArtifactId("artifact-config");
-        TaskRecord task = TaskRecord.builder()
+        TaskInstanceRecord task = TaskInstanceRecord.builder()
                 .id(14L)
-                .taskKey("task-cancel-race")
+                .instanceKey("task-cancel-race")
                 .traceId("trace-cancel-race")
                 .requestPayload(objectMapper.writeValueAsString(request))
                 .build();

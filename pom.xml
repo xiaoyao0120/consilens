@@ -65,6 +65,7 @@
         <module>consilens-sink</module>
         <module>consilens-performance</module>
         <module>consilens-cli</module>
+        <module>consilens-ui</module>
         <module>consilens-server</module>
     </modules>
 

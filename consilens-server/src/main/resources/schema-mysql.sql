@@ -16,9 +16,10 @@ CREATE TABLE IF NOT EXISTS cs_server_node (
     UNIQUE KEY uk_cs_server_node_node_key (node_key)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS cs_task (
+CREATE TABLE IF NOT EXISTS cs_task_instance (
     id BIGINT NOT NULL AUTO_INCREMENT,
-    task_key VARCHAR(64) NOT NULL,
+    instance_key VARCHAR(64) NOT NULL,
+    definition_id BIGINT,
     serial_no VARCHAR(128) NOT NULL,
     tenant_id VARCHAR(64),
     trace_id VARCHAR(128) NOT NULL,
@@ -40,7 +41,7 @@ CREATE TABLE IF NOT EXISTS cs_task (
     created_at DATETIME(3) NOT NULL,
     updated_at DATETIME(3) NOT NULL,
     PRIMARY KEY (id),
-    UNIQUE KEY uk_cs_task_task_key (task_key),
+    UNIQUE KEY uk_cs_task_instance_key (instance_key),
     UNIQUE KEY uk_cs_task_serial_no (serial_no),
     KEY idx_cs_task_status_schedule (status, schedule_time),
     KEY idx_cs_task_execute_node_status (execute_node_key, status),
@@ -65,7 +66,7 @@ CREATE TABLE IF NOT EXISTS cs_task_command (
     KEY idx_cs_task_command_shard_status_schedule (shard_slot, status, schedule_time),
     KEY idx_cs_task_command_execute_node_status (execute_node_key, status),
     KEY idx_cs_task_command_task_id (task_id),
-    CONSTRAINT fk_cs_task_command_task_id FOREIGN KEY (task_id) REFERENCES cs_task (id)
+    CONSTRAINT fk_cs_task_command_task_id FOREIGN KEY (task_id) REFERENCES cs_task_instance (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS cs_artifact (
@@ -83,5 +84,37 @@ CREATE TABLE IF NOT EXISTS cs_artifact (
     KEY idx_cs_artifact_task_id (task_id),
     KEY idx_cs_artifact_trace_id (trace_id),
     KEY idx_cs_artifact_type_created_at (artifact_type, created_at),
-    CONSTRAINT fk_cs_artifact_task_id FOREIGN KEY (task_id) REFERENCES cs_task (id)
+    CONSTRAINT fk_cs_artifact_task_id FOREIGN KEY (task_id) REFERENCES cs_task_instance (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS cs_datasource (
+    id BIGINT NOT NULL,
+    name VARCHAR(128) NOT NULL,
+    type VARCHAR(64) NOT NULL,
+    param MEDIUMTEXT NOT NULL,
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_cs_datasource_name (name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS cs_task_definition (
+    id BIGINT NOT NULL,
+    definition_key VARCHAR(64) NOT NULL,
+    name VARCHAR(128) NOT NULL,
+    description VARCHAR(512),
+    task_type VARCHAR(32) NOT NULL DEFAULT 'RUN',
+    config MEDIUMTEXT NOT NULL,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    schedule_type VARCHAR(16),
+    cron_expr VARCHAR(64),
+    last_run_at DATETIME(3),
+    created_at DATETIME(3) NOT NULL,
+    updated_at DATETIME(3) NOT NULL,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_cs_task_definition_key (definition_key),
+    UNIQUE KEY uk_cs_task_definition_name (name),
+    KEY idx_cs_task_definition_enabled (enabled)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE INDEX idx_cs_task_instance_definition ON cs_task_instance (definition_id, submit_time);

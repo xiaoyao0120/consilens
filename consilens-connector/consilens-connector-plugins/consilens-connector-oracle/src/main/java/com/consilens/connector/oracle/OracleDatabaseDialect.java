@@ -39,6 +39,25 @@ public class OracleDatabaseDialect extends AbstractDatabaseDialect {
     }
 
     @Override
+    public String getJdbcDriverClassName() {
+        return "oracle.jdbc.OracleDriver";
+    }
+
+    @Override
+    public int getDefaultPort() {
+        return 1521;
+    }
+
+    @Override
+    public String buildJdbcUrl(Map<String, Object> params) {
+        String host = String.valueOf(params.get("host"));
+        int port = params.get("port") != null ? ((Number) params.get("port")).intValue() : getDefaultPort();
+        // database 参数视为 Oracle service name
+        String service = params.get("database") != null ? String.valueOf(params.get("database")) : "";
+        return "jdbc:oracle:thin:@//" + host + ":" + port + "/" + service;
+    }
+
+    @Override
     public CapabilityProvider getCapabilityProvider() {
         return capabilityProvider;
     }

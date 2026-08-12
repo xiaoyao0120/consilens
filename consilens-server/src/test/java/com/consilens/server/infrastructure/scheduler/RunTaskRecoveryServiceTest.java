@@ -1,12 +1,12 @@
 package com.consilens.server.infrastructure.scheduler;
 
-import com.consilens.server.application.task.RunTaskCommandEnqueueService;
+import com.consilens.server.application.task.impl.RunTaskCommandEnqueueService;
 import com.consilens.server.application.topology.ServerNodeQueryService;
 import com.consilens.server.application.topology.ServerTopologyService;
 import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.model.TaskCommandRecord;
-import com.consilens.server.domain.model.TaskRecord;
+import com.consilens.server.domain.model.TaskInstanceRecord;
 import com.consilens.server.domain.repository.TaskCommandRepository;
 import com.consilens.server.domain.repository.TaskRepository;
 import org.junit.jupiter.api.Test;
@@ -35,9 +35,9 @@ class RunTaskRecoveryServiceTest {
         ServerTopologyService serverTopologyService = mock(ServerTopologyService.class);
         ConsilensServerProperties properties = new ConsilensServerProperties();
         Instant now = Instant.now();
-        TaskRecord task = TaskRecord.builder()
+        TaskInstanceRecord task = TaskInstanceRecord.builder()
                 .id(100L)
-                .taskKey("task-requeue")
+                .instanceKey("task-requeue")
                 .status(TaskStatus.CLAIMED)
                 .build();
         TaskCommandRecord command = TaskCommandRecord.builder()
@@ -74,9 +74,9 @@ class RunTaskRecoveryServiceTest {
         ServerTopologyService serverTopologyService = mock(ServerTopologyService.class);
         ConsilensServerProperties properties = new ConsilensServerProperties();
         Instant now = Instant.now();
-        TaskRecord task = TaskRecord.builder()
+        TaskInstanceRecord task = TaskInstanceRecord.builder()
                 .id(101L)
-                .taskKey("task-retry")
+                .instanceKey("task-retry")
                 .status(TaskStatus.RUNNING)
                 .retryCount(0)
                 .maxRetryCount(3)
@@ -109,9 +109,9 @@ class RunTaskRecoveryServiceTest {
         ServerTopologyService serverTopologyService = mock(ServerTopologyService.class);
         ConsilensServerProperties properties = new ConsilensServerProperties();
         Instant now = Instant.now();
-        TaskRecord task = TaskRecord.builder()
+        TaskInstanceRecord task = TaskInstanceRecord.builder()
                 .id(102L)
-                .taskKey("task-dead-node")
+                .instanceKey("task-dead-node")
                 .status(TaskStatus.RUNNING)
                 .retryCount(0)
                 .maxRetryCount(3)
@@ -148,9 +148,9 @@ class RunTaskRecoveryServiceTest {
         ServerTopologyService serverTopologyService = mock(ServerTopologyService.class);
         ConsilensServerProperties properties = new ConsilensServerProperties();
         Instant now = Instant.now();
-        TaskRecord task = TaskRecord.builder()
+        TaskInstanceRecord task = TaskInstanceRecord.builder()
                 .id(103L)
-                .taskKey("task-stale-running")
+                .instanceKey("task-stale-running")
                 .status(TaskStatus.RUNNING)
                 .retryCount(0)
                 .maxRetryCount(3)
@@ -215,9 +215,9 @@ class RunTaskRecoveryServiceTest {
         ServerTopologyService serverTopologyService = mock(ServerTopologyService.class);
         ConsilensServerProperties properties = new ConsilensServerProperties();
         Instant now = Instant.now();
-        TaskRecord task = TaskRecord.builder()
+        TaskInstanceRecord task = TaskInstanceRecord.builder()
                 .id(104L)
-                .taskKey("task-startup-drain")
+                .instanceKey("task-startup-drain")
                 .status(TaskStatus.CLAIMED)
                 .build();
         TaskCommandRecord first = TaskCommandRecord.builder().id(300L).taskId(104L).build();

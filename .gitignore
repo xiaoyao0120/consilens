@@ -142,3 +142,10 @@ design/
 output
 .orchelon
 .consilens-server/artifacts
+.reasonix
+
+# 前端构建产物（由 consilens-ui/dist 经 maven-resources-plugin 拷贝）
+consilens-server/src/main/resources/static/
+consilens-ui/dist/
+consilens-ui/node
+consilens-ui/node_modules

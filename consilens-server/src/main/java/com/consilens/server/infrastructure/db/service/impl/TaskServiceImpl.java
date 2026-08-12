@@ -4,8 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.consilens.server.domain.enums.TaskStatus;
-import com.consilens.server.infrastructure.db.entity.TaskEntity;
-import com.consilens.server.infrastructure.db.mapper.TaskMapper;
+import com.consilens.server.infrastructure.db.entity.TaskInstanceEntity;
+import com.consilens.server.infrastructure.db.mapper.TaskInstanceMapper;
 import com.consilens.server.infrastructure.db.service.TaskService;
 import org.springframework.stereotype.Service;
 
@@ -15,71 +15,71 @@ import java.util.List;
 import java.util.Set;
 
 @Service
-public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> implements TaskService {
+public class TaskServiceImpl extends ServiceImpl<TaskInstanceMapper, TaskInstanceEntity> implements TaskService {
 
     @Override
-    public TaskEntity getByTaskKey(String taskKey) {
-        return getOne(new QueryWrapper<TaskEntity>().lambda()
-                .eq(TaskEntity::getTaskKey, taskKey), false);
+    public TaskInstanceEntity getByTaskKey(String instanceKey) {
+        return getOne(new QueryWrapper<TaskInstanceEntity>().lambda()
+                .eq(TaskInstanceEntity::getInstanceKey, instanceKey), false);
     }
 
     @Override
-    public TaskEntity getBySerialNo(String serialNo) {
-        return getOne(new QueryWrapper<TaskEntity>().lambda()
-                .eq(TaskEntity::getSerialNo, serialNo), false);
+    public TaskInstanceEntity getBySerialNo(String serialNo) {
+        return getOne(new QueryWrapper<TaskInstanceEntity>().lambda()
+                .eq(TaskInstanceEntity::getSerialNo, serialNo), false);
     }
 
     @Override
-    public TaskEntity lockBySerialNo(String serialNo) {
+    public TaskInstanceEntity lockBySerialNo(String serialNo) {
         return baseMapper.lockBySerialNo(serialNo);
     }
 
     @Override
     public boolean updateStatus(Long taskId, TaskStatus status, LocalDateTime now) {
-        return update(new UpdateWrapper<TaskEntity>().lambda()
-                .set(TaskEntity::getStatus, status)
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId));
+        return update(new UpdateWrapper<TaskInstanceEntity>().lambda()
+                .set(TaskInstanceEntity::getStatus, status)
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId));
     }
 
     @Override
     public boolean updateClaimed(Long taskId, String executeNodeKey, LocalDateTime now) {
-        return update(new UpdateWrapper<TaskEntity>().lambda()
-                .set(TaskEntity::getStatus, TaskStatus.CLAIMED)
-                .set(TaskEntity::getExecuteNodeKey, executeNodeKey)
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId)
-                .eq(TaskEntity::getStatus, TaskStatus.PENDING));
+        return update(new UpdateWrapper<TaskInstanceEntity>().lambda()
+                .set(TaskInstanceEntity::getStatus, TaskStatus.CLAIMED)
+                .set(TaskInstanceEntity::getExecuteNodeKey, executeNodeKey)
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId)
+                .eq(TaskInstanceEntity::getStatus, TaskStatus.PENDING));
     }
 
     @Override
     public boolean updateRunning(Long taskId, String executeNodeKey, LocalDateTime now) {
-        return update(new UpdateWrapper<TaskEntity>().lambda()
-                .set(TaskEntity::getStatus, TaskStatus.RUNNING)
-                .set(TaskEntity::getExecuteNodeKey, executeNodeKey)
-                .set(TaskEntity::getStartTime, now)
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId)
-                .eq(TaskEntity::getStatus, TaskStatus.CLAIMED));
+        return update(new UpdateWrapper<TaskInstanceEntity>().lambda()
+                .set(TaskInstanceEntity::getStatus, TaskStatus.RUNNING)
+                .set(TaskInstanceEntity::getExecuteNodeKey, executeNodeKey)
+                .set(TaskInstanceEntity::getStartTime, now)
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId)
+                .eq(TaskInstanceEntity::getStatus, TaskStatus.CLAIMED));
     }
 
     @Override
     public boolean renewRunning(Long taskId, LocalDateTime now) {
-        return update(new UpdateWrapper<TaskEntity>().lambda()
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId)
-                .eq(TaskEntity::getStatus, TaskStatus.RUNNING));
+        return update(new UpdateWrapper<TaskInstanceEntity>().lambda()
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId)
+                .eq(TaskInstanceEntity::getStatus, TaskStatus.RUNNING));
     }
 
     @Override
     public boolean updateSuccess(Long taskId, String artifactId, LocalDateTime now) {
-        return update(new UpdateWrapper<TaskEntity>().lambda()
-                .set(TaskEntity::getStatus, TaskStatus.SUCCEEDED)
-                .set(TaskEntity::getResultArtifactId, artifactId)
-                .set(TaskEntity::getEndTime, now)
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId)
-                .eq(TaskEntity::getStatus, TaskStatus.RUNNING));
+        return update(new UpdateWrapper<TaskInstanceEntity>().lambda()
+                .set(TaskInstanceEntity::getStatus, TaskStatus.SUCCEEDED)
+                .set(TaskInstanceEntity::getResultArtifactId, artifactId)
+                .set(TaskInstanceEntity::getEndTime, now)
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId)
+                .eq(TaskInstanceEntity::getStatus, TaskStatus.RUNNING));
     }
 
     @Override
@@ -88,15 +88,15 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
                                  String errorCode,
                                  String errorMessage,
                                  LocalDateTime now) {
-        UpdateWrapper<TaskEntity> wrapper = new UpdateWrapper<>();
+        UpdateWrapper<TaskInstanceEntity> wrapper = new UpdateWrapper<>();
         wrapper.lambda()
-                .set(TaskEntity::getStatus, status)
-                .set(TaskEntity::getErrorCode, errorCode)
-                .set(TaskEntity::getErrorMessage, errorMessage)
-                .set(TaskEntity::getEndTime, now)
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId)
-                .eq(TaskEntity::getStatus, TaskStatus.RUNNING);
+                .set(TaskInstanceEntity::getStatus, status)
+                .set(TaskInstanceEntity::getErrorCode, errorCode)
+                .set(TaskInstanceEntity::getErrorMessage, errorMessage)
+                .set(TaskInstanceEntity::getEndTime, now)
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId)
+                .eq(TaskInstanceEntity::getStatus, TaskStatus.RUNNING);
         if (TaskStatus.RETRYABLE.equals(status)) {
             wrapper.setSql("retry_count = retry_count + 1");
         }
@@ -113,15 +113,15 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
         if (statuses == null || statuses.isEmpty()) {
             return false;
         }
-        UpdateWrapper<TaskEntity> wrapper = new UpdateWrapper<>();
+        UpdateWrapper<TaskInstanceEntity> wrapper = new UpdateWrapper<>();
         wrapper.lambda()
-                .set(TaskEntity::getStatus, status)
-                .set(TaskEntity::getErrorCode, errorCode)
-                .set(TaskEntity::getErrorMessage, errorMessage)
-                .set(TaskEntity::getEndTime, now)
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId)
-                .in(TaskEntity::getStatus, statuses);
+                .set(TaskInstanceEntity::getStatus, status)
+                .set(TaskInstanceEntity::getErrorCode, errorCode)
+                .set(TaskInstanceEntity::getErrorMessage, errorMessage)
+                .set(TaskInstanceEntity::getEndTime, now)
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId)
+                .in(TaskInstanceEntity::getStatus, statuses);
         if (TaskStatus.RETRYABLE.equals(status)) {
             wrapper.setSql("retry_count = retry_count + 1");
         }
@@ -130,106 +130,106 @@ public class TaskServiceImpl extends ServiceImpl<TaskMapper, TaskEntity> impleme
 
     @Override
     public boolean releaseClaimed(Long taskId, LocalDateTime now) {
-        return update(new UpdateWrapper<TaskEntity>().lambda()
-                .set(TaskEntity::getStatus, TaskStatus.PENDING)
-                .set(TaskEntity::getExecuteNodeKey, null)
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId)
-                .eq(TaskEntity::getStatus, TaskStatus.CLAIMED));
+        return update(new UpdateWrapper<TaskInstanceEntity>().lambda()
+                .set(TaskInstanceEntity::getStatus, TaskStatus.PENDING)
+                .set(TaskInstanceEntity::getExecuteNodeKey, null)
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId)
+                .eq(TaskInstanceEntity::getStatus, TaskStatus.CLAIMED));
     }
 
     @Override
     public boolean resetForRetry(Long taskId, String traceId, LocalDateTime now) {
-        return update(new UpdateWrapper<TaskEntity>().lambda()
-                .set(TaskEntity::getStatus, TaskStatus.PENDING)
-                .set(TaskEntity::getTraceId, traceId)
-                .set(TaskEntity::getStartTime, null)
-                .set(TaskEntity::getEndTime, null)
-                .set(TaskEntity::getExecuteNodeKey, null)
-                .set(TaskEntity::getErrorCode, null)
-                .set(TaskEntity::getErrorMessage, null)
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId)
-                .in(TaskEntity::getStatus, TaskStatus.FAILED, TaskStatus.RETRYABLE, TaskStatus.CANCELLED));
+        return update(new UpdateWrapper<TaskInstanceEntity>().lambda()
+                .set(TaskInstanceEntity::getStatus, TaskStatus.PENDING)
+                .set(TaskInstanceEntity::getTraceId, traceId)
+                .set(TaskInstanceEntity::getStartTime, null)
+                .set(TaskInstanceEntity::getEndTime, null)
+                .set(TaskInstanceEntity::getExecuteNodeKey, null)
+                .set(TaskInstanceEntity::getErrorCode, null)
+                .set(TaskInstanceEntity::getErrorMessage, null)
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId)
+                .in(TaskInstanceEntity::getStatus, TaskStatus.FAILED, TaskStatus.RETRYABLE, TaskStatus.CANCELLED));
     }
 
     @Override
     public boolean cancel(Long taskId, LocalDateTime now) {
-        return update(new UpdateWrapper<TaskEntity>().lambda()
-                .set(TaskEntity::getStatus, TaskStatus.CANCELLED)
-                .set(TaskEntity::getErrorCode, "CANCELLED")
-                .set(TaskEntity::getErrorMessage, "Cancelled by API request")
-                .set(TaskEntity::getEndTime, now)
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId)
-                .in(TaskEntity::getStatus, TaskStatus.PENDING, TaskStatus.CLAIMED));
+        return update(new UpdateWrapper<TaskInstanceEntity>().lambda()
+                .set(TaskInstanceEntity::getStatus, TaskStatus.CANCELLED)
+                .set(TaskInstanceEntity::getErrorCode, "CANCELLED")
+                .set(TaskInstanceEntity::getErrorMessage, "Cancelled by API request")
+                .set(TaskInstanceEntity::getEndTime, now)
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId)
+                .in(TaskInstanceEntity::getStatus, TaskStatus.PENDING, TaskStatus.CLAIMED));
     }
 
     @Override
     public boolean requestCancellation(Long taskId, LocalDateTime now) {
-        return update(new UpdateWrapper<TaskEntity>().lambda()
-                .set(TaskEntity::getStatus, TaskStatus.CANCEL_REQUESTED)
-                .set(TaskEntity::getErrorCode, "CANCEL_REQUESTED")
-                .set(TaskEntity::getErrorMessage, "Cancellation requested by API request")
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId)
-                .eq(TaskEntity::getStatus, TaskStatus.RUNNING));
+        return update(new UpdateWrapper<TaskInstanceEntity>().lambda()
+                .set(TaskInstanceEntity::getStatus, TaskStatus.CANCEL_REQUESTED)
+                .set(TaskInstanceEntity::getErrorCode, "CANCEL_REQUESTED")
+                .set(TaskInstanceEntity::getErrorMessage, "Cancellation requested by API request")
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId)
+                .eq(TaskInstanceEntity::getStatus, TaskStatus.RUNNING));
     }
 
     @Override
     public boolean confirmCancellation(Long taskId, LocalDateTime now) {
-        return update(new UpdateWrapper<TaskEntity>().lambda()
-                .set(TaskEntity::getStatus, TaskStatus.CANCELLED)
-                .set(TaskEntity::getErrorCode, "CANCELLED")
-                .set(TaskEntity::getErrorMessage, "Cancelled after execution stopped")
-                .set(TaskEntity::getEndTime, now)
-                .set(TaskEntity::getUpdatedAt, now)
-                .eq(TaskEntity::getId, taskId)
-                .eq(TaskEntity::getStatus, TaskStatus.CANCEL_REQUESTED));
+        return update(new UpdateWrapper<TaskInstanceEntity>().lambda()
+                .set(TaskInstanceEntity::getStatus, TaskStatus.CANCELLED)
+                .set(TaskInstanceEntity::getErrorCode, "CANCELLED")
+                .set(TaskInstanceEntity::getErrorMessage, "Cancelled after execution stopped")
+                .set(TaskInstanceEntity::getEndTime, now)
+                .set(TaskInstanceEntity::getUpdatedAt, now)
+                .eq(TaskInstanceEntity::getId, taskId)
+                .eq(TaskInstanceEntity::getStatus, TaskStatus.CANCEL_REQUESTED));
     }
 
     @Override
-    public List<TaskEntity> listByExecuteNodeAndStatuses(String executeNodeKey,
+    public List<TaskInstanceEntity> listByExecuteNodeAndStatuses(String executeNodeKey,
                                                          Collection<TaskStatus> statuses,
                                                          int limit) {
         if (limit <= 0 || statuses == null || statuses.isEmpty()) {
             return List.of();
         }
-        return list(new QueryWrapper<TaskEntity>().lambda()
-                .eq(TaskEntity::getExecuteNodeKey, executeNodeKey)
-                .in(TaskEntity::getStatus, statuses)
-                .orderByAsc(TaskEntity::getUpdatedAt)
+        return list(new QueryWrapper<TaskInstanceEntity>().lambda()
+                .eq(TaskInstanceEntity::getExecuteNodeKey, executeNodeKey)
+                .in(TaskInstanceEntity::getStatus, statuses)
+                .orderByAsc(TaskInstanceEntity::getUpdatedAt)
                 .last("LIMIT " + limit));
     }
 
     @Override
-    public List<TaskEntity> listByStatusesExcludingExecuteNodes(Collection<TaskStatus> statuses,
+    public List<TaskInstanceEntity> listByStatusesExcludingExecuteNodes(Collection<TaskStatus> statuses,
                                                                Set<String> executeNodeKeys,
                                                                int limit) {
         if (limit <= 0 || statuses == null || statuses.isEmpty()) {
             return List.of();
         }
-        QueryWrapper<TaskEntity> wrapper = new QueryWrapper<>();
+        QueryWrapper<TaskInstanceEntity> wrapper = new QueryWrapper<>();
         wrapper.lambda()
-                .in(TaskEntity::getStatus, statuses)
-                .isNotNull(TaskEntity::getExecuteNodeKey)
-                .orderByAsc(TaskEntity::getUpdatedAt)
+                .in(TaskInstanceEntity::getStatus, statuses)
+                .isNotNull(TaskInstanceEntity::getExecuteNodeKey)
+                .orderByAsc(TaskInstanceEntity::getUpdatedAt)
                 .last("LIMIT " + limit);
         if (executeNodeKeys != null && !executeNodeKeys.isEmpty()) {
-            wrapper.lambda().notIn(TaskEntity::getExecuteNodeKey, executeNodeKeys);
+            wrapper.lambda().notIn(TaskInstanceEntity::getExecuteNodeKey, executeNodeKeys);
         }
         return list(wrapper);
     }
 
     @Override
-    public List<TaskEntity> listStaleRunning(LocalDateTime before, int limit) {
+    public List<TaskInstanceEntity> listStaleRunning(LocalDateTime before, int limit) {
         if (limit <= 0) {
             return List.of();
         }
-        return list(new QueryWrapper<TaskEntity>().lambda()
-                .eq(TaskEntity::getStatus, TaskStatus.RUNNING)
-                .lt(TaskEntity::getUpdatedAt, before)
-                .orderByAsc(TaskEntity::getUpdatedAt)
+        return list(new QueryWrapper<TaskInstanceEntity>().lambda()
+                .eq(TaskInstanceEntity::getStatus, TaskStatus.RUNNING)
+                .lt(TaskInstanceEntity::getUpdatedAt, before)
+                .orderByAsc(TaskInstanceEntity::getUpdatedAt)
                 .last("LIMIT " + limit));
     }
 }
