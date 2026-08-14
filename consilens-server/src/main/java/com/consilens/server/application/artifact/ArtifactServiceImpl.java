@@ -1,6 +1,7 @@
 package com.consilens.server.application.artifact;
 
 import com.consilens.server.api.dto.ArtifactContentDto;
+import com.consilens.server.api.dto.DiffPageDto;
 import com.consilens.server.api.dto.ArtifactRefDto;
 import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.domain.exception.ArtifactIntegrityException;
@@ -13,13 +14,17 @@ import com.consilens.server.infrastructure.storage.StoredArtifactContent;
 import com.consilens.server.support.hash.Sha256Support;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 public class ArtifactServiceImpl implements ArtifactService {
@@ -91,6 +96,24 @@ public class ArtifactServiceImpl implements ArtifactService {
         return toRef(saved);
     }
 
+    @Override
+    public ArtifactRefDto updateRunResultMeta(String artifactId,
+                                              Map<String, Object> statistics,
+                                              boolean truncated,
+                                              long rows,
+                                              String differencesUri) {
+        ArtifactRecord record = artifactRepository.findById(artifactId)
+                .orElseThrow(() -> new com.consilens.server.domain.exception.ResourceNotFoundException(
+                        "Artifact not found: " + artifactId));
+        record.setStatisticsJson(toJson(statistics == null ? Map.of() : statistics));
+        Object total = statistics == null ? null : statistics.get("totalDifferences");
+        record.setDifferenceCount(total instanceof Number ? ((Number) total).longValue() : 0L);
+        record.setDifferenceTruncated(truncated);
+        record.setDifferenceRows(Math.min(rows, Integer.MAX_VALUE));
+        record.setDifferencesUri(differencesUri);
+        return toRef(artifactRepository.update(record));
+    }
+
     private ArtifactRefDto toRef(ArtifactRecord record) {
         return ArtifactRefDto.builder()
                 .id(record.getId())
@@ -108,7 +131,7 @@ public class ArtifactServiceImpl implements ArtifactService {
             if (content instanceof String) {
                 return ((String) content).getBytes(StandardCharsets.UTF_8);
             }
-            if ("json".equalsIgnoreCase(format)) {
+            if ("json".equalsIgnoreCase(format) || "ndjson".equalsIgnoreCase(format)) {
                 return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(content);
             }
             return String.valueOf(content).getBytes(StandardCharsets.UTF_8);

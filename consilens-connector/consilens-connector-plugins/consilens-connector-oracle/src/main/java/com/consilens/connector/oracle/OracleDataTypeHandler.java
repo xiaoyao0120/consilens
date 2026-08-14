@@ -308,8 +308,7 @@ public class OracleDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeTimestamp(String quotedCol) {
-        return "COALESCE(TO_CHAR(CAST(" + quotedCol + " AS TIMESTAMP WITH TIME ZONE) AT TIME ZONE '"
-                + resolveOracleTimezone("timestamp", "UTC") + "', '" + resolveOracleTemporalFormat("timestamp",
+        return "COALESCE(TO_CHAR(" + quotedCol + ", '" + resolveOracleTemporalFormat("timestamp",
                 "YYYY-MM-DD HH24:MI:SS", "YYYY-MM-DD") + "'), '')";
     }
 
@@ -404,7 +403,7 @@ public class OracleDataTypeHandler extends BaseDataTypeHandler {
             case "long":
                 return DataType.TEXT;
             case "date":
-                // Oracle DATE contains time, so map to TIMESTAMP to preserve it
+                // Oracle DATE stores both calendar date and time to seconds.
                 return DataType.TIMESTAMP;
             case "timestamp":
             case "timestamp with time zone":

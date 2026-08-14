@@ -16,5 +16,5 @@ SELECT toUInt32(n), toUInt32(100000 + modulo(n,500)),
 FROM numbers(1, 10000);
 CREATE TABLE mydb.orders_backup AS mydb.orders;
 INSERT INTO mydb.orders_backup SELECT * FROM mydb.orders;
-ALTER TABLE mydb.orders_backup UPDATE amount = 99999.9999 WHERE order_id = 1;
+ALTER TABLE mydb.orders_backup UPDATE amount = 99999.9999 WHERE order_id = 1 SETTINGS mutations_sync = 1;
 INSERT INTO mydb.orders VALUES (10001, 200001, 8888.0000, 'active', '2026-05-01 12:00:00');

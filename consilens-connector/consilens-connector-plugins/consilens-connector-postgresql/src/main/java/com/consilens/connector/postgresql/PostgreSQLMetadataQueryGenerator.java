@@ -70,6 +70,14 @@ public class PostgreSQLMetadataQueryGenerator extends BaseMetadataQueryGenerator
     }
 
     @Override
+    public String getDatabaseListSQL() {
+        return "SELECT datname FROM pg_database " +
+                "WHERE datistemplate = false " +
+                "AND has_database_privilege(datname, 'CONNECT') " +
+                "ORDER BY datname";
+    }
+
+    @Override
     public String getTablesSQL(String schemaName) {
         return "SELECT table_name FROM information_schema.tables " +
                 "WHERE table_schema = '" + escapeString(schemaName) + "' " +

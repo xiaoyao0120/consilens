@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS cs_artifact (
     storage_uri VARCHAR(512) NOT NULL,
     sha256 VARCHAR(64),
     metadata_json CLOB,
+    statistics_json CLOB,
+    difference_count BIGINT,
+    difference_truncated BOOLEAN,
+    difference_rows INT,
+    differences_uri VARCHAR(512),
     created_at TIMESTAMP NOT NULL,
     CONSTRAINT fk_cs_artifact_task_id FOREIGN KEY (task_id) REFERENCES cs_task_instance (id)
 );

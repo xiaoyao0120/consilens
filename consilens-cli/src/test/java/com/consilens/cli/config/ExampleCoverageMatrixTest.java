@@ -31,9 +31,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -66,6 +69,31 @@ class ExampleCoverageMatrixTest {
     private static final List<String> SAME_DB_SCENARIOS = List.of(
             "01-identical.yaml",
             "02-join-diff.yaml");
+
+    private static final Set<String> FULL_COMPARISON_COLUMNS = Set.of(
+            "col_tinyint", "col_smallint", "col_mediumint", "col_int", "col_bigint",
+            "col_unsigned_int", "col_float", "col_double", "col_decimal", "col_numeric",
+            "col_char", "col_varchar_50", "col_varchar_100", "col_varchar_255", "col_text",
+            "col_mediumtext", "col_binary", "col_varbinary", "col_blob", "col_date",
+            "col_datetime", "col_timestamp", "col_time", "col_boolean", "col_tinyint_bool",
+            "col_enum", "col_set", "col_json", "user_name", "email", "phone", "address",
+            "city", "country", "postal_code", "amount", "balance", "credit_limit", "status",
+            "category", "priority", "score", "created_at", "updated_at");
+
+    private static final Map<String, Set<String>> TYPE_FAMILY_COLUMNS = Map.of(
+            "integral", Set.of("col_tinyint", "col_smallint", "col_mediumint", "col_int", "col_bigint",
+                    "col_unsigned_int"),
+            "floating", Set.of("col_float", "col_double", "score"),
+            "decimal", Set.of("col_decimal", "col_numeric", "amount", "balance", "credit_limit"),
+            "string", Set.of("col_char", "col_varchar_50", "col_text"),
+            "binary", Set.of("col_binary", "col_varbinary", "col_blob"),
+            "temporal", Set.of("col_date", "col_datetime", "col_timestamp", "col_time"),
+            "boolean", Set.of("col_boolean", "col_tinyint_bool"),
+            "semi-structured", Set.of("col_json"),
+            "vendor-special", Set.of("col_enum", "col_set"));
+
+    private static final Pattern CREATE_PERFORMANCE_TABLE = Pattern.compile(
+            "(?is)CREATE\\s+TABLE(?:\\s+IF\\s+NOT\\s+EXISTS)?\\s+[^;]*?consilens_performance_demo_table\\s*\\(");
 
     private static Path examplesDirectory() {
         try {
@@ -266,6 +294,60 @@ class ExampleCoverageMatrixTest {
     }
 
     @Test
+    void shouldCompareEverySeededTypeFamilyInsteadOfOnlyCreatingColumns() throws IOException {
+        ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+        for (String pair : EXPECTED_PAIRS) {
+            Path pairDirectory = examplesDirectory().resolve("cross-db").resolve(pair);
+            JsonNode fullFieldConfig = mapper.readTree(pairDirectory.resolve("06-performance-full-fields.yaml").toFile());
+            Set<String> sourceFields = jsonTextSet(fullFieldConfig.at("/comparison/fields/source"));
+            Set<String> targetFields = jsonTextSet(fullFieldConfig.at("/comparison/fields/target"));
+
+            assertEquals(FULL_COMPARISON_COLUMNS, sourceFields,
+                    pair + " 的全字段场景未实际比较所有参与校验的 fixture 列");
+            assertEquals(sourceFields, targetFields, pair + " 的源端和目标端比较字段不对称");
+            for (Map.Entry<String, Set<String>> family : TYPE_FAMILY_COLUMNS.entrySet()) {
+                assertTrue(sourceFields.containsAll(family.getValue()),
+                        pair + " 未覆盖类型族 " + family.getKey() + ": " + family.getValue());
+            }
+
+            Set<String> sourceColumns = performanceTableColumns(pairDirectory.resolve("load-mysql.sql"));
+            Set<String> targetColumns = performanceTableColumns(targetLoadSql(pairDirectory));
+            assertTrue(sourceColumns.containsAll(FULL_COMPARISON_COLUMNS),
+                    pair + " 的源端 DDL 缺少全字段配置引用列");
+            assertTrue(targetColumns.containsAll(FULL_COMPARISON_COLUMNS),
+                    pair + " 的目标端 DDL 缺少全字段配置引用列");
+        }
+    }
+
+    @Test
+    void shouldBindFourAccuracyOutcomesToStableRowsAndFields() throws IOException {
+        ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
+        for (String pair : EXPECTED_PAIRS) {
+            Path pairDirectory = examplesDirectory().resolve("cross-db").resolve(pair);
+            String targetSql = Files.readString(targetLoadSql(pairDirectory));
+            assertSqlMatches(targetSql,
+                    "(?:UPDATE\\s+amount|SET\\s+amount)\\s*=\\s*99999\\.9999\\s+WHERE\\s+record_id\\s*=\\s*'REC0000000001'",
+                    pair + " 缺少可定位到 amount 字段的值不一致行");
+            assertSqlMatches(targetSql,
+                    "(?:UPDATE\\s+status|SET\\s+status)\\s*=\\s*'modified_status'\\s+WHERE\\s+record_id\\s*=\\s*'REC0000000002'",
+                    pair + " 缺少可定位到 status 字段的值不一致行");
+            assertSqlMatches(targetSql, "REC_EXTRA_001",
+                    pair + " 缺少只存在于目标端的 SOURCE_MISSING 行");
+            assertTrue(excludesSequenceFive(targetSql), pair + " 缺少只存在于源端的 TARGET_MISSING 行");
+
+            JsonNode identical = mapper.readTree(pairDirectory.resolve("11-identical.yaml").toFile());
+            String sourceFilter = identical.at("/comparison/filters/source").asText();
+            String targetFilter = identical.at("/comparison/filters/target").asText();
+            assertEquals(sourceFilter, targetFilter, pair + " 完全一致场景的两端过滤范围不相同");
+            assertTrue(sourceFilter.contains("REC0000000006") && sourceFilter.contains("REC0000000999"),
+                    pair + " 完全一致场景没有排除已知差异键并保留稳定数据区间");
+            assertEquals(jsonTextSet(identical.at("/comparison/fields/source")),
+                    jsonTextSet(identical.at("/comparison/fields/target")),
+                    pair + " 完全一致场景的两端字段不对称");
+        }
+    }
+
+    @Test
     void shouldKeepMappedAndJoinScenariosBackedBySeedDifferences() throws IOException {
         for (String pair : EXPECTED_PAIRS) {
             Path targetSql = targetLoadSql(examplesDirectory().resolve("cross-db").resolve(pair));
@@ -308,6 +390,73 @@ class ExampleCoverageMatrixTest {
                     .findFirst()
                     .orElse(null);
         }
+    }
+
+    private static Set<String> jsonTextSet(JsonNode array) {
+        Set<String> values = new HashSet<>();
+        array.forEach(node -> values.add(node.asText()));
+        return values;
+    }
+
+    private static Set<String> performanceTableColumns(Path sqlPath) throws IOException {
+        String sql = Files.readString(sqlPath);
+        Matcher matcher = CREATE_PERFORMANCE_TABLE.matcher(sql);
+        assertTrue(matcher.find(), sqlPath + " 缺少 consilens_performance_demo_table DDL");
+        int bodyStart = matcher.end();
+        int bodyEnd = matchingParenthesis(sql, bodyStart - 1);
+        assertTrue(bodyEnd > bodyStart, sqlPath + " 的 performance table DDL 括号不完整");
+
+        Set<String> columns = new HashSet<>();
+        for (String declaration : splitTopLevel(sql.substring(bodyStart, bodyEnd))) {
+            Matcher column = Pattern.compile("^\\s*[`\"\\[]?([A-Za-z_][A-Za-z0-9_]*)").matcher(declaration);
+            if (column.find()) {
+                String name = column.group(1).toLowerCase();
+                if (!Set.of("primary", "constraint", "key", "unique", "index", "partition").contains(name)) {
+                    columns.add(name);
+                }
+            }
+        }
+        return columns;
+    }
+
+    private static int matchingParenthesis(String text, int openingIndex) {
+        int depth = 0;
+        for (int index = openingIndex; index < text.length(); index++) {
+            char character = text.charAt(index);
+            if (character == '(') {
+                depth++;
+            } else if (character == ')' && --depth == 0) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static List<String> splitTopLevel(String body) {
+        List<String> declarations = new ArrayList<>();
+        int depth = 0;
+        int start = 0;
+        for (int index = 0; index < body.length(); index++) {
+            char character = body.charAt(index);
+            if (character == '(') {
+                depth++;
+            } else if (character == ')') {
+                depth--;
+            } else if (character == ',' && depth == 0) {
+                declarations.add(body.substring(start, index));
+                start = index + 1;
+            }
+        }
+        declarations.add(body.substring(start));
+        return declarations;
+    }
+
+    private static void assertSqlMatches(String sql, String regex, String message) {
+        assertTrue(Pattern.compile(regex, Pattern.CASE_INSENSITIVE | Pattern.DOTALL).matcher(sql).find(), message);
+    }
+
+    private static boolean excludesSequenceFive(String sql) {
+        return Pattern.compile("(?i)(?:n|LEVEL)\\s*(?:!=|<>)\\s*5|n\\s*%\\s*5").matcher(sql).find();
     }
 
     private static boolean hasPath(JsonNode node, String path) {

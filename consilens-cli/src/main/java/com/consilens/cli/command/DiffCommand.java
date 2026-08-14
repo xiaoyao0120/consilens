@@ -5,10 +5,16 @@ import com.consilens.cli.model.CliConfiguration;
 import com.consilens.cli.model.CliDiffResult;
 import com.consilens.cli.service.DiffService;
 import com.consilens.cli.service.SensitiveValueMasker;
+import com.consilens.core.diff.DiffResult;
 
 import lombok.extern.slf4j.Slf4j;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
+
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryType;
+import java.util.Comparator;
 
 /**
  * Picocli subcommand for performing data comparison (diff) operations.
@@ -29,6 +35,10 @@ public class DiffCommand implements Runnable {
 
     @Option(names = {"--verbose"}, description = "Enable verbose logging")
     private boolean verbose;
+
+    @Option(names = {"--benchmark-metrics"}, hidden = true,
+            description = "Emit machine-readable benchmark metrics")
+    private boolean benchmarkMetrics;
 
     @Override
     public void run() {
@@ -78,12 +88,62 @@ public class DiffCommand implements Runnable {
             }
 
             displayDiffResults(result, dryRun);
+            if (benchmarkMetrics && !dryRun) {
+                displayBenchmarkMetrics(result);
+            }
 
         } catch (Exception e) {
             log.error("Diff operation failed", e);
             System.err.println("Error: " + e.getMessage());
             System.exit(1);
         }
+    }
+
+    private void displayBenchmarkMetrics(CliDiffResult result) {
+        benchmarkMetric("totalDifferences", result.getTotalDifferences());
+        benchmarkMetric("sourceMissingRows", result.getSourceMissingCount());
+        benchmarkMetric("targetMissingRows", result.getTargetMissingCount());
+        benchmarkMetric("mismatchedRows", result.getMismatchCount());
+        benchmarkMetric("heapPeakBytes", heapPeakBytes());
+
+        if (result.getInfoTree() == null) {
+            return;
+        }
+        DiffResult.InfoTree tree = result.getInfoTree();
+        benchmarkMetric("segmentCount", tree.getTotalSegments());
+        benchmarkMetric("maxDepth", tree.getMaxDepth());
+        benchmarkMetric("logicalRowsScanned", tree.getTotalRowsScanned());
+        benchmarkMetric("instrumentedQueryCount", tree.getNodes().stream()
+                .mapToLong(DiffResult.InfoTreeNode::getQueryCount).sum());
+        benchmarkMetric("rowsFetched", tree.getNodes().stream()
+                .mapToLong(DiffResult.InfoTreeNode::getRowsFetched).sum());
+        benchmarkMetric("resultBytesFetchedEstimate", tree.getNodes().stream()
+                .mapToLong(DiffResult.InfoTreeNode::getBytesFetched).sum());
+        Object firstDifferenceAt = tree.getMetrics() == null ? null : tree.getMetrics().get("firstDifferenceAt");
+        if (firstDifferenceAt instanceof Number) {
+            benchmarkMetric("firstDifferenceObservedMs",
+                    Math.max(0L, ((Number) firstDifferenceAt).longValue() - tree.getStartTime()));
+            return;
+        }
+        tree.getNodes().stream()
+                .filter(node -> node.getDiffCount() > 0 && node.getEndedAt() > 0)
+                .min(Comparator.comparingLong(DiffResult.InfoTreeNode::getEndedAt))
+                .ifPresent(node -> benchmarkMetric("firstDifferenceObservedMs",
+                        Math.max(0L, node.getEndedAt() - tree.getStartTime())));
+    }
+
+    private void benchmarkMetric(String name, long value) {
+        System.out.println("BENCHMARK_METRIC " + name + "=" + value);
+    }
+
+    private long heapPeakBytes() {
+        long peak = 0L;
+        for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
+            if (pool.getType() == MemoryType.HEAP && pool.getPeakUsage() != null) {
+                peak += Math.max(0L, pool.getPeakUsage().getUsed());
+            }
+        }
+        return peak;
     }
 
     private void displayDiffResults(CliDiffResult result, boolean isDryRun) {

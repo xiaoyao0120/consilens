@@ -26,6 +26,6 @@ public class TaskQueryResponse {
     private Instant submitTime;
     private Instant startTime;
     private Instant endTime;
-    private List<ArtifactRefDto> artifacts;
+    private List<ArtifactListDto> artifacts;
     private List<String> availableNextActions;
 }

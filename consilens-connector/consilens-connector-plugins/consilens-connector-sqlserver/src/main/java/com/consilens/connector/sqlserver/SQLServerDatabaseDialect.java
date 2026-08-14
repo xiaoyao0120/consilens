@@ -57,6 +57,11 @@ public class SQLServerDatabaseDialect extends AbstractDatabaseDialect {
     }
 
     @Override
+    public DataSourceConfigBuilder getDataSourceConfigBuilder() {
+        return new SqlServerDataSourceConfigBuilder();
+    }
+
+    @Override
     public CapabilityProvider getCapabilityProvider() {
         return capabilityProvider;
     }

@@ -15,6 +15,8 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 用 {@link ProcessBuilder} 拉起 CLI 子进程执行 diff，支持超时 kill，解析耗时与差异统计。
@@ -32,6 +34,8 @@ public final class CliProcessRunner {
             Pattern.compile("Source Row Count:\\s*(\\d+)");
     private static final Pattern DIFF_COUNT_PATTERN =
             Pattern.compile("(Source missing rows|Target missing rows|Mismatched rows|Total differences):\\s*(\\d+)");
+    private static final Pattern BENCHMARK_METRIC_PATTERN =
+            Pattern.compile("BENCHMARK_METRIC\\s+([A-Za-z][A-Za-z0-9]*)=(-?\\d+(?:\\.\\d+)?)");
 
     private static final Map<String, String> DIFF_KEY_ALIASES = createDiffKeyAliases();
 
@@ -53,7 +57,8 @@ public final class CliProcessRunner {
         Process process;
         try {
             ProcessBuilder builder = new ProcessBuilder(
-                    "java", "-jar", cliJar.toString(), "diff", "--config", configPath.toString());
+                    "java", "-jar", cliJar.toString(), "diff", "--config", configPath.toString(),
+                    "--benchmark-metrics");
             builder.redirectErrorStream(true);
             process = builder.start();
         } catch (IOException e) {
@@ -110,6 +115,18 @@ public final class CliProcessRunner {
         return counts;
     }
 
+    static Map<String, Double> parseBenchmarkMetrics(String text) {
+        if (text == null) {
+            return Collections.emptyMap();
+        }
+        Map<String, Double> metrics = new LinkedHashMap<>();
+        Matcher matcher = BENCHMARK_METRIC_PATTERN.matcher(text);
+        while (matcher.find()) {
+            metrics.put(matcher.group(1), Double.parseDouble(matcher.group(2)));
+        }
+        return metrics;
+    }
+
     private static Long parseFirstLong(String text, Pattern pattern) {
         if (text == null) {
             return null;
@@ -140,6 +157,7 @@ public final class CliProcessRunner {
         private final Long durationMs;
         private final Long sourceRowCount;
         private final Map<String, Double> diffCounts;
+        private final Map<String, Double> benchmarkMetrics;
 
         private RunResult(int exitCode, String output, long wallClockMs, boolean timedOut,
                           Long durationMs, Long sourceRowCount, Map<String, Double> diffCounts) {
@@ -150,6 +168,7 @@ public final class CliProcessRunner {
             this.durationMs = durationMs;
             this.sourceRowCount = sourceRowCount;
             this.diffCounts = diffCounts;
+            this.benchmarkMetrics = parseBenchmarkMetrics(output);
         }
 
         static RunResult completed(int exitCode, String output, long wallClockMs, boolean timedOut) {

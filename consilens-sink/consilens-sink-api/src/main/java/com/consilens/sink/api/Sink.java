@@ -23,6 +23,16 @@ public interface Sink extends AutoCloseable {
 
     default void onError(DiffContext context, Throwable error) throws Exception {}
 
+    /** Number of diff records actually written (used by file sinks for pagination totals). */
+    default long writtenRecordCount() {
+        return -1;
+    }
+
+    /** Whether the sink stopped writing because it reached its row limit. */
+    default boolean isTruncated() {
+        return false;
+    }
+
     @Override
     default void close() throws Exception {}
 }

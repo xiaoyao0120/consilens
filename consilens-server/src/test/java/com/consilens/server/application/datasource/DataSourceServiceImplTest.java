@@ -294,6 +294,150 @@ class DefaultDataSourceServiceTest {
     }
 
     @Test
+    void shouldRejectInvalidParamSidAndSchema() {
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        assertThrows(IllegalArgumentException.class, () -> service.create(
+                DataSourceCreateRequest.builder().name("a").type("oracle")
+                        .param(Map.of("host", "10.0.0.5", "sid", "ORCL?foo=1"))
+                        .build()));
+        assertThrows(IllegalArgumentException.class, () -> service.create(
+                DataSourceCreateRequest.builder().name("b").type("postgresql")
+                        .param(Map.of("host", "10.0.0.5", "schema", "pub;drop"))
+                        .build()));
+    }
+
+    @Test
+    void shouldAcceptValidSidSchemaAndProperties() {
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.create(DataSourceCreateRequest.builder().name("c").type("oracle")
+                .param(Map.of("host", "10.0.0.5", "sid", "ORCL", "port", 1521))
+                .build());
+        service.create(DataSourceCreateRequest.builder().name("d").type("postgresql")
+                .param(Map.of("host", "10.0.0.5", "schema", "public"))
+                .build());
+        service.create(DataSourceCreateRequest.builder().name("e").type("mysql")
+                .param(Map.of("host", "10.0.0.5",
+                        "properties", "useSSL=false&socketTimeout=10000"))
+                .build());
+    }
+
+    @Test
+    void shouldRejectInvalidParamProperties() {
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // 分号/空格/括号等不在 properties 白名单内
+        assertThrows(IllegalArgumentException.class, () -> service.create(
+                DataSourceCreateRequest.builder().name("f").type("mysql")
+                        .param(Map.of("host", "10.0.0.5", "properties", "useSSL=false;autoReconnect=true"))
+                        .build()));
+    }
+
+    @Test
+    void shouldGetTypeConfigFromDialectBuilder() {
+        when(dialectSupport.find("mysql")).thenReturn(Optional.of(dialect));
+        when(dialect.getDataSourceConfigBuilder())
+                .thenReturn(new com.consilens.conncetor.base.BaseDataSourceConfigBuilder());
+
+        List<com.consilens.connector.api.DataSourceField> fields = service.getTypeConfig("mysql");
+
+        assertEquals(6, fields.size());
+        assertEquals("host", fields.get(0).getField());
+        assertEquals("database", fields.get(2).getField());
+    }
+
+    @Test
+    void shouldFallBackToBaseTemplateWhenDialectHasNoBuilder() {
+        when(dialectSupport.find("mysql")).thenReturn(Optional.of(dialect));
+        when(dialect.getDataSourceConfigBuilder()).thenReturn(null);
+
+        List<com.consilens.connector.api.DataSourceField> fields = service.getTypeConfig("mysql");
+
+        assertEquals(6, fields.size());
+        assertEquals("properties", fields.get(5).getField());
+        assertEquals(3, fields.get(5).getRows());
+    }
+
+    @Test
+    void shouldFailGetTypeConfigForUnsupportedType() {
+        when(dialectSupport.find("unknown")).thenReturn(Optional.empty());
+
+        assertThrows(IllegalArgumentException.class, () -> service.getTypeConfig("unknown"));
+    }
+
+    @Test
+    void shouldForwardExtraParamsAsOptionsWhenTesting() {
+        when(repository.findById(DS_ID)).thenReturn(Optional.of(DataSourceRecord.builder()
+                .id(DS_ID).name("pg").type("postgresql")
+                .paramJson("{\"host\":\"10.0.0.5\",\"port\":5432,\"database\":\"orders\","
+                        + "\"username\":\"admin\",\"password\":\"secret\","
+                        + "\"schema\":\"public\",\"properties\":\"ssl=true\"}")
+                .build()));
+        when(connectionTestService.test(any())).thenReturn(ConnectionTestResponse.builder()
+                .success(true).latencyMs(10L).build());
+
+        service.test(DS_ID);
+
+        ArgumentCaptor<ConnectionTestRequest> captor = ArgumentCaptor.forClass(ConnectionTestRequest.class);
+        verify(connectionTestService).test(captor.capture());
+        ConnectionTestRequest request = captor.getValue();
+        assertEquals("postgresql", request.getType());
+        assertEquals("10.0.0.5", request.getHost());
+        assertEquals("orders", request.getDatabase());
+        assertEquals("secret", request.getPassword());
+        assertEquals("public", request.getOptions().get("schema"));
+        assertEquals("ssl=true", request.getOptions().get("properties"));
+        assertTrue(!request.getOptions().containsKey("username"));
+        assertTrue(!request.getOptions().containsKey("password"));
+        // 透传 options 含 host/port/database（不覆盖 request 字段，由连接层白名单过滤）
+        assertEquals("10.0.0.5", request.getOptions().get("host"));
+    }
+
+    @Test
+    void shouldUseParamSchemaWhenListingTables() throws Exception {
+        when(dialectSupport.find("postgresql")).thenReturn(Optional.of(dialect));
+        when(repository.findById(DS_ID)).thenReturn(Optional.of(DataSourceRecord.builder()
+                .id(DS_ID).name("pg").type("postgresql")
+                .paramJson("{\"host\":\"10.0.0.5\",\"port\":5432,\"database\":\"orders\","
+                        + "\"schema\":\"public\"}")
+                .build()));
+        when(metadataQueryGenerator.getTablesSQL("public")).thenReturn("SELECT table_name FROM ...");
+        Connection connection = mockConnection("t1", "t2");
+        when(opener.open(eq(dialect), any())).thenReturn(connection);
+
+        List<String> tables = service.getTables(DS_ID, "orders");
+
+        assertEquals(List.of("t1", "t2"), tables);
+        verify(metadataQueryGenerator).getTablesSQL("public");
+    }
+
+    @Test
+    void shouldUseParamSchemaWhenListingColumns() throws Exception {
+        when(dialectSupport.find("sqlserver")).thenReturn(Optional.of(dialect));
+        when(repository.findById(DS_ID)).thenReturn(Optional.of(DataSourceRecord.builder()
+                .id(DS_ID).name("sqlserver").type("sqlserver")
+                .paramJson("{\"host\":\"10.0.0.5\",\"port\":1433,\"database\":\"orders\","
+                        + "\"schema\":\"dbo\"}")
+                .build()));
+        when(metadataQueryGenerator.getTableColumnsSQL("dbo", "t1")).thenReturn("SELECT ...");
+        Connection connection = mock(Connection.class);
+        Statement statement = mock(Statement.class);
+        ResultSet resultSet = mock(ResultSet.class);
+        when(connection.createStatement()).thenReturn(statement);
+        when(statement.executeQuery(any())).thenReturn(resultSet);
+        when(resultSet.next()).thenReturn(true, false);
+        when(resultSet.getString(1)).thenReturn("id");
+        when(resultSet.getString(2)).thenReturn("bigint");
+        when(resultSet.getString(3)).thenReturn("NO");
+        when(opener.open(eq(dialect), any())).thenReturn(connection);
+
+        service.getColumns(DS_ID, "orders", "t1");
+
+        verify(metadataQueryGenerator).getTableColumnsSQL("dbo", "t1");
+    }
+
+    @Test
     void shouldDecryptPasswordWhenTestingEncryptedDataSource() {
         CryptoSupport crypto = new CryptoSupport(java.util.Base64.getEncoder()
                 .encodeToString(new byte[32]));
@@ -373,5 +517,68 @@ class DefaultDataSourceServiceTest {
             when(resultSet.getString(1)).thenReturn(values[0], values[1]);
         }
         return connection;
+    }
+
+    @Test
+    void shouldRejectPlaintextSensitivePropertiesOnCreate() {
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // properties 内明文密码拒绝落库（任何形式的密码都不进系统）
+        assertThrows(IllegalArgumentException.class, () -> service.create(
+                DataSourceCreateRequest.builder()
+                        .name("plaintext-db")
+                        .type("mysql")
+                        .param(Map.of("host", "10.0.0.5", "port", 3306, "database", "orders",
+                                "properties", "useSSL=false&password=hunter2"))
+                        .build()));
+    }
+
+    @Test
+    void shouldStripMaskedSensitivePropertiesOnSave() {
+        ArgumentCaptor<DataSourceRecord> captor = ArgumentCaptor.forClass(DataSourceRecord.class);
+        when(repository.save(captor.capture())).thenAnswer(invocation -> {
+            DataSourceRecord record = invocation.getArgument(0);
+            record.setId(DS_ID);
+            record.setCreatedAt(Instant.parse("2026-01-01T00:00:00Z"));
+            record.setUpdatedAt(Instant.parse("2026-01-01T00:00:00Z"));
+            return record;
+        });
+
+        // 模拟编辑回显后原样提交：properties 中敏感键为掩码占位，不落库
+        service.create(DataSourceCreateRequest.builder()
+                .name("masked-save-db")
+                .type("mysql")
+                .param(Map.of("host", "10.0.0.5", "port", 3306, "database", "orders",
+                        "properties", "useSSL=false&password=******&ApplicationName=consilens"))
+                .build());
+
+        DataSourceRecord saved = captor.getValue();
+        String paramJson = saved.getParamJson();
+        assertTrue(paramJson.contains("useSSL=false"));
+        assertTrue(!paramJson.contains("password"));
+        assertTrue(paramJson.contains("ApplicationName"));
+    }
+
+    @Test
+    void shouldMaskLegacyPlaintextPropertiesInList() throws Exception {
+        // 存量数据：paramJson 里 properties 含明文密码
+        DataSourceRecord legacy = DataSourceRecord.builder()
+                .id(9L)
+                .name("legacy-db")
+                .type("postgresql")
+                .paramJson("{\"host\":\"10.0.0.9\",\"port\":5432,\"database\":\"orders\","
+                        + "\"username\":\"app\",\"password\":\"enc:abc\","
+                        + "\"properties\":\"ssl=true&password=plaintext-secret&search_path=public\"}")
+                .createdAt(Instant.parse("2025-01-01T00:00:00Z"))
+                .updatedAt(Instant.parse("2025-01-01T00:00:00Z"))
+                .build();
+        when(repository.listAll()).thenReturn(List.of(legacy));
+
+        List<DataSourceDto> dtos = service.list();
+
+        assertEquals(1, dtos.size());
+        assertEquals(null, dtos.get(0).getParam().get("password"));
+        assertEquals("ssl=true&password=******&search_path=public",
+                dtos.get(0).getParam().get("properties"));
     }
 }

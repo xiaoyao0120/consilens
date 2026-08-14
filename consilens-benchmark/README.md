@@ -1,5 +1,38 @@
 # consilens-benchmark
 
+> 主链路基准已升级为可重复采样：e2e 默认预热 1 次、测量 5 次，以 p95 延迟作为 baseline 主指标，并保存每次原始样本。`FAILED` 会返回非零退出码。
+
+## 主链路场景
+
+| 场景 | 策略 | 说明 |
+| --- | --- | --- |
+| `G01` / `G02` | checksum xor | MySQL / PostgreSQL 生成数据 |
+| `C-CONCAT` | checksum concat | 对照 concat 摘要算法 |
+| `C-ROW-HASH` | checksum xor + row-hash | 终端段 row-hash 回查 |
+| `C-FULL` | checksum xor + full | 终端段全字段拉取 |
+| `C-COMPOSITE` | checksum xor + row-hash | `[key_group,key_part]` 复合键 |
+| `J-WHOLE` | join | 同库整表 join |
+| `J-SEGMENTED` | - | 当前 core 未实现，报告为 `UNSUPPORTED` |
+
+正式运行示例：
+
+```bash
+bin/run-benchmark.sh e2e \
+  --scenario G01,C-CONCAT,C-ROW-HASH,C-FULL,J-WHOLE \
+  --dataset-id 100m-sparse-diff5 \
+  --key-distribution sparse \
+  --difference-type mismatch \
+  --expected-differences G01=5000000,C-CONCAT=5000000,C-ROW-HASH=5000000,C-FULL=5000000,J-WHOLE=5000000 \
+  --e2e-warmup-runs 2 \
+  --e2e-measurement-runs 7
+```
+
+`--expected-differences` 必须填写数据生成报告中的实际总差异数，不按比例估算。不同数据量、差异率、键分布必须使用不同 `--dataset-id`，否则 baseline 无法区分矩阵点。
+
+结果包含 `durationP50Ms`、`durationP95Ms`、`firstDifferenceObservedMsP50`、`instrumentedQueryCountP50`、`segmentCountP50`、`logicalRowsScannedP50`、`resultBytesFetchedEstimateP50`、`heapPeakBytesP95` 和准确性。数据库 CPU/IO、物理扫描行数、真实网络字节、精确 SQL 数在未配置厂商级探针时显示 N/A；`instrumentedQueryCount` 仅是已埋点查询下界。
+
+外部场景可通过 `--scenario CUSTOM --scenario-config CUSTOM=/absolute/path/custom.yaml --expected-differences CUSTOM=COUNT` 接入，仍使用相同的预热、采样和准确性校验。
+
 `consilens-benchmark` 是 Consilens 的性能基准测试套件，覆盖算法微基准
 （JMH）与端到端比对基准（复用 `examples/` 与 CLI 子进程），并产出基线
 JSON 与漂移报告。

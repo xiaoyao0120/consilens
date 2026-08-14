@@ -1,142 +1,185 @@
 package com.consilens.server.application.artifact;
 
-import com.consilens.server.api.dto.ArtifactListDto;
-import com.consilens.server.api.dto.PageResponse;
+import com.consilens.server.api.dto.DiffPageDto;
 import com.consilens.server.domain.enums.ArtifactKind;
-import com.consilens.server.domain.model.ArtifactPage;
 import com.consilens.server.domain.model.ArtifactRecord;
 import com.consilens.server.domain.repository.ArtifactRepository;
 import com.consilens.server.infrastructure.storage.ArtifactContentStore;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class DefaultArtifactQueryServiceTest {
+class ArtifactQueryServiceImplTest {
 
-    private ArtifactRepository artifactRepository;
-    private ArtifactContentStore contentStore;
-    private ArtifactQueryServiceImpl service;
+    private final ArtifactRepository repository = mock(ArtifactRepository.class);
+    private final ArtifactContentStore contentStore = mock(ArtifactContentStore.class);
 
-    @BeforeEach
-    void setUp() {
-        artifactRepository = mock(ArtifactRepository.class);
-        contentStore = mock(ArtifactContentStore.class);
-        service = new ArtifactQueryServiceImpl(artifactRepository, contentStore, new ObjectMapper());
+    private ArtifactQueryServiceImpl service() {
+        return new ArtifactQueryServiceImpl(repository, contentStore, new ObjectMapper());
     }
 
     @Test
-    void shouldExposeDifferenceCountForRunResultArtifacts() throws Exception {
-        ArtifactRecord runResult = ArtifactRecord.builder()
-                .id("result-1")
-                .taskId(1L)
+    void shouldPageThroughJsonlDifferences() throws Exception {
+        Path file = Files.createTempFile("diff-test", ".jsonl");
+        Files.write(file, List.of(
+                "{\"operation\":\"MISMATCH\",\"primaryKey\":[\"1\"],\"metadata\":{}}",
+                "{\"operation\":\"SOURCE_MISSING\",\"primaryKey\":[\"2\"],\"metadata\":{}}",
+                "{\"operation\":\"TARGET_MISSING\",\"primaryKey\":[\"3\"],\"metadata\":{}}"), StandardCharsets.UTF_8);
+        when(repository.findById("a-1")).thenReturn(Optional.of(ArtifactRecord.builder()
+                .id("a-1")
+                .artifactType(ArtifactKind.RUN_RESULT)
+                .artifactFormat("ndjson")
+                .differencesUri(file.toString())
+                .differenceRows(3L)
+                .differenceTruncated(false)
+                .build()));
+
+        DiffPageDto page = service().listDifferences("a-1", 1, 2, null, "trace");
+
+        assertEquals(3, page.getTotal());
+        assertEquals(2, page.getRows());
+        assertEquals(false, page.isHasMore());
+        assertEquals("SOURCE_MISSING", page.getItems().get(0).get("operation"));
+        assertEquals(List.of("2"), page.getItems().get(0).get("primaryKey"));
+        Files.deleteIfExists(file);
+    }
+
+    @Test
+    void shouldFilterJsonlDifferencesByOperation() throws Exception {
+        Path file = Files.createTempFile("diff-filter", ".jsonl");
+        Files.write(file, List.of(
+                "{\"operation\":\"mismatch\",\"primaryKey\":[\"1\"],\"metadata\":{}}",
+                "{\"operation\":\"source_missing\",\"primaryKey\":[\"2\"],\"metadata\":{}}",
+                "{\"operation\":\"mismatch\",\"primaryKey\":[\"3\"],\"metadata\":{}}",
+                "{\"operation\":\"target_missing\",\"primaryKey\":[\"4\"],\"metadata\":{}}"), StandardCharsets.UTF_8);
+        when(repository.findById("a-filter")).thenReturn(Optional.of(ArtifactRecord.builder()
+                .id("a-filter")
+                .artifactType(ArtifactKind.RUN_RESULT)
+                .artifactFormat("ndjson")
+                .differencesUri(file.toString())
+                .differenceRows(4L)
+                .differenceTruncated(false)
+                .build()));
+
+        // 只取 mismatch：total 应为过滤后数量，offset/limit 作用于过滤结果
+        DiffPageDto page = service().listDifferences("a-filter", 0, 10, "mismatch", "trace");
+
+        assertEquals(2, page.getTotal());
+        assertEquals(2, page.getRows());
+        assertEquals(false, page.isHasMore());
+        assertEquals("mismatch", page.getItems().get(0).get("operation"));
+        assertEquals("mismatch", page.getItems().get(1).get("operation"));
+        assertEquals(List.of("1"), page.getItems().get(0).get("primaryKey"));
+
+        // 过滤 + 分页：跳过第一条 mismatch
+        DiffPageDto page2 = service().listDifferences("a-filter", 1, 10, "mismatch", "trace");
+        assertEquals(2, page2.getTotal());
+        assertEquals(1, page2.getRows());
+        assertEquals(List.of("3"), page2.getItems().get(0).get("primaryKey"));
+
+        // 过滤 source_missing：只有 1 条
+        DiffPageDto page3 = service().listDifferences("a-filter", 0, 10, "source_missing", "trace");
+        assertEquals(1, page3.getTotal());
+        assertEquals(List.of("2"), page3.getItems().get(0).get("primaryKey"));
+
+        // 多选：mismatch + target_missing 共 3 条
+        DiffPageDto page4 = service().listDifferences("a-filter", 0, 10, "mismatch,target_missing", "trace");
+        assertEquals(3, page4.getTotal());
+        assertEquals(3, page4.getRows());
+
+        Files.deleteIfExists(file);
+    }
+
+    @Test
+    void shouldReadLegacyJsonDifferences() throws Exception {
+        String content = "{\"hasDifferences\":true,\"differenceCount\":2,"
+                + "\"differences\":[{\"operation\":\"MISMATCH\",\"primaryKey\":[\"1\"]},"
+                + "{\"operation\":\"MISMATCH\",\"primaryKey\":[\"2\"]}]}";
+        when(repository.findById("a-old")).thenReturn(Optional.of(ArtifactRecord.builder()
+                .id("a-old")
                 .artifactType(ArtifactKind.RUN_RESULT)
                 .artifactFormat("json")
-                .storageUri("storage://result-1")
-                .metadataJson("{\"source\": \"pg\"}")
-                .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
-                .build();
-        when(artifactRepository.listArtifactPage(anyInt(), anyInt(), any(), any(), any(), any()))
-                .thenReturn(new ArtifactPage(1, List.of(runResult)));
-        byte[] content = ("{\"success\": true, \"differenceCount\": 2, \"statistics\": {"
-                + "\"sourceRowCount\": 100, \"targetRowCount\": 100, \"totalDifferences\": 2, "
-                + "\"differencePercentage\": 0.02}}")
-                .getBytes(StandardCharsets.UTF_8);
-        when(contentStore.size("storage://result-1")).thenReturn((long) content.length);
-        when(contentStore.read("storage://result-1")).thenReturn(content);
+                .storageUri("storage://a-old")
+                .build()));
+        when(contentStore.read("storage://a-old")).thenReturn(content.getBytes(StandardCharsets.UTF_8));
 
-        PageResponse<ArtifactListDto> result = service.listArtifacts(1, 20, List.of(ArtifactKind.RUN_RESULT),
-                null, null, null, "trace");
+        DiffPageDto page = service().listDifferences("a-old", 0, 1, null, "trace");
 
-        ArtifactListDto dto = result.getItems().get(0);
-        assertEquals(2L, dto.getDifferenceCount());
-        assertEquals((long) content.length, dto.getSizeBytes());
-        assertEquals("RUN_RESULT", dto.getArtifactType());
-        assertEquals("pg", dto.getMetadata().get("source"));
-        verify(contentStore).read("storage://result-1");
+        assertEquals(2, page.getTotal());
+        assertEquals(1, page.getRows());
+        assertTrue(page.isHasMore());
+        assertEquals("MISMATCH", page.getItems().get(0).get("operation"));
     }
 
     @Test
-    void shouldUseSizeApiForNonRunResultArtifacts() {
-        ArtifactRecord config = ArtifactRecord.builder()
-                .id("config-1")
-                .taskId(1L)
-                .artifactType(ArtifactKind.CONFIG)
-                .artifactFormat("json")
-                .storageUri("storage://config-1")
-                .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
-                .build();
-        when(artifactRepository.listArtifactPage(anyInt(), anyInt(), any(), any(), any(), any()))
-                .thenReturn(new ArtifactPage(1, List.of(config)));
-        when(contentStore.size("storage://config-1")).thenReturn(123L);
+    void shouldReportTruncatedFlagFromJsonlMeta() throws Exception {
+        Path file = Files.createTempFile("diff-trunc", ".jsonl");
+        Files.write(file, List.of("{\"operation\":\"MISMATCH\",\"primaryKey\":[\"1\"],\"metadata\":{}}"),
+                StandardCharsets.UTF_8);
+        when(repository.findById("a-t")).thenReturn(Optional.of(ArtifactRecord.builder()
+                .id("a-t")
+                .artifactType(ArtifactKind.RUN_RESULT)
+                .artifactFormat("ndjson")
+                .differencesUri(file.toString())
+                .differenceRows(10000L)
+                .differenceTruncated(true)
+                .build()));
 
-        PageResponse<ArtifactListDto> result = service.listArtifacts(1, 20, List.of(ArtifactKind.CONFIG),
-                null, null, null, "trace");
+        DiffPageDto page = service().listDifferences("a-t", 0, 10, null, "trace");
 
-        ArtifactListDto dto = result.getItems().get(0);
-        assertEquals(123L, dto.getSizeBytes());
-        assertNull(dto.getDifferenceCount());
-        verify(contentStore, never()).read(anyString());
+        assertTrue(page.isTruncated());
+        // total 为文件实际行数（不再信任 DB 中的旧截断计数）
+        assertEquals(1, page.getTotal());
+        Files.deleteIfExists(file);
     }
 
     @Test
-    void shouldReturnNullDifferenceCountWhenContentUnreadable() throws Exception {
-        ArtifactRecord runResult = ArtifactRecord.builder()
-                .id("result-broken")
-                .taskId(1L)
+    void shouldDegradeToEmptyPageWhenDiffFileMissing() {
+        when(repository.findById("a-missing")).thenReturn(Optional.of(ArtifactRecord.builder()
+                .id("a-missing")
                 .artifactType(ArtifactKind.RUN_RESULT)
                 .artifactFormat("json")
-                .storageUri("storage://broken")
-                .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
-                .build();
-        when(artifactRepository.listArtifactPage(anyInt(), anyInt(), any(), any(), any(), any()))
-                .thenReturn(new ArtifactPage(1, List.of(runResult)));
-        when(contentStore.read("storage://broken"))
-                .thenThrow(new IllegalStateException("storage unavailable"));
+                .differencesUri("/nonexistent/run-result-missing.jsonl")
+                .differenceRows(7L)
+                .differenceTruncated(true)
+                .build()));
 
-        PageResponse<ArtifactListDto> result = service.listArtifacts(1, 20, List.of(ArtifactKind.RUN_RESULT),
-                null, null, null, "trace");
+        DiffPageDto page = service().listDifferences("a-missing", 0, 10, null, "trace");
 
-        ArtifactListDto dto = result.getItems().get(0);
-        assertNull(dto.getDifferenceCount());
-        assertEquals("RUN_RESULT", dto.getArtifactType());
+        assertEquals(7, page.getTotal());
+        assertEquals(0, page.getRows());
+        assertEquals(false, page.isHasMore());
+        assertTrue(page.getItems().isEmpty());
     }
 
     @Test
-    void shouldReturnNullDifferenceCountForFailedRunResult() throws Exception {
-        ArtifactRecord runResult = ArtifactRecord.builder()
-                .id("result-failed")
-                .taskId(1L)
+    void shouldNotOverflowHasMoreWhenOffsetHuge() throws Exception {
+        Path file = Files.createTempFile("diff-huge", ".jsonl");
+        Files.write(file, List.of("{\"operation\":\"MISMATCH\",\"primaryKey\":[\"1\"],\"metadata\":{}}"),
+                StandardCharsets.UTF_8);
+        when(repository.findById("a-huge")).thenReturn(Optional.of(ArtifactRecord.builder()
+                .id("a-huge")
                 .artifactType(ArtifactKind.RUN_RESULT)
                 .artifactFormat("json")
-                .storageUri("storage://failed")
-                .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
-                .build();
-        when(artifactRepository.listArtifactPage(anyInt(), anyInt(), any(), any(), any(), any()))
-                .thenReturn(new ArtifactPage(1, List.of(runResult)));
-        byte[] content = "{\"success\": false, \"errorCode\": \"DB_TIMEOUT\"}"
-                .getBytes(StandardCharsets.UTF_8);
-        when(contentStore.size("storage://failed")).thenReturn((long) content.length);
-        when(contentStore.read("storage://failed")).thenReturn(content);
+                .differencesUri(file.toString())
+                .differenceRows(3L)
+                .differenceTruncated(false)
+                .build()));
 
-        PageResponse<ArtifactListDto> result = service.listArtifacts(1, 20, List.of(ArtifactKind.RUN_RESULT),
-                null, null, null, "trace");
+        DiffPageDto page = service().listDifferences("a-huge", Long.MAX_VALUE, 10, null, "trace");
 
-        ArtifactListDto dto = result.getItems().get(0);
-        assertNull(dto.getDifferenceCount());
-        assertEquals((long) content.length, dto.getSizeBytes());
+        assertEquals(0, page.getRows());
+        assertEquals(false, page.isHasMore());
+        Files.deleteIfExists(file);
     }
 }

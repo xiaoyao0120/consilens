@@ -32,6 +32,12 @@ class OracleDataTypeHandlerTest {
     }
 
     @Test
+    void testConvertDateTypeForCrossDatabaseComparison() {
+        assertEquals(DataType.TIMESTAMP, handler.convertToDataType("DATE"));
+        assertEquals(DataType.TIMESTAMP, handler.convertToDataType("TIMESTAMP"));
+    }
+
+    @Test
     void testGetDataTypeMappingVarchar() {
         String result = handler.getDataTypeMapping("varchar", 255, 0, 0);
         assertEquals("VARCHAR2(255)", result);

@@ -3,6 +3,7 @@ package com.consilens.server.api.controller;
 import com.consilens.server.api.dto.ApiResponse;
 import com.consilens.server.api.dto.ArtifactContentDto;
 import com.consilens.server.api.dto.ArtifactListDto;
+import com.consilens.server.api.dto.DiffPageDto;
 import com.consilens.server.api.dto.ArtifactRefDto;
 import com.consilens.server.api.dto.ApiValidationRules;
 import com.consilens.server.api.dto.PageResponse;
@@ -63,6 +64,18 @@ public class ArtifactController {
                                                                    HttpServletRequest httpServletRequest) {
         String traceId = TraceIdSupport.getOrCreateTraceId(httpServletRequest);
         return ResponseEntity.ok(ApiResponse.success(artifactService.getArtifact(artifactId), traceId));
+    }
+
+    @GetMapping("/{artifactId}/differences")
+    public ResponseEntity<ApiResponse<DiffPageDto>> listDifferences(
+            @PathVariable @Pattern(regexp = ApiValidationRules.SAFE_ID_PATTERN) String artifactId,
+            @RequestParam(defaultValue = "0") @Min(0) long offset,
+            @RequestParam(defaultValue = "100") @Min(1) @Max(1000) int limit,
+            @RequestParam(required = false) String operation,
+            HttpServletRequest httpServletRequest) {
+        String traceId = TraceIdSupport.getOrCreateTraceId(httpServletRequest);
+        return ResponseEntity.ok(ApiResponse.success(
+                artifactQueryService.listDifferences(artifactId, offset, limit, operation, traceId), traceId));
     }
 
     @GetMapping("/{artifactId}/content")

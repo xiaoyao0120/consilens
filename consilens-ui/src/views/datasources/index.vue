@@ -1,12 +1,14 @@
 <script setup>
 const tableHeight = "calc(100vh - 250px)";
-import { ref, reactive, computed, h, onMounted } from "vue";
+import { ref, reactive, computed, h, onMounted, watch, nextTick } from "vue";
 import { useMessage, useDialog } from "naive-ui";
-import { NButton, NIcon, NInput, NInputNumber, NSelect, NModal, NCard, NDrawer, NDrawerContent, NTree, NDataTable, NTag, NSpin, NPopconfirm, NEmpty } from "naive-ui";
+import { NButton, NIcon, NInput, NSelect, NModal, NCard, NDrawer, NDrawerContent, NTree, NDataTable, NTag, NSpin, NPopconfirm, NEmpty, NPagination } from "naive-ui";
 import { AddOutline, LinkOutline, CubeOutline, GridOutline, ListOutline, ServerOutline, EyeOutline } from "@vicons/ionicons5";
 import {
   listDatasourceTypes,
+  getDatasourceTypeConfig,
   listDatasources,
+  listDatasourcesPage,
   createDatasource,
   updateDatasource,
   deleteDatasource,
@@ -16,6 +18,8 @@ import {
   listDatasourceColumns,
 } from "@/api/modules";
 import { formatTime } from "@/utils/format";
+import DataSourceForm from "@/components/DataSourceForm.vue";
+import { FALLBACK_DS_FIELDS, collectDsParam, splitTestOptions } from "@/common/datasourceDefaults";
 
 const message = useMessage();
 const dialog = useDialog();
@@ -24,6 +28,13 @@ const dialog = useDialog();
 const loading = ref(false);
 const items = ref([]);
 const types = ref([]);
+const pagination = reactive({
+  page: 1,
+  pageSize: 10,
+  itemCount: 0,
+  pageSizes: [10, 20, 50],
+  showSizePicker: true,
+});
 
 async function loadTypes() {
   try {
@@ -36,7 +47,15 @@ async function loadTypes() {
 async function loadData() {
   loading.value = true;
   try {
-    items.value = (await listDatasources()) || [];
+    const result = (await listDatasourcesPage(pagination.page, pagination.pageSize)) || { total: 0, items: [] };
+    items.value = result.items || [];
+    pagination.itemCount = result.total ?? items.value.length;
+    // 删除最后一页最后一条后回退页码，避免空页
+    if (items.value.length === 0 && pagination.itemCount > 0 && pagination.page > 1) {
+      pagination.page = Math.ceil(pagination.itemCount / pagination.pageSize);
+      const retry = (await listDatasourcesPage(pagination.page, pagination.pageSize)) || { items: [] };
+      items.value = retry.items || [];
+    }
   } finally {
     loading.value = false;
   }
@@ -50,26 +69,64 @@ const modal = reactive({
   saving: false,
   testing: false,
   testResult: null,
+  fields: [], // 当前类型的连接参数模板（来自后端）
+  values: {}, // 模板字段值（字符串）
+  prefill: null, // 编辑回填的原始参数
   form: {
     name: "",
     type: "",
-    host: "",
-    port: null,
-    database: "",
-    username: "",
-    password: "",
   },
 });
+
+// 动态表单实例（validateAndGetValues / resetValues / setValues）
+const dsFormRef = ref(null);
+
+// 名称输入框（弹窗打开时自动聚焦）
+const nameInputRef = ref(null);
+
+// 拉取类型模板：失败时使用兜底模板；序号防止快速切换类型时竞态覆盖
+let configSeq = 0;
+async function loadDsConfig(type, prefill) {
+  const seq = ++configSeq;
+  modal.fields = [];
+  modal.values = {};
+  let fields = FALLBACK_DS_FIELDS;
+  try {
+    const config = await getDatasourceTypeConfig(type);
+    if (seq !== configSeq) return;
+    fields = Array.isArray(config) && config.length ? config : FALLBACK_DS_FIELDS;
+  } catch {
+    if (seq !== configSeq) return;
+  }
+  modal.fields = fields;
+  // 等 fields 生效（组件已补齐默认值）后再回填，prefill 有值优先
+  await nextTick();
+  if (seq === configSeq) {
+    dsFormRef.value?.setValues(prefill || {});
+  }
+}
+
+// 切换类型：重置模板与表单值
+watch(
+  () => modal.form.type,
+  (type) => {
+    if (modal.show && type) loadDsConfig(type, modal.prefill);
+  }
+);
 
 function openCreate() {
   modal.editing = false;
   modal.id = null;
   modal.testResult = null;
+  modal.prefill = null;
   const defaultType = types.value.find((item) => item.type === "mysql")?.type
     || types.value[0]?.type
     || "mysql";
-  modal.form = { name: "", type: defaultType, host: "", port: null, database: "", username: "", password: "" };
+  modal.form = { name: "", type: defaultType };
   modal.show = true;
+  // type 未变化时 watch 不触发，这里显式加载模板
+  loadDsConfig(defaultType, null);
+  nextTick(() => nameInputRef.value?.focus());
 }
 
 function openEdit(row) {
@@ -77,37 +134,37 @@ function openEdit(row) {
   modal.id = row.id;
   modal.testResult = null;
   const param = row.param || {};
-  modal.form = {
-    name: row.name,
-    type: row.type,
-    host: param.host || "",
-    port: param.port != null ? Number(param.port) : null,
-    database: param.database || "",
-    username: param.username || "",
-    password: "", // 密码不出接口，留空保存时保留原密码
-  };
+  // 按参数已有键回填（host/port/database/username/password 一定有；sid/schema/properties 有则回填）
+  modal.prefill = {};
+  for (const [key, value] of Object.entries(param)) {
+    // 密码不出接口：跳过，留空保存时后端保留原密码
+    if (key === "password") continue;
+    if (value !== undefined && value !== null && value !== "") {
+      modal.prefill[key] = String(value);
+    }
+  }
+  // 密码不出接口：不放入 prefill，留空保存时后端保留原密码
+  modal.form = { name: row.name, type: row.type };
   modal.show = true;
-}
-
-function buildParam() {
-  const param = {
-    host: modal.form.host.trim(),
-    database: modal.form.database.trim() || undefined,
-    username: modal.form.username.trim() || undefined,
-  };
-  if (modal.form.port) param.port = modal.form.port;
-  if (modal.form.password) param.password = modal.form.password;
-  return param;
+  // type 未变化时 watch 不触发，这里显式加载模板并回填
+  loadDsConfig(row.type, modal.prefill);
+  nextTick(() => nameInputRef.value?.focus());
 }
 
 async function handleSave() {
-  if (!modal.form.name.trim() || !modal.form.host.trim()) {
-    message.warning("请填写名称与主机地址");
+  if (!modal.form.name.trim()) {
+    message.warning("请填写名称");
     return;
   }
+  const { valid, values } = (await dsFormRef.value?.validateAndGetValues()) || { valid: false, values: null };
+  if (!valid) return;
   modal.saving = true;
   try {
-    const payload = { name: modal.form.name.trim(), type: modal.form.type, param: buildParam() };
+    const payload = {
+      name: modal.form.name.trim(),
+      type: modal.form.type,
+      param: collectDsParam(values, modal.fields),
+    };
     if (modal.editing) {
       await updateDatasource(modal.id, payload);
       message.success("数据源已更新");
@@ -125,14 +182,11 @@ async function handleSave() {
 }
 
 async function handleModalTest() {
-  if (!modal.form.host.trim()) {
-    message.warning("请先填写主机地址");
-    return;
-  }
   modal.testing = true;
   modal.testResult = null;
   try {
     const result = await testConnectionLocal();
+    if (!result) return; // 必填校验未通过，不展示结果
     modal.testResult = { ok: result.success, text: result.error || "连接成功" };
   } catch (error) {
     modal.testResult = { ok: false, text: error?.response?.data?.error || "连接失败" };
@@ -146,14 +200,16 @@ async function testConnectionLocal() {
   if (modal.editing && modal.id) {
     return testDatasource(modal.id);
   }
+  const { valid, values } = (await dsFormRef.value?.validateAndGetValues()) || { valid: false, values: null };
+  if (!valid) return null;
+  // 仅当字段有值才放入；sid / schema / properties 放入 options
+  const param = collectDsParam(values, modal.fields);
+  const options = splitTestOptions(param);
   const { testConnection } = await import("@/api/modules");
   return testConnection({
     type: modal.form.type,
-    host: modal.form.host.trim(),
-    port: modal.form.port || undefined,
-    database: modal.form.database.trim() || undefined,
-    username: modal.form.username.trim() || undefined,
-    password: modal.form.password || undefined,
+    ...param,
+    options,
   });
 }
 
@@ -338,7 +394,7 @@ const columns = [
 ];
 
 const typeOptions = computed(() => types.value.map((item) => ({
-  label: `${item.type}（默认端口 ${item.defaultPort}）`,
+  label: item.type,
   value: item.type,
 })));
 
@@ -367,7 +423,7 @@ onMounted(() => {
       <template #header>
         <div class="flex-bc">
           <span class="card-title">数据源列表</span>
-          <span class="text-muted">共 {{ items.length }} 个</span>
+          <span class="text-muted">共 {{ pagination.itemCount }} 个</span>
         </div>
       </template>
       <n-data-table
@@ -379,55 +435,52 @@ onMounted(() => {
         :bordered="false"
         size="small"
       />
+      <div class="list-pagination">
+        <n-pagination
+          v-model:page="pagination.page"
+          v-model:page-size="pagination.pageSize"
+          :item-count="pagination.itemCount"
+          :page-sizes="pagination.pageSizes"
+          show-size-picker
+          @update:page="loadData"
+          @update:page-size="() => { pagination.page = 1; loadData(); }"
+        />
+      </div>
     </n-card>
 
     <!-- 新建 / 编辑弹窗 -->
-    <n-modal v-model:show="modal.show" preset="card" style="width: 560px" :title="modal.editing ? '编辑数据源' : '新建数据源'">
+    <n-modal v-model:show="modal.show" preset="card" style="width: 640px" :title="modal.editing ? '编辑数据源' : '新建数据源'">
       <div class="ds-form">
-        <div class="field">
-          <label class="field-label">名称</label>
-          <n-input v-model:value="modal.form.name" placeholder="例如：生产订单库" />
-        </div>
-        <div class="field">
-          <label class="field-label">类型</label>
-          <n-select v-model:value="modal.form.type" :options="typeOptions" />
-        </div>
-        <div class="field">
-          <label class="field-label">主机</label>
-          <div class="inline-row">
-            <n-input v-model:value="modal.form.host" placeholder="IP 或主机名" class="flex-1" />
-            <n-input-number v-model:value="modal.form.port" placeholder="端口" style="width: 120px" :min="1" :max="65535" />
+        <div class="ds-row ds-row-top">
+          <div class="field">
+            <label class="field-label">名称</label>
+            <n-input ref="nameInputRef" v-model:value="modal.form.name" placeholder="例如：生产订单库" />
+          </div>
+          <div class="field">
+            <label class="field-label">类型</label>
+            <n-select v-model:value="modal.form.type" :options="typeOptions" />
           </div>
         </div>
-        <div class="field">
-          <label class="field-label">数据库</label>
-          <n-input v-model:value="modal.form.database" placeholder="数据库 / schema / service name" />
-        </div>
-        <div class="field">
-          <label class="field-label">用户名</label>
-          <n-input v-model:value="modal.form.username" />
-        </div>
-        <div class="field">
-          <label class="field-label">密码</label>
-          <n-input
-            v-model:value="modal.form.password"
-            type="password"
-            show-password-on="click"
-            :placeholder="modal.editing ? '留空则保持原密码' : ''"
-          />
-        </div>
-
-        <div class="test-row">
-          <n-button class="btn-ghost btn-sm" :loading="modal.testing" @click="handleModalTest">测试连接</n-button>
-          <span v-if="modal.testResult" class="conn-result" :class="modal.testResult.ok ? 'ok' : 'fail'">
-            <span class="conn-dot" />{{ modal.testResult.text }}
-          </span>
+        <div class="ds-separator" />
+        <data-source-form
+          ref="dsFormRef"
+          v-model:model-value="modal.values"
+          :fields="modal.fields"
+          :editing="modal.editing"
+        />
+        <div v-if="modal.fields.length === 0" class="field text-muted" style="font-size: 12px">
+          连接参数加载中…
         </div>
       </div>
       <template #footer>
-        <div class="flex-bc">
-          <div />
-          <div class="flex-ac" style="gap: 8px">
+        <div class="modal-footer">
+          <div class="modal-footer-left">
+            <n-button class="btn-ghost btn-sm" :loading="modal.testing" @click="handleModalTest">测试连接</n-button>
+            <span v-if="modal.testResult" class="conn-result" :class="modal.testResult.ok ? 'ok' : 'fail'">
+              <span class="conn-dot" />{{ modal.testResult.text }}
+            </span>
+          </div>
+          <div class="modal-footer-right">
             <n-button class="btn-ghost" @click="modal.show = false">取消</n-button>
             <n-button type="primary" :loading="modal.saving" @click="handleSave">
               {{ modal.editing ? "保存" : "创建" }}
@@ -511,6 +564,40 @@ onMounted(() => {
   padding-top: 4px;
 }
 
+.ds-row-top {
+  display: grid;
+  grid-template-columns: 1fr 200px;
+  gap: 16px;
+  align-items: start;
+}
+
+.ds-separator {
+  height: 1px;
+  margin: 4px 0 16px;
+  background: var(--border);
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.modal-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
 .field {
   margin-bottom: 16px;
 }
@@ -521,18 +608,6 @@ onMounted(() => {
   font-size: 13px;
   font-weight: 500;
   color: var(--text);
-}
-
-.inline-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.test-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 
 .conn-result {
@@ -660,5 +735,28 @@ onMounted(() => {
   text-align: center;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+// ===== 分页 =====
+.list-pagination {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 14px;
+}
+
+// ===== 固定列不透明(防穿透),与差异明细列表处理一致 =====
+:deep(.n-data-table-td--fixed-left),
+:deep(.n-data-table-td--fixed-right) {
+  background-color: var(--n-merged-td-color, #fff) !important;
+}
+
+:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-left),
+:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-right) {
+  background-color: #f4f6ff !important;
+}
+
+:deep(.n-data-table-th--fixed-left),
+:deep(.n-data-table-th--fixed-right) {
+  background-color: var(--n-merged-th-color, #fafafa) !important;
 }
 </style>

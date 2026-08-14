@@ -1,6 +1,7 @@
 package com.consilens.server.application.artifact;
 
 import com.consilens.server.api.dto.ArtifactListDto;
+import com.consilens.server.api.dto.DiffPageDto;
 import com.consilens.server.api.dto.PageResponse;
 import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.domain.model.ArtifactPage;
@@ -12,6 +13,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
+import java.io.BufferedReader;
+import java.nio.file.Files;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -83,15 +86,24 @@ public class ArtifactQueryServiceImpl implements ArtifactQueryService {
      * and the total difference count (statistics.totalDifferences) to avoid double IO.
      */
     private ArtifactListDto toRunResultListDto(ArtifactRecord record) {
-        RunResultMeta meta = readRunResultMeta(record);
+        // 新格式：统计/行数/截断/文件 URI 均来自 DB 字段，免文件 IO
+        Long differenceCount = record.getDifferenceCount();
+        if (differenceCount == null) {
+            // 旧格式回退：读 content 解析（带阈值保护）
+            RunResultMeta meta = readRunResultMeta(record);
+            differenceCount = meta != null ? meta.differenceCount : null;
+        }
         return ArtifactListDto.builder()
                 .artifactId(record.getId())
                 .artifactType(record.getArtifactType().name())
                 .format(record.getArtifactFormat())
-                .sizeBytes(meta != null ? meta.sizeBytes : sizeOf(record))
+                .sizeBytes(sizeOf(record))
                 .createdAt(record.getCreatedAt())
                 .metadata(readMetadata(record.getMetadataJson()))
-                .differenceCount(meta != null ? meta.differenceCount : null)
+                .differenceCount(differenceCount)
+                .differenceRows(record.getDifferenceRows())
+                .differenceTruncated(record.getDifferenceTruncated())
+                .differencesUri(record.getDifferencesUri())
                 .build();
     }
 
@@ -158,5 +170,108 @@ public class ArtifactQueryServiceImpl implements ArtifactQueryService {
         } catch (Exception exception) {
             return new LinkedHashMap<>();
         }
+    }
+
+    @Override
+    public DiffPageDto listDifferences(String artifactId, long offset, int limit, String operation, String traceId) {
+        ArtifactRecord record = artifactRepository.findById(artifactId)
+                .orElseThrow(() -> new com.consilens.server.domain.exception.ResourceNotFoundException(
+                        "Artifact not found: " + artifactId));
+        try {
+            if (record.getDifferencesUri() != null && !record.getDifferencesUri().isBlank()) {
+                return readJsonlPage(record, offset, limit, operation);
+            }
+            return readLegacyJsonPage(record, offset, limit, operation);
+        } catch (java.nio.file.NoSuchFileException exception) {
+            // 差异文件已被清理/缺失：降级为空页，避免 500
+            return DiffPageDto.builder()
+                    .artifactId(record.getId())
+                    .total(record.getDifferenceRows() != null ? record.getDifferenceRows() : 0L)
+                    .rows(0)
+                    .truncated(Boolean.TRUE.equals(record.getDifferenceTruncated()))
+                    .hasMore(false)
+                    .items(java.util.Collections.emptyList())
+                    .build();
+        } catch (Exception exception) {
+            throw new IllegalStateException("Failed to read differences for " + artifactId, exception);
+        }
+    }
+
+    /**
+     * 新格式：jsonl 文件按行偏移分页（流式读取，不整文件加载）。
+     * operation 非空时仅统计并返回该类型的记录，offset/limit 作用于过滤后的结果。
+     */
+    private DiffPageDto readJsonlPage(ArtifactRecord record, long offset, int limit, String operation) throws Exception {
+        java.util.List<Map<String, Object>> items = new java.util.ArrayList<>();
+        long matched = 0;
+        long totalMatched = 0;
+        try (BufferedReader reader = Files.newBufferedReader(
+                java.nio.file.Paths.get(record.getDifferencesUri()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isBlank()) {
+                    continue;
+                }
+                Map<String, Object> row = objectMapper.readValue(line, new TypeReference<Map<String, Object>>() {
+                });
+                if (operation != null && !operation.isBlank()
+                        && !matchesOperation(operation, String.valueOf(row.get("operation")))) {
+                    continue;
+                }
+                totalMatched++;
+                if (matched >= offset && items.size() < limit) {
+                    items.add(row);
+                }
+                matched++;
+            }
+        }
+        return DiffPageDto.builder()
+                .artifactId(record.getId())
+                .total(totalMatched)
+                .rows(items.size())
+                .truncated(Boolean.TRUE.equals(record.getDifferenceTruncated()))
+                .hasMore(matched > offset + items.size())
+                .items(items)
+                .build();
+    }
+
+    /** operation 多选过滤：逗号分隔（如 mismatch,source_missing），忽略大小写。 */
+    private static boolean matchesOperation(String operation, String rowOperation) {
+        String normalized = rowOperation == null ? "" : rowOperation.toLowerCase();
+        for (String part : operation.split(",")) {
+            if (part != null && part.trim().equalsIgnoreCase(normalized)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 旧格式（format=json 整包含差异）：从 content 的 differences 数组切片（≤1000 行）。 */
+    private DiffPageDto readLegacyJsonPage(ArtifactRecord record, long offset, int limit, String operation) throws Exception {
+        byte[] bytes = artifactContentStore.read(record.getStorageUri());
+        JsonNode root = objectMapper.readTree(bytes);
+        JsonNode differences = root.get("differences");
+        java.util.List<Map<String, Object>> all = new java.util.ArrayList<>();
+        if (differences != null && differences.isArray()) {
+            for (JsonNode node : differences) {
+                all.add(objectMapper.convertValue(node, new TypeReference<Map<String, Object>>() {
+                }));
+            }
+        }
+        if (operation != null && !operation.isBlank()) {
+            all.removeIf(row -> !matchesOperation(operation, String.valueOf(row.get("operation"))));
+        }
+        java.util.List<Map<String, Object>> items = all.stream()
+                .skip(offset)
+                .limit(limit)
+                .collect(Collectors.toList());
+        return DiffPageDto.builder()
+                .artifactId(record.getId())
+                .total(all.size())
+                .rows(items.size())
+                .truncated(root.path("differenceSampleTruncated").asBoolean(false))
+                .hasMore(offset + items.size() < all.size())
+                .items(items)
+                .build();
     }
 }

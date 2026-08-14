@@ -96,4 +96,10 @@ class ClickHouseDataTypeHandlerTest {
                                 .build())
                         .build()));
     }
+
+    @Test
+    void shouldResolveWrappedTypesForRuntimeNormalization() {
+        assertEquals(DataType.VARCHAR, handler.convertToDataType("Nullable(String)"));
+        assertEquals(DataType.VARCHAR, handler.convertToDataType("LowCardinality(String)"));
+    }
 }

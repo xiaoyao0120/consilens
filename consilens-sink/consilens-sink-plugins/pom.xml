@@ -26,6 +26,7 @@
         <module>consilens-sink-json</module>
         <module>consilens-sink-csv</module>
         <module>consilens-sink-console</module>
+        <module>consilens-sink-jsonl</module>
         <module>consilens-sink-all</module>
     </modules>
 </project>

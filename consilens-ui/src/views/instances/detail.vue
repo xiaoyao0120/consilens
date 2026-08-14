@@ -1,15 +1,14 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, h, watch } from "vue";
+import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useMessage } from "naive-ui";
 import { NButton, NIcon, NPopconfirm, NSpin } from "naive-ui";
 import { ArrowBackOutline, RefreshOutline, TimeOutline, ServerOutline, PlayCircleOutline, PulseOutline } from "@vicons/ionicons5";
-import { getTaskInstance, retryTask, cancelTask, getArtifactContent, getDiffReport } from "@/api/modules";
+import { getTaskInstance, retryTask, cancelTask, getArtifactContent, getDiffReport, listArtifactDifferences } from "@/api/modules";
 import { formatTime, formatDuration, formatNumber, formatRatio } from "@/utils/format";
 import StateTag from "@/components/common/StateTag.vue";
 import KeyValueList from "@/components/common/KeyValueList.vue";
 import MatchScoreGauge from "@/components/common/MatchScoreGauge.vue";
-import SampleNoticeBar from "@/components/common/SampleNoticeBar.vue";
 import ValueDiffTable from "@/components/common/ValueDiffTable.vue";
 import ColumnDiffTable from "@/components/common/ColumnDiffTable.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
@@ -114,6 +113,84 @@ watch(
 
 const hasDiffData = computed(
   () => diffReport.value !== null && diffReport.value !== undefined && diffReport.value.status !== "NONE"
+);
+
+// ===== 差异明细分页 =====
+const diffPage = reactive({
+  page: 1,
+  pageSize: 10,
+  total: 0,
+  truncated: false,
+  items: [],
+  loading: false,
+  loaded: false,
+});
+
+// 操作类型筛选（图例勾选框，多选；默认全选 = 全部类型，取消勾选即只看其余类型）
+const FILTER_OPS = [
+  { value: "mismatch", label: "更新" },
+  { value: "source_missing", label: "新增" },
+  { value: "target_missing", label: "删除" },
+];
+const diffOps = ref(["mismatch", "source_missing", "target_missing"]);
+
+async function loadDiffPage(page = 1) {
+  const runResult = (task.value?.artifacts || []).find((item) => item.artifactType === "RUN_RESULT");
+  if (!runResult) return;
+  diffPage.loading = true;
+  try {
+    const result = await listArtifactDifferences(runResult.artifactId, {
+      offset: (page - 1) * diffPage.pageSize,
+      limit: diffPage.pageSize,
+      operation: diffOps.value.length === 3 ? undefined : diffOps.value.join(","),
+    });
+    diffPage.items = result.items || [];
+    diffPage.total = result.total ?? diffPage.items.length;
+    diffPage.truncated = !!result.truncated;
+    diffPage.page = page;
+    diffPage.loaded = true;
+  } catch (error) {
+    message.error(error?.response?.data?.error || "获取差异明细失败");
+  } finally {
+    diffPage.loading = false;
+  }
+}
+
+function handleDiffOpsChange(ops) {
+  diffOps.value = ops;
+  diffPage.page = 1;
+  // 保留当前数据直到新数据返回（勾选栏与表格不闪空）
+  loadDiffPage(1);
+}
+
+// 切换勾选并返回新数组（由 handleDiffOpsChange 统一处理）
+function toggleOp(value) {
+  const cur = [...diffOps.value];
+  const index = cur.indexOf(value);
+  if (index >= 0) {
+    cur.splice(index, 1);
+  } else {
+    cur.push(value);
+  }
+  return cur;
+}
+
+function handleDiffPageChange(page) {
+  loadDiffPage(page);
+}
+
+function handleDiffPageSizeChange(pageSize) {
+  diffPage.pageSize = pageSize;
+  diffPage.page = 1;
+  loadDiffPage(1);
+}
+
+// 任务成功且 diff 报告可用时加载第一页
+watch(
+  () => hasDiffData.value,
+  (ready) => {
+    if (ready && !diffPage.loaded) loadDiffPage(1);
+  }
 );
 
 const statistics = computed(() => diffReport.value?.statistics || null);
@@ -301,21 +378,46 @@ onBeforeUnmount(stopPolling);
             </n-card>
           </n-tab-pane>
 
-          <n-tab-pane name="diff" tab="差异明细">
-            <n-spin :show="diffReportLoading">
+          <n-tab-pane name="diff" tab="差异明细" class="diff-pane">
+            <n-spin :show="diffReportLoading || diffPage.loading" class="diff-spin">
               <template v-if="hasDiffData">
-                <SampleNoticeBar
-                  :total="diffReport.totalDifferenceCount"
-                  :sample-size="diffReport.sampleSize"
-                  :truncated="diffReport.sampleTruncated"
-                  :has-differences="(diffReport.totalDifferenceCount ?? 0) > 0"
-                />
-                <ValueDiffTable v-if="(diffReport.samples || []).length" :samples="diffReport.samples" />
-                <EmptyState
-                  v-else
-                  title="未发现差异记录"
-                  description="本次比对两表数据完全一致"
-                />
+                <div class="diff-layout">
+                  <div class="diff-legend">
+                    <span v-for="op in FILTER_OPS" :key="op.value" class="legend-item">
+                      <n-checkbox
+                        size="small"
+                        :checked="diffOps.includes(op.value)"
+                        @update:checked="handleDiffOpsChange(toggleOp(op.value))"
+                      >
+                        {{ op.label }}
+                      </n-checkbox>
+                    </span>
+                    <span class="legend-sep" />
+                    <span class="legend-item"><i class="swatch swatch-old" />旧值</span>
+                    <span class="legend-item"><i class="swatch swatch-new" />新值</span>
+                    <span v-if="diffOps.length === FILTER_OPS.length" class="legend-all">全部类型</span>
+                  </div>
+                  <div class="diff-table-area">
+                    <ValueDiffTable v-if="diffPage.items.length" :samples="diffPage.items" />
+                    <EmptyState
+                      v-if="diffPage.loaded && !diffPage.items.length"
+                      title="未发现差异记录"
+                      description="本次比对两表数据完全一致"
+                    />
+                  </div>
+                  <div v-if="diffPage.loaded && diffPage.items.length" class="diff-footer">
+                    <n-pagination
+                      :page="diffPage.page"
+                      :page-size="diffPage.pageSize"
+                      :item-count="diffPage.total"
+                      :page-sizes="[10, 20, 50]"
+                      show-size-picker
+                      @update:page="handleDiffPageChange"
+                      @update:page-size="handleDiffPageSizeChange"
+                    />
+                    <span class="text-muted diff-total">共 {{ formatNumber(diffPage.total) }} 条</span>
+                  </div>
+                </div>
               </template>
               <EmptyState
                 v-else-if="diffNotReady"
@@ -544,6 +646,93 @@ onBeforeUnmount(stopPolling);
   :deep(.n-tabs-nav) {
     padding: 0 4px;
   }
+}
+
+.diff-pane {
+  height: calc(100vh - 320px);
+  min-height: 380px;
+}
+
+.diff-spin,
+.diff-spin :deep(.n-spin-container),
+.diff-spin :deep(.n-spin-content) {
+  height: 100%;
+}
+
+.diff-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+// 勾选筛选栏：独立元素，固定不随表格刷新
+.diff-legend {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 2px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+
+  .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+
+    :deep(.n-checkbox) {
+      font-size: 12px;
+
+      .n-checkbox__label {
+        font-size: 12px;
+      }
+    }
+  }
+
+  .legend-sep {
+    width: 1px;
+    height: 12px;
+    background: var(--border, #e4e4e7);
+  }
+
+  .swatch {
+    display: inline-block;
+    width: 14px;
+    height: 10px;
+    border-radius: 3px;
+
+    &.swatch-old { background: rgba(220, 38, 38, 0.12); border: 1px solid rgba(220, 38, 38, 0.45); }
+    &.swatch-new { background: rgba(22, 163, 74, 0.12); border: 1px solid rgba(22, 163, 74, 0.45); }
+  }
+
+  .legend-all {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-muted, #a1a1aa);
+  }
+}
+
+// 表格区域：表格内部滚动（表头固定），外层不再产生滚动条
+.diff-table-area {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.diff-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, #e4e4e7);
+  margin-top: 10px;
+}
+
+.diff-total {
+  font-size: 12px;
+  flex-shrink: 0;
 }
 
 // ===== 响应式 =====

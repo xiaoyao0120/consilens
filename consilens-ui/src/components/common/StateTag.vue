@@ -39,7 +39,13 @@ const builtinMap = {
 
 const meta = computed(() => {
   const map = props.map || builtinMap;
-  return map[props.status] || { label: props.status || "-", type: "default" };
+  const status = props.status;
+  // 兼容大小写：内置映射 key 为大写，数据可能为小写（如 mismatch / source_missing）
+  return (
+    map[status] ||
+    map[status && status.toUpperCase()] ||
+    map[status && status.toLowerCase()] || { label: status || "-", type: "default" }
+  );
 });
 </script>
 

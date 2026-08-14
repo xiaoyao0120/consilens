@@ -11,6 +11,8 @@ mkdir -p "$LOG_DIR"
 
 WITH_MCP=true
 DOCKER_VERIFY_ONLY=false
+EXTERNAL_DATABASE_VERIFY_ONLY=false
+OCEANBASE_VERIFY_ONLY=false
 for arg in "$@"; do
   case "$arg" in
     --skip-mcp)
@@ -18,6 +20,12 @@ for arg in "$@"; do
       ;;
     --docker-verify-only)
       DOCKER_VERIFY_ONLY=true
+      ;;
+    --external-database-verify-only)
+      EXTERNAL_DATABASE_VERIFY_ONLY=true
+      ;;
+    --oceanbase-verify-only)
+      OCEANBASE_VERIFY_ONLY=true
       ;;
     *)
       echo "Unknown argument: $arg" >&2
@@ -33,26 +41,96 @@ run_gate() {
   "$@" 2>&1 | tee "$LOG_DIR/$name.log"
 }
 
-docker_verify() {
+assert_report_exists() {
+  local report_dir="$1"
+  local test_class="$2"
+  local report="$report_dir/TEST-${test_class}.xml"
+
+  if [[ ! -f "$report" ]]; then
+    echo "Failsafe report is missing for expected integration test: $test_class" >&2
+    return 1
+  fi
+}
+
+assert_connector_report_exists() {
+  local report_dir="$1"
+  local connector="$2"
+  local class_pattern="$3"
+
+  if ! find "$report_dir" -maxdepth 1 -type f -name 'TEST-*.xml' -print \
+      | grep -Eq "/TEST-com\.consilens\.core\..*${class_pattern}\.xml$"; then
+    echo "No executed integration report proves Connector coverage: $connector" >&2
+    return 1
+  fi
+}
+
+validate_default_test_manifest() {
+  local report_dir="$1"
+  local source_root="$ROOT/consilens-core/src/test/java"
+  local source
+  local test_class
+  local expected=0
+
+  while IFS= read -r source; do
+    test_class="${source#"$source_root"/}"
+    test_class="${test_class%.java}"
+    test_class="${test_class//\//.}"
+    assert_report_exists "$report_dir" "$test_class"
+    expected=$((expected + 1))
+  done < <(find "$source_root" -type f -name '*ITest.java' \
+      ! -name 'CrossDatabaseDockerITest.java' \
+      ! -name 'CrossDatabaseMysqlOceanBaseITest.java' -print | sort)
+
+  if [[ "$expected" -eq 0 ]]; then
+    echo "No default *ITest.java sources were discovered." >&2
+    return 1
+  fi
+
+  assert_connector_report_exists "$report_dir" mysql \
+      '(ChecksumDifferMySQLITest|JoinDifferMySQLITest|CrossDatabaseDiffITest|DatabaseAdapterITest|CrossDatabaseMysql.*ITest)'
+  assert_connector_report_exists "$report_dir" postgresql \
+      '(ChecksumDifferPostgresITest|CrossDatabaseDiffITest|DatabaseAdapterITest)'
+  assert_connector_report_exists "$report_dir" oracle \
+      '(ChecksumDifferOracleITest|DatabaseAdapterOracleITest|CrossDatabaseMysqlOracleITest)'
+  assert_connector_report_exists "$report_dir" tidb 'CrossDatabaseMysqlTiDBITest'
+  assert_connector_report_exists "$report_dir" clickhouse 'CrossDatabaseMysqlClickHouseITest'
+  assert_connector_report_exists "$report_dir" sqlserver 'CrossDatabaseMysqlSqlServerITest'
+  assert_connector_report_exists "$report_dir" starrocks 'CrossDatabaseMysqlStarRocksITest'
+  assert_connector_report_exists "$report_dir" doris 'CrossDatabaseMysqlDorisITest'
+  assert_connector_report_exists "$report_dir" trino 'CrossDatabaseMysqlTrinoITest'
+  assert_connector_report_exists "$report_dir" presto 'CrossDatabaseMysqlPrestoITest'
+
+  echo "Default integration manifest verified: classes=$expected, connectors=10."
+}
+
+validate_oceanbase_testcontainer_manifest() {
+  local report_dir="$1"
+
+  assert_report_exists "$report_dir" 'com.consilens.core.integration.CrossDatabaseMysqlOceanBaseITest'
+  assert_connector_report_exists "$report_dir" oceanbase 'CrossDatabaseMysqlOceanBaseITest'
+  echo "OceanBase Testcontainers manifest verified: classes=1, connectors=oceanbase."
+}
+
+validate_external_test_manifest() {
+  local report_dir="$1"
+
+  assert_report_exists "$report_dir" 'com.consilens.core.integration.CrossDatabaseDockerITest'
+  assert_report_exists "$report_dir" 'com.consilens.core.compare.OceanBaseSameDbComparisonTest'
+  assert_report_exists "$report_dir" 'com.consilens.core.compare.OceanBaseCrossDbComparisonTest'
+  assert_connector_report_exists "$report_dir" oceanbase \
+      '(OceanBaseSameDbComparisonTest|OceanBaseCrossDbComparisonTest)'
+  echo "External integration manifest verified: classes=3, connectors=oceanbase."
+}
+
+validate_failsafe_reports() {
   local report_dir="$ROOT/consilens-core/target/failsafe-reports"
+  local suite="$1"
   local reports=()
   local report
   local tests
   local skipped
   local errors
   local failures
-
-  if ! command -v docker >/dev/null 2>&1; then
-    echo "Docker CLI is required for the integration verify gate." >&2
-    return 1
-  fi
-  if ! docker info >/dev/null 2>&1; then
-    echo "Docker daemon is unavailable; refusing to skip integration verification." >&2
-    return 1
-  fi
-
-  rm -rf "$report_dir"
-  ./mvnw -B -pl consilens-core -am verify
 
   if [[ ! -f "$report_dir/failsafe-summary.xml" ]]; then
     echo "Failsafe summary is missing: $report_dir/failsafe-summary.xml" >&2
@@ -67,12 +145,29 @@ docker_verify() {
     return 1
   fi
 
-  for external_test in CrossDatabaseDockerITest OceanBaseSameDbComparisonTest OceanBaseCrossDbComparisonTest; do
-    if find "$report_dir" -maxdepth 1 -type f -name "*${external_test}*.xml" -print -quit | grep -q .; then
-      echo "Default Docker verify unexpectedly ran fixed-service test: $external_test" >&2
-      return 1
-    fi
-  done
+  if [[ "$suite" == "default" ]]; then
+    for external_test in CrossDatabaseDockerITest OceanBaseSameDbComparisonTest OceanBaseCrossDbComparisonTest; do
+      if find "$report_dir" -maxdepth 1 -type f -name "*${external_test}*.xml" -print -quit | grep -q .; then
+        echo "Default Docker verify unexpectedly ran fixed-service test: $external_test" >&2
+        return 1
+      fi
+    done
+    validate_default_test_manifest "$report_dir"
+  fi
+  case "$suite" in
+    default)
+      ;;
+    external)
+      validate_external_test_manifest "$report_dir"
+      ;;
+    oceanbase)
+      validate_oceanbase_testcontainer_manifest "$report_dir"
+      ;;
+    *)
+      echo "Unknown integration report suite: $suite" >&2
+      return 2
+      ;;
+  esac
 
   read -r tests skipped errors failures < <(
     awk '
@@ -97,7 +192,47 @@ docker_verify() {
     return 1
   fi
 
-  echo "Docker integration verify passed: tests=$tests, skipped=$skipped."
+  echo "Integration report verification passed: suite=$suite, tests=$tests, skipped=$skipped."
+}
+
+require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker CLI is required for the integration verify gate." >&2
+    return 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo "Docker daemon is unavailable; refusing to skip integration verification." >&2
+    return 1
+  fi
+}
+
+docker_verify() {
+  local report_dir="$ROOT/consilens-core/target/failsafe-reports"
+
+  require_docker
+  rm -rf "$report_dir"
+  ./mvnw -B -pl consilens-core -am verify
+  validate_failsafe_reports default
+}
+
+external_database_verify() {
+  local report_dir="$ROOT/consilens-core/target/failsafe-reports"
+
+  require_docker
+  rm -rf "$report_dir"
+  ./mvnw -B -pl consilens-core -am -Pexternal-databases \
+      -Dit.test=CrossDatabaseDockerITest,OceanBaseSameDbComparisonTest,OceanBaseCrossDbComparisonTest verify
+  validate_failsafe_reports external
+}
+
+oceanbase_verify() {
+  local report_dir="$ROOT/consilens-core/target/failsafe-reports"
+
+  require_docker
+  rm -rf "$report_dir"
+  ./mvnw -B -pl consilens-core -am -Poceanbase-testcontainer \
+      -Dit.test=CrossDatabaseMysqlOceanBaseITest verify
+  validate_failsafe_reports oceanbase
 }
 
 find_java17() {
@@ -186,6 +321,18 @@ smoke_mcp() {
 if [[ "$DOCKER_VERIFY_ONLY" == "true" ]]; then
   run_gate docker-verify docker_verify
   echo "Docker integration verify passed. Logs: $LOG_DIR"
+  exit 0
+fi
+
+if [[ "$EXTERNAL_DATABASE_VERIFY_ONLY" == "true" ]]; then
+  run_gate external-database-verify external_database_verify
+  echo "External database integration verify passed. Logs: $LOG_DIR"
+  exit 0
+fi
+
+if [[ "$OCEANBASE_VERIFY_ONLY" == "true" ]]; then
+  run_gate oceanbase-verify oceanbase_verify
+  echo "OceanBase Testcontainers verify passed. Logs: $LOG_DIR"
   exit 0
 fi
 

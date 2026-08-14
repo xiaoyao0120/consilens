@@ -125,7 +125,6 @@ grafana/
 examples/mysql-doris/*.bak
 
 # Application specific
-data/
 results/
 reports/
 uploads/
@@ -151,3 +150,5 @@ consilens-ui/node
 consilens-ui/node_modules
 consilens-ui/.vite
 .consilens-server
+.chrome-cdp
+.chrome-headless

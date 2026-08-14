@@ -25,8 +25,10 @@ import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
 import com.consilens.core.lifecycle.DiffLifecycle;
 import com.consilens.core.lifecycle.NoopDiffLifecycle;
-import com.consilens.sink.api.DefaultDiffLifecycle;
+import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.sink.api.model.ResultConfig;
+import com.consilens.sink.api.model.SinkConfig;
+import com.consilens.sink.api.DefaultDiffLifecycle;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -36,6 +38,8 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.LinkedHashMap;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -51,6 +55,9 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
     private final DataSourceRepository dataSourceRepository;
     private final CryptoSupport cryptoSupport;
     private final DialectSupport dialectSupport;
+    private static final String NAME_CHARS_PATTERN = "[A-Za-z0-9_.$: \\-]{1,256}";
+
+    private final ConsilensServerProperties properties;
     private final ObjectMapper objectMapper;
 
     public RunTaskHandler(ArtifactService artifactService,
@@ -59,6 +66,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
                           DataSourceRepository dataSourceRepository,
                           CryptoSupport cryptoSupport,
                           DialectSupport dialectSupport,
+                          ConsilensServerProperties properties,
                           ObjectMapper objectMapper) {
         this.artifactService = artifactService;
         this.configService = configService;
@@ -66,6 +74,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         this.dataSourceRepository = dataSourceRepository;
         this.cryptoSupport = cryptoSupport;
         this.dialectSupport = dialectSupport;
+        this.properties = properties;
         this.objectMapper = objectMapper;
     }
 
@@ -105,12 +114,26 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
             String database = endpoint.getDatabase() != null && !endpoint.getDatabase().isBlank()
                     ? endpoint.getDatabase()
                     : stringValue(param.get("database"));
+            // database 直接拼入 JDBC URL，复用创建数据源时的名称白名单防 URL 参数注入
+            if (database != null && !database.matches(NAME_CHARS_PATTERN)) {
+                throw new IllegalArgumentException("database contains invalid characters");
+            }
             // connector 执行端需要完整 JDBC URL，按数据源类型经 dialect 构建
             dialectSupport.find(ds.getType())
-                    .ifPresent(dialect -> injected.put("url", dialect.buildJdbcUrl(
-                            java.util.Map.of("host", host == null ? "" : host,
-                                    "port", port == null ? dialect.getDefaultPort() : port,
-                                    "database", database == null ? "" : database))));
+                    .ifPresent(dialect -> {
+                        Map<String, Object> urlParams = new LinkedHashMap<>();
+                        urlParams.put("host", host == null ? "" : host);
+                        urlParams.put("port", port == null ? dialect.getDefaultPort() : port);
+                        urlParams.put("database", database == null ? "" : database);
+                        // 方言扩展参数（Oracle sid / schema / properties）透传，不覆盖已有键
+                        for (String key : new String[]{"sid", "schema", "properties"}) {
+                            Object value = param.get(key);
+                            if (value != null && !String.valueOf(value).isBlank()) {
+                                urlParams.putIfAbsent(key, value);
+                            }
+                        }
+                        injected.put("url", dialect.buildJdbcUrl(urlParams));
+                    });
             injected.put("host", host);
             injected.put("port", port);
             injected.put("database", database);
@@ -162,11 +185,12 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
             ServerCompareConfig config = configService.fromRunRequest(request);
             injectConnections(config);
             if (Boolean.TRUE.equals(options(request).getDryRun())) {
-                return writeSuccess(context, request, startedAt, true, configService.validateContent(config));
+                return writeSuccess(context, request, startedAt, true,
+                        configService.validateContent(config), null);
             }
-            DiffResult diffResult = executeComparison(context, config, options(request));
+            CompareOutcome outcome = executeComparison(context, config, options(request));
             assertNotCancellationRequested(context);
-            return writeSuccess(context, request, startedAt, false, runResult(diffResult));
+            return writeSuccess(context, request, startedAt, false, runResult(outcome.diffResult), outcome);
         } catch (TaskCancellationException exception) {
             throw exception;
         } catch (InvalidInputException exception) {
@@ -178,9 +202,22 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         }
     }
 
-    protected DiffResult executeComparison(TaskExecutionContext taskContext,
-                                           ServerCompareConfig config,
-                                           RunRequest.Options options) throws Exception {
+    /** 执行结果 + 差异 sink 写入状态（行数/截断） */
+    static final class CompareOutcome {
+        final DiffResult diffResult;
+        final long writtenRecordCount;
+        final boolean truncated;
+
+        CompareOutcome(DiffResult diffResult, long writtenRecordCount, boolean truncated) {
+            this.diffResult = diffResult;
+            this.writtenRecordCount = writtenRecordCount;
+            this.truncated = truncated;
+        }
+    }
+
+    protected CompareOutcome executeComparison(TaskExecutionContext taskContext,
+                                               ServerCompareConfig config,
+                                               RunRequest.Options options) throws Exception {
         CompareRequest compareRequest = configService.toCompareRequest(config, options);
         DiffLifecycle lifecycle = buildLifecycle(config);
         DiffContext diffContext = buildDiffContext(taskContext, config);
@@ -193,7 +230,12 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
             publishDifferences(diffResult, lifecycle, diffContext);
             assertNotCancellationRequested(taskContext);
             lifecycle.onDiffComplete(diffResult, diffContext);
-            return diffResult;
+            return new CompareOutcome(diffResult,
+                    lifecycle instanceof DefaultDiffLifecycle
+                            ? ((DefaultDiffLifecycle) lifecycle).writtenRecordCount()
+                            : 0L,
+                    lifecycle instanceof DefaultDiffLifecycle
+                            && ((DefaultDiffLifecycle) lifecycle).isTruncated());
         } catch (Exception exception) {
             failure = exception;
             try {
@@ -222,9 +264,38 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
     protected DiffLifecycle buildLifecycle(ServerCompareConfig config) {
         ResultConfig resultConfig = config.getResult();
         if (resultConfig == null || resultConfig.getSinks() == null || resultConfig.getSinks().isEmpty()) {
-            return new NoopDiffLifecycle();
+            // 默认写入：差异明细经 jsonl sink 落盘（供分页读取，不截断）；统计数据由 writeSuccess 入库
+            SinkConfig defaultSink = SinkConfig.builder()
+                    .format("jsonl")
+                    .type("diff-record")
+                    .enabled(true)
+                    .properties(toJson(Map.of(
+                            "path", defaultDiffPath())))
+                    .build();
+            resultConfig = ResultConfig.builder()
+                    .failOnSinkError(true)
+                    .sinks(List.of(defaultSink))
+                    .build();
         }
         return new DefaultDiffLifecycle(resultConfig);
+    }
+
+    private String toJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception exception) {
+            throw new IllegalArgumentException("failed to serialize sink properties", exception);
+        }
+    }
+
+    private String defaultDiffPath() {
+        return properties.getArtifact().getLocalBaseDir() + "/run-result-${taskId}.jsonl";
+    }
+
+    private String resolvedDiffUri(String runId) {
+        // 绝对路径 + 每次运行唯一 id，避免重试覆盖与 cwd 变化导致 URI 失效
+        return Paths.get(properties.getArtifact().getLocalBaseDir(),
+                "run-result-" + runId + ".jsonl").toAbsolutePath().toString();
     }
 
     private DiffContext buildDiffContext(TaskExecutionContext taskContext, ServerCompareConfig config) {
@@ -280,16 +351,33 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
                                              RunRequest request,
                                              Instant startedAt,
                                              boolean dryRun,
-                                             Map<String, Object> details) {
+                                             Map<String, Object> details,
+                                             CompareOutcome outcome) {
         Map<String, Object> content = baseContent(request, startedAt);
         content.put("success", true);
         content.put("dryRun", dryRun);
         content.putAll(details);
+        // 差异明细不再内联进 artifact：仅当默认 jsonl 文件确实落盘时才外置
+        String diffFilePath = resolvedDiffUri(context.getInstanceKey());
+        boolean diffFileWritten = outcome != null && outcome.writtenRecordCount > 0
+                && Files.exists(Paths.get(diffFilePath));
+        if (diffFileWritten) {
+            content.remove("differences");
+        }
         ArtifactRefDto artifact = artifactService.writeArtifact(context,
                 ArtifactKind.RUN_RESULT,
                 "json",
                 content,
                 Map.of("source", "run"));
+        Map<String, Object> statistics = outcome != null && outcome.diffResult != null
+                ? outcome.diffResult.getStatisticsMap()
+                : Map.of();
+        String differencesUri = diffFileWritten ? diffFilePath : null;
+        artifactService.updateRunResultMeta(artifact.getId(),
+                statistics,
+                outcome != null && outcome.truncated,
+                outcome != null ? outcome.writtenRecordCount : 0L,
+                differencesUri);
         return CapabilityResultSupport.result(artifact);
     }
 

@@ -100,7 +100,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         progressReporter.initialize(table1, table2, config.getBisectionThreshold());
 
         // Step 1: Get initial statistics and establish bounds
-        return getInitialBounds(table1, table2)
+        return getInitialBounds(table1, table2, infoTreeRecorder)
                 .thenCompose(bounds -> {
                     performanceMonitor.recordStage("bounds_established");
 
@@ -204,8 +204,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             String segmentId) {
 
         // Step 1: Calculate checksums for both segments (with caching)
-        CompletableFuture<ChecksumResult> checksum1Future = getChecksumWithCache(table1);
-        CompletableFuture<ChecksumResult> checksum2Future = getChecksumWithCache(table2);
+        CompletableFuture<ChecksumResult> checksum1Future = getChecksumWithCache(table1, infoTreeRecorder, segmentId);
+        CompletableFuture<ChecksumResult> checksum2Future = getChecksumWithCache(table2, infoTreeRecorder, segmentId);
 
         return CompletableFuture.allOf(checksum1Future, checksum2Future)
                 .thenCompose(v -> {
@@ -373,7 +373,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     /**
      * Get initial bounds for tables.
      */
-    private CompletableFuture<InitialBounds> getInitialBounds(TableSegment table1, TableSegment table2) {
+    private CompletableFuture<InitialBounds> getInitialBounds(
+            TableSegment table1, TableSegment table2, InfoTreeRecorder infoTreeRecorder) {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 // Get initial bounds for the segments
@@ -394,6 +395,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                 // We only need count, minKey, maxKey - no need for expensive checksum calculation
                 ChecksumResult bounds1 = unboundedTable1.countAndBounds();
                 ChecksumResult bounds2 = unboundedTable2.countAndBounds();
+                infoTreeRecorder.addQueryCount("checksum-diff", 2);
 
                 long maxRows = Math.max(bounds1.getCount(), bounds2.getCount());
 
@@ -412,7 +414,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     /**
      * Get checksum with caching support.
      */
-    private CompletableFuture<ChecksumResult> getChecksumWithCache(TableSegment segment) {
+    private CompletableFuture<ChecksumResult> getChecksumWithCache(
+            TableSegment segment, InfoTreeRecorder infoTreeRecorder, String segmentId) {
         String cacheKey = generateChecksumCacheKey(segment);
 
         ChecksumResult cached = checksumCache.get(cacheKey);
@@ -425,6 +428,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         // Offload the checksum computation to the executor so the caller's thread can keep orchestrating other work.
         return CompletableFuture.supplyAsync(() -> {
             ChecksumResult result = segment.countAndChecksum();
+            infoTreeRecorder.addQueryCount(segmentId, 1);
             checksumCache.put(cacheKey, result);
             return result;
         }, executorProvider.getIoExecutor());
@@ -567,6 +571,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             // matched incrementally so large segments do not hold both hash maps at once.
             RowHashSide index1 = new RowHashSide();
             table1.getDatabase().forEachSegmentRowHash(table1, (rawKey, hash) -> {
+                infoTreeRecorder.addBytesFetched(segmentId, estimateKeyHashBytes(rawKey, hash));
                 List<Object> normalizedKey = normalizeKeyValues(rawKey, table1.getKeyColumns(), columnTypes1);
                 index1.put(normalizedKey, rawKey, hash);
             });
@@ -581,13 +586,16 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
 
             long[] table2RowCount = new long[1];
             table2.getDatabase().forEachSegmentRowHash(table2, (rawKey2, hash2) -> {
+                infoTreeRecorder.addBytesFetched(segmentId, estimateKeyHashBytes(rawKey2, hash2));
                 table2RowCount[0]++;
                 List<Object> normalizedKey = normalizeKeyValues(rawKey2, table2.getKeyColumns(), columnTypes2);
                 RowHashEntry entry1 = index1.remove(normalizedKey);
                 if (entry1 == null) {
+                    infoTreeRecorder.markFirstDifference();
                     keysOnlyInTable2.add(normalizedKey);
                     rawKeysOnlyInTable2.put(normalizedKey, rawKey2);
                 } else if (!entry1.hash.equals(hash2)) {
+                    infoTreeRecorder.markFirstDifference();
                     mismatchedKeys.add(normalizedKey);
                     rawKeysMismatchedIn1.put(normalizedKey, entry1.rawKey);
                     rawKeysMismatchedIn2.put(normalizedKey, rawKey2);
@@ -595,9 +603,13 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                     mismatchHashesIn2.put(normalizedKey, hash2);
                 }
             });
+            infoTreeRecorder.addQueryCount(segmentId, 2);
 
             Map<List<Object>, List<Object>> rawKeysOnlyInTable1 = index1.remainingRawKeys();
             Set<List<Object>> keysOnlyInTable1 = new HashSet<>(rawKeysOnlyInTable1.keySet());
+            if (!keysOnlyInTable1.isEmpty()) {
+                infoTreeRecorder.markFirstDifference();
+            }
 
             int totalDifferences = keysOnlyInTable1.size() + keysOnlyInTable2.size() + mismatchedKeys.size();
             log.info("Hash comparison found {} differences: {} only in table1, {} only in table2, {} mismatched",
@@ -635,8 +647,10 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                     Set<List<Object>> rawKeys2 = new LinkedHashSet<>(snapshot.rawKeysOnlyInTable2.values());
                     rawKeys2.addAll(snapshot.rawKeysMismatchedIn2.values());
 
-                    Map<List<Object>, Object[]> data1 = queryRowsByKeys(table1, rawKeys1, snapshot.columnTypes1);
-                    Map<List<Object>, Object[]> data2 = queryRowsByKeys(table2, rawKeys2, snapshot.columnTypes2);
+                    Map<List<Object>, Object[]> data1 = queryRowsByKeys(
+                            table1, rawKeys1, snapshot.columnTypes1, infoTreeRecorder, segmentId);
+                    Map<List<Object>, Object[]> data2 = queryRowsByKeys(
+                            table2, rawKeys2, snapshot.columnTypes2, infoTreeRecorder, segmentId);
                     return new RowChecksumDiffData(snapshot, data1, data2,
                             snapshot.columnTypes1, snapshot.columnTypes2);
                 }, executorProvider.getIoExecutor())
@@ -710,6 +724,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             log.debug("Using full data comparison for segment: {}", segmentId);
             List<Object[]> rows1 = table1.getValues();
             List<Object[]> rows2 = table2.getValues();
+            infoTreeRecorder.addQueryCount(segmentId, 2);
+            infoTreeRecorder.addBytesFetched(segmentId, estimateRowsBytes(rows1) + estimateRowsBytes(rows2));
             return new FullDataSnapshot(rows1, rows2);
         }, executorProvider.getIoExecutor())
                 .thenAcceptAsync(snapshot -> {
@@ -748,7 +764,9 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
      */
     private Map<List<Object>, Object[]> queryRowsByKeys(TableSegment segment,
                                                         Set<List<Object>> keys,
-                                                        Map<String, DataType> columnTypes) {
+                                                        Map<String, DataType> columnTypes,
+                                                        InfoTreeRecorder infoTreeRecorder,
+                                                        String segmentId) {
         if (keys.isEmpty()) {
             return Collections.emptyMap();
         }
@@ -762,7 +780,10 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         for (int i = 0; i < keyList.size(); i += KEY_QUERY_BATCH_SIZE) {
             int end = Math.min(i + KEY_QUERY_BATCH_SIZE, keyList.size());
             Set<List<Object>> batch = new HashSet<>(keyList.subList(i, end));
-            for (Object[] row : segment.getValuesByKeys(batch)) {
+            List<Object[]> rows = segment.getValuesByKeys(batch);
+            infoTreeRecorder.addQueryCount(segmentId, 1);
+            infoTreeRecorder.addBytesFetched(segmentId, estimateRowsBytes(rows));
+            for (Object[] row : rows) {
                 List<Object> primaryKey = normalizeKeyValues(
                         Arrays.asList(row).subList(0, Math.min(keyColumnCount, row.length)),
                         segment.getKeyColumns(),
@@ -772,6 +793,33 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         }
 
         return rowMap;
+    }
+
+    private static long estimateRowsBytes(List<Object[]> rows) {
+        long bytes = 0L;
+        for (Object[] row : rows) {
+            if (row == null) {
+                continue;
+            }
+            for (Object value : row) {
+                if (value != null) {
+                    bytes += value.toString().getBytes(StandardCharsets.UTF_8).length;
+                }
+            }
+        }
+        return bytes;
+    }
+
+    private static long estimateKeyHashBytes(List<Object> key, String hash) {
+        long bytes = hash == null ? 0L : hash.getBytes(StandardCharsets.UTF_8).length;
+        if (key != null) {
+            for (Object value : key) {
+                if (value != null) {
+                    bytes += value.toString().getBytes(StandardCharsets.UTF_8).length;
+                }
+            }
+        }
+        return bytes;
     }
 
     private List<Object> normalizeKeyValues(List<?> keyValues,
@@ -1142,7 +1190,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             TableSegment table1, TableSegment table2, InfoTreeRecorder infoTreeRecorder, int level, int bisectionFactor,
             String parentSegmentId) {
 
-        return getInitialBounds(table1, table2)
+        return getInitialBounds(table1, table2, infoTreeRecorder)
                 .thenCompose(bounds -> {
                     TableSegment bounded1 = createBoundedSegment(table1, bounds.table1Bounds);
                     TableSegment bounded2 = createBoundedSegment(table2, bounds.table2Bounds);
@@ -1181,9 +1229,11 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
 
             // Create a new segment for the smaller table with the same min/max bounds as the larger segment.
             // This keeps both sides aligned even though only one side dictated the checkpoint placement.
+            // 上界包含性必须与 larger 段一致，否则两侧段范围错位（一侧含边界行、另一侧不含）
             TableSegment correspondingSegment = smallerTable.toBuilder()
                     .minKey(largerSegment.getMinKey())
                     .maxKey(largerSegment.getMaxKey())
+                    .upperBoundInclusive(largerSegment.isUpperBoundInclusive())
                     .build();
 
             log.debug("  correspondingSegment database after toBuilder: {}", 
@@ -1267,6 +1317,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             return;
         }
         ensureDiffLimit(differences.size());
+        infoTreeRecorder.markFirstDifference();
 
         log.debug("Streaming {} differences for segment: {}", differences.size(), segmentId);
         infoTreeRecorder.addMetric(segmentId, "differences", differences.size());

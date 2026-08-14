@@ -42,7 +42,8 @@ class RunTaskHandlerTest {
                         mock(com.consilens.server.domain.repository.DataSourceRepository.class),
                         new com.consilens.server.support.crypto.CryptoSupport(""),
                         new com.consilens.server.application.datasource.DialectSupport(),
-                        new com.fasterxml.jackson.databind.ObjectMapper());
+                        new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper());
         DiffRow row = DiffRow.modified(List.of(1),
                 List.of("sensitive-source"),
                 List.of("sensitive-target"),
@@ -53,6 +54,47 @@ class RunTaskHandlerTest {
 
         assertThat(result).containsKeys("operation", "primaryKey", "metadata");
         assertThat(result).doesNotContainKeys("sourceValues", "targetValues");
+    }
+
+    @Test
+    void shouldPassOracleSidIntoJdbcUrl() {
+        com.consilens.server.domain.repository.DataSourceRepository dataSourceRepository =
+                mock(com.consilens.server.domain.repository.DataSourceRepository.class);
+        com.consilens.server.application.artifact.ArtifactService artifactService =
+                mock(com.consilens.server.application.artifact.ArtifactService.class);
+        com.consilens.server.application.capability.config.ServerCompareConfigService configService =
+                new com.consilens.server.application.capability.config.ServerCompareConfigService(
+                        mock(com.consilens.server.application.artifact.ArtifactService.class),
+                        new com.fasterxml.jackson.databind.ObjectMapper());
+        RunTaskHandler handler = new RunTaskHandler(artifactService, configService,
+                mock(com.consilens.server.domain.repository.TaskRepository.class),
+                dataSourceRepository,
+                new com.consilens.server.support.crypto.CryptoSupport(""),
+                new com.consilens.server.application.datasource.DialectSupport(),
+                new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper());
+
+        com.consilens.server.domain.model.DataSourceRecord ds = com.consilens.server.domain.model.DataSourceRecord.builder()
+                .id(6L).name("ds-6").type("oracle")
+                .paramJson("{\"host\":\"10.0.0.6\",\"port\":1521,\"sid\":\"ORCLPDB1\","
+                        + "\"username\":\"system\",\"password\":\"p@ss\"}")
+                .build();
+        when(dataSourceRepository.findById(6L)).thenReturn(java.util.Optional.of(ds));
+
+        com.consilens.server.application.capability.config.ServerCompareConfig config =
+                configService.fromContent(java.util.Map.of(
+                        "version", "1.0",
+                        "goal", "check",
+                        "source", java.util.Map.of("type", "oracle", "table", "EMP", "datasourceId", 6),
+                        "target", java.util.Map.of("type", "oracle", "table", "EMP", "datasourceId", 6),
+                        "keys", java.util.List.of("EMPNO")));
+
+        handler.injectConnections(config);
+
+        assertThat(config.getSource().getConnection().get("url"))
+                .isEqualTo("jdbc:oracle:thin:@//10.0.0.6:1521/ORCLPDB1");
+        assertThat(config.getTarget().getConnection().get("url"))
+                .isEqualTo("jdbc:oracle:thin:@//10.0.0.6:1521/ORCLPDB1");
     }
 
     @Test
@@ -70,6 +112,7 @@ class RunTaskHandlerTest {
                 dataSourceRepository,
                 new com.consilens.server.support.crypto.CryptoSupport(""),
                 new com.consilens.server.application.datasource.DialectSupport(),
+                new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper());
 
         com.consilens.server.domain.model.DataSourceRecord ds = com.consilens.server.domain.model.DataSourceRecord.builder()
@@ -110,6 +153,7 @@ class RunTaskHandlerTest {
                 dataSourceRepository,
                 new com.consilens.server.support.crypto.CryptoSupport(""),
                 new com.consilens.server.application.datasource.DialectSupport(),
+                new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper());
         when(dataSourceRepository.findById(5L)).thenReturn(java.util.Optional.of(
                 com.consilens.server.domain.model.DataSourceRecord.builder()
@@ -147,6 +191,7 @@ class RunTaskHandlerTest {
                 mock(com.consilens.server.domain.repository.DataSourceRepository.class),
                 crypto,
                 new com.consilens.server.application.datasource.DialectSupport(),
+                new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper());
 
         com.consilens.server.application.capability.config.ServerCompareConfig config =
@@ -170,7 +215,8 @@ class RunTaskHandlerTest {
                         mock(com.consilens.server.domain.repository.DataSourceRepository.class),
                         new com.consilens.server.support.crypto.CryptoSupport(""),
                         new com.consilens.server.application.datasource.DialectSupport(),
-                        new com.fasterxml.jackson.databind.ObjectMapper());
+                        new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper());
         List<DiffRow> rows = new ArrayList<>();
         for (int i = 0; i < 2500; i++) {
             rows.add(DiffRow.added(List.of(i), List.of("v" + i), List.of("id", "value")));
@@ -212,7 +258,8 @@ class RunTaskHandlerTest {
                         mock(com.consilens.server.domain.repository.DataSourceRepository.class),
                         new com.consilens.server.support.crypto.CryptoSupport(""),
                         new com.consilens.server.application.datasource.DialectSupport(),
-                        new com.fasterxml.jackson.databind.ObjectMapper()) {
+                        new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper()) {
             @Override
             protected CompareRuntime createCompareRuntime() {
                 return compareRequest -> result;
@@ -290,7 +337,8 @@ class RunTaskHandlerTest {
                         mock(com.consilens.server.domain.repository.DataSourceRepository.class),
                         new com.consilens.server.support.crypto.CryptoSupport(""),
                         new com.consilens.server.application.datasource.DialectSupport(),
-                        new com.fasterxml.jackson.databind.ObjectMapper()) {
+                        new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper()) {
             @Override
             protected CompareRuntime createCompareRuntime() {
                 return compareRequest -> result;

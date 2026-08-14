@@ -221,11 +221,9 @@ public class PrestoDataTypeHandler extends BaseDataTypeHandler {
         String defaultValue = "0." + "0".repeat(precision);
 
         if (rounding) {
-            // Round: apply ROUND then format with fixed decimal places
-            return "COALESCE(FORMAT('%." + precision + "f', ROUND(" + quotedCol + ", " + precision + ")), '" + defaultValue + "')";
+            return fixedDecimalCast("ROUND(" + quotedCol + ", " + precision + ")", precision, defaultValue);
         } else {
-            // Truncate: apply TRUNCATE then format with fixed decimal places
-            return "COALESCE(FORMAT('%." + precision + "f', TRUNCATE(" + quotedCol + ", " + precision + ")), '" + defaultValue + "')";
+            return fixedDecimalCast("TRUNCATE(" + quotedCol + ", " + precision + ")", precision, defaultValue);
         }
     }
 
@@ -252,12 +250,17 @@ public class PrestoDataTypeHandler extends BaseDataTypeHandler {
         String defaultValue = "0." + "0".repeat(precision);
 
         if (rounding) {
-            // Round: apply ROUND then format with fixed decimal places
-            return "COALESCE(FORMAT('%." + precision + "f', ROUND(CAST(" + quotedCol + " AS DOUBLE), " + precision + ")), '" + defaultValue + "')";
+            return fixedDecimalCast("ROUND(CAST(" + quotedCol + " AS DOUBLE), " + precision + ")",
+                    precision, defaultValue);
         } else {
-            // Truncate: apply TRUNCATE then format with fixed decimal places
-            return "COALESCE(FORMAT('%." + precision + "f', TRUNCATE(CAST(" + quotedCol + " AS DOUBLE), " + precision + ")), '" + defaultValue + "')";
+            return fixedDecimalCast("TRUNCATE(CAST(" + quotedCol + " AS DOUBLE), " + precision + ")",
+                    precision, defaultValue);
         }
+    }
+
+    private String fixedDecimalCast(String expression, int precision, String defaultValue) {
+        return "COALESCE(CAST(CAST(" + expression + " AS DECIMAL(38, " + precision + ")) AS VARCHAR), '"
+                + defaultValue + "')";
     }
 
     /**
@@ -307,8 +310,7 @@ public class PrestoDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeTimestamp(String quotedCol) {
-        return "COALESCE(FORMAT_DATETIME(AT_TIMEZONE(" + quotedCol + ", '"
-                + resolvePrestoTimezone("timestamp", "UTC") + "'), '" + resolvePrestoTemporalFormat("timestamp",
+        return "COALESCE(FORMAT_DATETIME(" + quotedCol + ", '" + resolvePrestoTemporalFormat("timestamp",
                 "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd") + "'), '')";
     }
 

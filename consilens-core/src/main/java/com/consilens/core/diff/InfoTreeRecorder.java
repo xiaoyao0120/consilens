@@ -193,6 +193,10 @@ public class InfoTreeRecorder {
         metrics.put(key, value);
     }
 
+    public void markFirstDifference() {
+        metrics.putIfAbsent("firstDifferenceAt", System.currentTimeMillis());
+    }
+
     public DiffResult.InfoTree snapshot() {
         List<DiffResult.InfoTreeNode> snapshotNodes = new ArrayList<>();
         for (NodeRecord record : nodes.values()) {

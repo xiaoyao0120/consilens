@@ -72,6 +72,27 @@ public final class JdbcConnectionSupport {
                                       String hostLiteral,
                                       Integer port,
                                       String database) {
+        return buildJdbcUrl(dialect, hostLiteral, port, database, null);
+    }
+
+    /**
+     * Builds the connection params for {@link DatabaseDialect#buildJdbcUrl(Map)}
+     * and pre-loads the driver class.
+     *
+     * @param dialect      connector dialect (from SPI)
+     * @param hostLiteral  verified IP literal (see {@link #validateTargetHost})
+     * @param port         explicit port or null to use the dialect default
+     * @param database     database / schema / service name or null
+     * @param extraParams  extra dialect-specific params (e.g. sid/schema/properties)
+     *                     merged into the params map; never overrides
+     *                     host/port/database already set above
+     * @return JDBC URL built by the dialect
+     */
+    public static String buildJdbcUrl(DatabaseDialect dialect,
+                                      String hostLiteral,
+                                      Integer port,
+                                      String database,
+                                      Map<String, Object> extraParams) {
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("host", hostLiteral);
         if (port != null) {
@@ -79,6 +100,13 @@ public final class JdbcConnectionSupport {
         }
         if (database != null && !database.isBlank()) {
             params.put("database", database);
+        }
+        if (extraParams != null) {
+            for (Map.Entry<String, Object> entry : extraParams.entrySet()) {
+                if (entry.getValue() != null && !params.containsKey(entry.getKey())) {
+                    params.put(entry.getKey(), entry.getValue());
+                }
+            }
         }
         String url = dialect.buildJdbcUrl(params);
         if (url == null || url.isBlank()) {
@@ -98,12 +126,30 @@ public final class JdbcConnectionSupport {
                                            String username,
                                            String password,
                                            int timeoutSeconds) throws Exception {
+        return open(dialect, hostLiteral, port, database, username, password, timeoutSeconds, null);
+    }
+
+    /**
+     * Opens a JDBC connection through the dialect-provided driver and URL.
+     * The host must already be validated (use {@link #validateTargetHost}).
+     * Extra params (e.g. sid/schema) are merged into the URL params map;
+     * a {@code properties} entry (key=value&key2=value2) is applied as
+     * JDBC connection properties and never part of the URL.
+     */
+    public static java.sql.Connection open(DatabaseDialect dialect,
+                                           String hostLiteral,
+                                           Integer port,
+                                           String database,
+                                           String username,
+                                           String password,
+                                           int timeoutSeconds,
+                                           Map<String, Object> extraParams) throws Exception {
         String driverClass = dialect.getJdbcDriverClassName();
         if (driverClass == null || driverClass.isBlank()) {
             throw new IllegalArgumentException("unsupported datasource type: " + dialect.getConnectorType());
         }
         Class.forName(driverClass);
-        String url = buildJdbcUrl(dialect, hostLiteral, port, database);
+        String url = buildJdbcUrl(dialect, hostLiteral, port, database, extraParams);
         Properties properties = new Properties();
         if (username != null) {
             properties.setProperty("user", username);
@@ -113,8 +159,40 @@ public final class JdbcConnectionSupport {
         }
         properties.setProperty("connectTimeout", String.valueOf(timeoutSeconds * 1000));
         properties.setProperty("loginTimeout", String.valueOf(timeoutSeconds));
+        if (extraParams != null) {
+            applyJdbcProperties(properties, extraParams.get("properties"));
+        }
         DriverManager.setLoginTimeout(timeoutSeconds);
         return DriverManager.getConnection(url, properties);
+    }
+
+    /** 解析 key=value&key2=value2 形式的连接属性并注入 Properties(不进 URL)。
+     *  敏感键(user/password/超时)一律剥离,身份与超时由系统接管。 */
+    static void applyJdbcProperties(Properties properties, Object raw) {
+        if (raw == null) {
+            return;
+        }
+        String text = String.valueOf(raw);
+        for (String pair : text.split("&")) {
+            if (pair == null || pair.isBlank()) {
+                continue;
+            }
+            int separator = pair.indexOf('=');
+            if (separator <= 0) {
+                continue;
+            }
+            String key = pair.substring(0, separator).trim();
+            String value = pair.substring(separator + 1).trim();
+            if (key.isEmpty()) {
+                continue;
+            }
+            String lower = key.toLowerCase();
+            if ("user".equals(lower) || "password".equals(lower)
+                    || "connecttimeout".equals(lower) || "logintimeout".equals(lower)) {
+                continue;
+            }
+            properties.setProperty(key, value);
+        }
     }
 
     /**

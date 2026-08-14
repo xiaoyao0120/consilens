@@ -18,4 +18,13 @@ public interface ArtifactService {
                                  String format,
                                  Object content,
                                  Map<String, Object> metadata);
+
+    /**
+     * 在 RUN_RESULT artifact 上回填统计与差异文件元数据（统计数据入库，差异明细在独立 jsonl 文件）。
+     */
+    ArtifactRefDto updateRunResultMeta(String artifactId,
+                                       Map<String, Object> statistics,
+                                       boolean truncated,
+                                       long rows,
+                                       String differencesUri);
 }

@@ -55,6 +55,11 @@ public class TrinoDatabaseDialect extends AbstractDatabaseDialect {
     }
 
     @Override
+    public DataSourceConfigBuilder getDataSourceConfigBuilder() {
+        return new TrinoDataSourceConfigBuilder();
+    }
+
+    @Override
     public CapabilityProvider getCapabilityProvider() {
         return capabilityProvider;
     }

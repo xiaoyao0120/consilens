@@ -62,26 +62,26 @@ INSERT INTO consilens_performance_demo_table
 SELECT
     CONCAT('REC', RIGHT('0000000000' + CAST(n AS NVARCHAR), 10)), n % 100, n % 30000, n*3, n*10, n*1000003,
     2147483648 + n, CAST(n%1000 + 0.125 AS REAL), CAST(n%100000 + 0.25 AS FLOAT),
-    CAST(ROUND(n%100000/100 + 0.1234, 4) AS DECIMAL(18,4)),
-    CAST(ROUND(n%100000/50 + 0.5678, 4) AS DECIMAL(18,4)),
+    CAST(ROUND(n%100000/100.0 + 0.1234, 4) AS DECIMAL(18,4)),
+    CAST(ROUND(n%100000/50.0 + 0.5678, 4) AS DECIMAL(18,4)),
     CONCAT('C', RIGHT('000000000' + CAST(n AS NVARCHAR), 9)), CONCAT('v50_', RIGHT('00000' + CAST(n AS NVARCHAR), 5)),
     CONCAT('v100_', RIGHT('00000' + CAST(n AS NVARCHAR), 5), '_stable'), CONCAT('v255_', RIGHT('00000' + CAST(n AS NVARCHAR), 5), '_stable_payload'),
     CONCAT('text-', RIGHT('00000' + CAST(n AS NVARCHAR), 5)), CONCAT('mediumtext-', RIGHT('00000' + CAST(n AS NVARCHAR), 5), '-', REPLICATE('x', CAST(n%32 AS INT))),
-    CONVERT(BINARY(8), CONVERT(VARBINARY(8), CAST(n AS INT))), CONVERT(VARBINARY(16), n*17), CONVERT(VARBINARY(MAX), n*31),
+    CONVERT(BINARY(8), CAST(n AS BINARY(8))), CONVERT(VARBINARY(16), CAST(n*17 AS BINARY(16))), CONVERT(VARBINARY(MAX), CAST(n*31 AS BINARY(16))),
     DATEADD(DAY, CAST(n%7 AS INT), '2026-05-01'),
     DATEADD(SECOND, CAST(n%10000 AS INT), '2026-05-01'),
     DATEADD(SECOND, CAST(n%10000 AS INT), '2026-05-01'),
     CONVERT(TIME, DATEADD(SECOND, CAST(n%86400 AS INT), '00:00:00')), CASE WHEN n%2=0 THEN 1 ELSE 0 END, CAST(n%2 AS TINYINT),
     CASE n%4 WHEN 0 THEN 'new' WHEN 1 THEN 'processing' WHEN 2 THEN 'done' ELSE 'failed' END,
     CASE n%3 WHEN 0 THEN 'a,b' WHEN 1 THEN 'b' ELSE 'c' END,
-    CONCAT('{"value":"json_', RIGHT('00000' + CAST(n AS NVARCHAR), 5), '"}'),
+    CONCAT('{"value": "json_', RIGHT('00000' + CAST(n AS NVARCHAR), 5), '"}'),
     CONCAT('user_', RIGHT('00000' + CAST(n AS NVARCHAR), 5)), CONCAT('user_', RIGHT('00000' + CAST(n AS NVARCHAR), 5), '@example.com'),
     CONCAT('+861380', RIGHT('000000' + CAST(n AS NVARCHAR), 6)), CONCAT('No.', CAST(n AS NVARCHAR), ' Consilens Road'),
     CASE n%4 WHEN 0 THEN 'Shanghai' WHEN 1 THEN 'Beijing' WHEN 2 THEN 'Shenzhen' ELSE 'Hangzhou' END,
     'CN', RIGHT('000000' + CAST(n%1000000 AS NVARCHAR), 6),
-    CAST(ROUND(10 + n%5000/10, 4) AS DECIMAL(18,4)),
-    CAST(ROUND(1000 + n%8000/10, 4) AS DECIMAL(18,4)),
-    CAST(ROUND(5000 + n%3000/10, 4) AS DECIMAL(18,4)),
+    CAST(ROUND(10 + n%5000/10.0, 4) AS DECIMAL(18,4)),
+    CAST(ROUND(1000 + n%8000/10.0, 4) AS DECIMAL(18,4)),
+    CAST(ROUND(5000 + n%3000/10.0, 4) AS DECIMAL(18,4)),
     CASE n%4 WHEN 0 THEN 'active' WHEN 1 THEN 'inactive' WHEN 2 THEN 'pending' ELSE 'blocked' END,
     CASE n%5 WHEN 0 THEN 'retail' WHEN 1 THEN 'finance' WHEN 2 THEN 'logistics' WHEN 3 THEN 'manufacturing' ELSE 'public' END,
     CAST(n%5+1 AS SMALLINT), CAST(n%100 + 0.5 AS FLOAT),
@@ -164,7 +164,7 @@ seq AS (
     WHERE ones.d + tens.d*10 + hundreds.d*100 + thousands.d*1000 < 10000
 )
 INSERT INTO orders
-SELECT n, 100000 + n%500, CAST(ROUND(20 + n%10000/20, 4) AS DECIMAL(18,4)),
+SELECT n, 100000 + n%500, CAST(ROUND(20 + n%10000/20.0, 4) AS DECIMAL(18,4)),
     CASE n%4 WHEN 0 THEN 'paid' WHEN 1 THEN 'created' WHEN 2 THEN 'shipped' ELSE 'closed' END,
     DATEADD(DAY, n%365, '2025-01-01')
 FROM seq;
@@ -177,7 +177,7 @@ GO
 UPDATE orders_backup SET amount = 99999.9999 WHERE order_id = 1;
 GO
 
--- SOURCE_MISSING: orders 插入额外订单
+-- TARGET_MISSING: source 端 orders 插入额外订单（target 端 orders_backup 缺失）
 INSERT INTO orders (order_id, customer_id, amount, status, created_at)
 VALUES (10001, 100500, 999.99, 'paid', '2025-06-15 12:00:00');
 GO
@@ -214,7 +214,7 @@ SELECT order_id, customer_id, product_id, quantity, unit_price,
     CAST(quantity*unit_price AS DECIMAL(18,4)), order_date, status, created_at, updated_at
 FROM (
     SELECT n AS order_id, 100000 + n%500 AS customer_id, 200000 + n%1000 AS product_id,
-        1 + n%10 AS quantity, CAST(ROUND(5 + n%2000/10, 4) AS DECIMAL(18,4)) AS unit_price,
+        1 + n%10 AS quantity, CAST(ROUND(5 + n%2000/10.0, 4) AS DECIMAL(18,4)) AS unit_price,
         DATEADD(DAY, n%30, '2026-05-01') AS order_date,
         CASE n%4 WHEN 0 THEN 'paid' WHEN 1 THEN 'created' WHEN 2 THEN 'shipped' ELSE 'closed' END AS status,
         DATEADD(SECOND, n%10000, '2026-05-01') AS created_at,

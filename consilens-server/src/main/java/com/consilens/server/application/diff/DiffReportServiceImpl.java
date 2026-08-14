@@ -1,6 +1,7 @@
 package com.consilens.server.application.diff;
 
 import com.consilens.server.api.dto.DiffReportDto;
+import com.consilens.server.application.artifact.ArtifactQueryService;
 import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.exception.ResourceNotFoundException;
@@ -34,15 +35,18 @@ public class DiffReportServiceImpl implements DiffReportService {
     private final TaskRepository taskRepository;
     private final ArtifactRepository artifactRepository;
     private final ArtifactContentStore artifactContentStore;
+    private final ArtifactQueryService artifactQueryService;
     private final ObjectMapper objectMapper;
 
     public DiffReportServiceImpl(TaskRepository taskRepository,
-                                    ArtifactRepository artifactRepository,
-                                    ArtifactContentStore artifactContentStore,
-                                    ObjectMapper objectMapper) {
+                                 ArtifactRepository artifactRepository,
+                                 ArtifactContentStore artifactContentStore,
+                                 ArtifactQueryService artifactQueryService,
+                                 ObjectMapper objectMapper) {
         this.taskRepository = taskRepository;
         this.artifactRepository = artifactRepository;
         this.artifactContentStore = artifactContentStore;
+        this.artifactQueryService = artifactQueryService;
         this.objectMapper = objectMapper;
     }
 
@@ -57,20 +61,18 @@ public class DiffReportServiceImpl implements DiffReportService {
         if (runResult == null) {
             return emptyReport(taskId);
         }
-        JsonNode root;
-        try {
-            root = objectMapper.readTree(artifactContentStore.read(runResult.getStorageUri()));
-        } catch (Exception e) {
-            return emptyReport(taskId);
-        }
-        if (root == null) {
-            return emptyReport(taskId);
-        }
-        JsonNode statistics = root.get("statistics");
-        JsonNode differences = root.get("differences");
+        // 统计优先读 DB（statistics_json）；旧格式回退读 content
+        JsonNode statistics = statisticsNode(runResult);
+        JsonNode differences = differencesNode(runResult);
 
-        long totalDifferenceCount = longValue(statistics, "totalDifferences",
-                longValue(root, "differenceCount", 0L));
+        long totalDifferenceCount = longValue(statistics, "totalDifferences", -1L);
+        if (totalDifferenceCount < 0 && runResult.getDifferenceCount() != null) {
+            totalDifferenceCount = runResult.getDifferenceCount();
+        }
+        if (totalDifferenceCount < 0) {
+            // 旧格式/无统计时兜底 content 顶层 differenceCount
+            totalDifferenceCount = longValue(contentRootNode(runResult), "differenceCount", 0L);
+        }
         Double differencePercentage = doubleValue(statistics, "differencePercentage");
         if (differencePercentage == null && statistics != null && statistics.isObject()) {
             differencePercentage = DiffReportSupport.percentageFromCounts(
@@ -87,9 +89,10 @@ public class DiffReportServiceImpl implements DiffReportService {
                 .statistics(toMap(statistics))
                 .columns(buildColumns(differences))
                 .samples(buildSamples(differences))
-                .sampleSize(integerValue(root, "differenceSampleSize"))
+                .sampleSize((int) Math.min(100, totalDifferenceCount))
                 .totalDifferenceCount(totalDifferenceCount)
-                .sampleTruncated(booleanValue(root, "differenceSampleTruncated"))
+                .sampleTruncated(Boolean.TRUE.equals(runResult.getDifferenceTruncated())
+                        || totalDifferenceCount > 100)
                 .timeline(List.of())
                 .build();
     }
@@ -107,6 +110,51 @@ public class DiffReportServiceImpl implements DiffReportService {
                 .sampleTruncated(false)
                 .timeline(List.of())
                 .build();
+    }
+
+    /**
+     * 统计来源：新格式优先 DB statistics_json；旧格式从 content 解析。
+     */
+    private JsonNode contentRootNode(ArtifactRecord record) {
+        try {
+            return objectMapper.readTree(artifactContentStore.read(record.getStorageUri()));
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private JsonNode statisticsNode(ArtifactRecord record) {
+        if (record.getStatisticsJson() != null && !record.getStatisticsJson().isBlank()) {
+            try {
+                return objectMapper.readTree(record.getStatisticsJson());
+            } catch (Exception ignored) {
+                // fall through to content
+            }
+        }
+        try {
+            return objectMapper.readTree(artifactContentStore.read(record.getStorageUri())).get("statistics");
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    /**
+     * 差异样本：新格式从差异文件分页读第一页；旧格式从 content.differences。
+     */
+    private JsonNode differencesNode(ArtifactRecord record) {
+        if (record.getDifferencesUri() != null && !record.getDifferencesUri().isBlank()) {
+            try {
+                return objectMapper.valueToTree(artifactQueryService
+                        .listDifferences(record.getId(), 0, 100, null, "diff-report").getItems());
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+        try {
+            return objectMapper.readTree(artifactContentStore.read(record.getStorageUri())).get("differences");
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private ArtifactRecord latestRunResult(Long taskId) {
@@ -174,6 +222,9 @@ public class DiffReportServiceImpl implements DiffReportService {
                     .primaryKey(primaryKeyOf(node.get("primaryKey")))
                     .metadata(toMap(metadata))
                     .changedColumns(new ArrayList<>(changedColumns))
+                    .columnNames(textListOf(node.get("columnNames")))
+                    .sourceValues(valueListOf(node.get("sourceValues")))
+                    .targetValues(valueListOf(node.get("targetValues")))
                     .build());
         }
         return samples;
@@ -202,6 +253,36 @@ public class DiffReportServiceImpl implements DiffReportService {
         }
         List<Object> values = new ArrayList<>();
         for (JsonNode element : primaryKey) {
+            if (element.isNull() || element.isMissingNode()) {
+                values.add(null);
+            } else if (element.isNumber()) {
+                values.add(element.numberValue());
+            } else if (element.isBoolean()) {
+                values.add(element.asBoolean());
+            } else {
+                values.add(element.asText());
+            }
+        }
+        return values;
+    }
+
+    private List<String> textListOf(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return null;
+        }
+        List<String> values = new ArrayList<>();
+        for (JsonNode element : node) {
+            values.add(element.isTextual() ? element.asText() : element.asText(null));
+        }
+        return values;
+    }
+
+    private List<Object> valueListOf(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return null;
+        }
+        List<Object> values = new ArrayList<>();
+        for (JsonNode element : node) {
             if (element.isNull() || element.isMissingNode()) {
                 values.add(null);
             } else if (element.isNumber()) {

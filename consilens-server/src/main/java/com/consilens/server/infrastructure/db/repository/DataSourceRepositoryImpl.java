@@ -1,5 +1,8 @@
 package com.consilens.server.infrastructure.db.repository;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.consilens.server.domain.model.DataSourcePage;
 import com.consilens.server.domain.model.DataSourceRecord;
 import com.consilens.server.domain.repository.DataSourceRepository;
 import com.consilens.server.infrastructure.db.entity.DataSourceEntity;
@@ -53,6 +56,15 @@ public class DataSourceRepositoryImpl implements DataSourceRepository {
                 .stream()
                 .map(this::toRecord)
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public DataSourcePage listPage(int page, int pageSize) {
+        Page<DataSourceEntity> result = persistenceService.page(
+                new Page<>(page, pageSize),
+                new LambdaQueryWrapper<DataSourceEntity>().orderByAsc(DataSourceEntity::getName));
+        return new DataSourcePage(result.getTotal(),
+                result.getRecords().stream().map(this::toRecord).collect(Collectors.toList()));
     }
 
     @Override

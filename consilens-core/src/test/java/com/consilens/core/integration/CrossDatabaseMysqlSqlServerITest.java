@@ -193,4 +193,12 @@ class CrossDatabaseMysqlSqlServerITest {
                 .collect(Collectors.toList());
         assertThat(sourceMissing).hasSizeGreaterThanOrEqualTo(1);
     }
+
+    @Test
+    @DisplayName("MySQL 与 SQL Server 应对所有公共类型和四类结果给出精确结论")
+    void shouldVerifyPublicTypeFamiliesAndEveryDiffDirection() throws Exception {
+        CrossDatabaseAccuracyFixture.verify(
+                mysqlAdapter, TablePath.of("consilens_demo", "placeholder"),
+                sqlServerAdapter, TablePath.of("dbo", "PLACEHOLDER"));
+    }
 }

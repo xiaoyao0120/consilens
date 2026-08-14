@@ -265,10 +265,13 @@ public class IntelligentSegmenter {
         for (int i = 0; i < checkpoints.size() - 1; i++) {
             KeyVector start = checkpoints.get(i);
             KeyVector end = checkpoints.get(i + 1);
+            boolean isLast = i == checkpoints.size() - 2;
 
             TableSegment segment = originalTable.toBuilder()
                     .minKey(Optional.of(new ArrayList<>(start.toList())))
                     .maxKey(Optional.of(new ArrayList<>(end.toList())))
+                    // 中间段上界排他，避免相邻段共享边界行；最后一段继承父段（根段含上界保证最大行不丢）
+                    .upperBoundInclusive(isLast ? originalTable.isUpperBoundInclusive() : false)
                     .build();
 
             // Verify the database adapter is preserved

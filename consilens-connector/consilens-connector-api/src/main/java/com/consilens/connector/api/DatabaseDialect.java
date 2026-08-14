@@ -132,6 +132,19 @@ public interface DatabaseDialect {
         return null;
     }
 
+    /**
+     * Get the datasource parameter template builder for this connector type.
+     * <p>
+     * Returns {@code null} when the dialect has no dedicated template; the
+     * server then falls back to the generic JDBC template
+     * (host/port/database/username/password/properties).
+     *
+     * @return datasource parameter template builder, or null
+     */
+    default DataSourceConfigBuilder getDataSourceConfigBuilder() {
+        return null;
+    }
+
     default TableWriteCompiler getTableWriteCompiler() {
         throw new UnsupportedOperationException("Table sink write is not supported for connectorType=" + getConnectorType());
     }

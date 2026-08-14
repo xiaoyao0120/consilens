@@ -73,17 +73,21 @@ public class DriftChecker {
         }
         double ratio = result.getScore() / entry.getScore();
         double threshold = entry.getThreshold();
-        if (ratio < 1.0 - threshold) {
+        boolean lowerIsBetter = isLatencyUnit(result.getUnit());
+        boolean regression = lowerIsBetter ? ratio > 1.0 + threshold : ratio < 1.0 - threshold;
+        boolean improvement = lowerIsBetter ? ratio < 1.0 - threshold : ratio > 1.0 + threshold;
+        if (regression) {
             return DriftReport.DriftItem.builder()
                     .key(key)
                     .current(result.getScore())
                     .baseline(entry.getScore())
                     .ratio(ratio)
                     .status(DriftReport.DriftStatus.FAIL)
-                    .message(String.format("regression: ratio=%.4f below %.4f", ratio, 1.0 - threshold))
+                    .message(String.format("regression: ratio=%.4f outside %.4f in worse direction",
+                            ratio, lowerIsBetter ? 1.0 + threshold : 1.0 - threshold))
                     .build();
         }
-        if (ratio > 1.0 + threshold) {
+        if (improvement) {
             return DriftReport.DriftItem.builder()
                     .key(key)
                     .current(result.getScore())
@@ -101,5 +105,10 @@ public class DriftChecker {
                 .status(DriftReport.DriftStatus.PASS)
                 .message(String.format("within threshold: ratio=%.4f", ratio))
                 .build();
+    }
+
+    private boolean isLatencyUnit(String unit) {
+        return "ms".equalsIgnoreCase(unit) || "s/op".equalsIgnoreCase(unit)
+                || "us/op".equalsIgnoreCase(unit) || "ns/op".equalsIgnoreCase(unit);
     }
 }

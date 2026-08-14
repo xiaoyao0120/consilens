@@ -59,17 +59,9 @@ class OracleSqlQueryGeneratorTest {
         types.put("created_at", DataType.DATETIME);
 
         String sql = generator.getChecksumSQL("SYSTEM", "users", columns, Arrays.asList("id"), types, null);
-        // Row-level checksums use STANDARD_HASH; the final aggregation uses
-        // DBMS_CRYPTO.HASH over a pure-text EXTRACT(//text()) result so XML tags
-        // never enter the hash input. The trailing '|' is trimmed and empty input is
-        // coalesced to '' so the hash text matches MySQL's GROUP_CONCAT(..., SEPARATOR
-        // '|') byte for byte (including the empty-table '' result).
         assertTrue(sql.contains("STANDARD_HASH"));
-        assertTrue(sql.contains("DBMS_CRYPTO.HASH"));
-        assertTrue(sql.contains("EXTRACT(XMLAGG(XMLELEMENT(E, row_checksum || '|') ORDER BY pk_key), '//text()')"));
-        assertTrue(sql.contains("COALESCE(RTRIM("));
-        assertTrue(sql.contains("GETCLOBVAL(), '|'), '')"));
-        assertFalse(sql.contains("LISTAGG"));
+        assertTrue(sql.contains("LISTAGG(row_checksum, '|') WITHIN GROUP (ORDER BY pk_key)"));
+        assertFalse(sql.contains("DBMS_CRYPTO"));
     }
 
     @Test

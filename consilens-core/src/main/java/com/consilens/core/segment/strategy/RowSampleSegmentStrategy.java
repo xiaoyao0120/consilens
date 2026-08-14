@@ -67,8 +67,9 @@ public class RowSampleSegmentStrategy implements SegmentStrategy {
             for (int i = 0; i < boundaryKeys.size() - 1; i++) {
                 List<Object> minKey = boundaryKeys.get(i);
                 Optional<List<Object>> maxKey;
+                boolean isLast = i == boundaryKeys.size() - 2;
 
-                if (i == boundaryKeys.size() - 2) {
+                if (isLast) {
                     maxKey = table.getMaxKey();
                     log.debug("Last segment: using original maxKey={}", maxKey.orElse(null));
                 } else {
@@ -79,6 +80,9 @@ public class RowSampleSegmentStrategy implements SegmentStrategy {
                         .minKey(Optional.of(minKey))
                         .maxKey(maxKey)
                         .segmentIndex(i)
+                        // 中间段上界排他，避免与下一段共享边界行导致重复比较；
+                        // 最后一段继承父段设置（根段含上界，保证最大行不丢失）
+                        .upperBoundInclusive(isLast ? table.isUpperBoundInclusive() : false)
                         .build();
 
                 segments.add(segment);

@@ -4,7 +4,7 @@ import { useRouter } from "vue-router";
 import { NButton, NIcon } from "naive-ui";
 import { EyeOutline } from "@vicons/ionicons5";
 import * as echarts from "echarts/core";
-import { PieChart } from "echarts/charts";
+import { PieChart, LineChart } from "echarts/charts";
 import { TooltipComponent, LegendComponent, GridComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import { getDashboardSummary, listTaskInstances } from "@/api/modules";
@@ -14,7 +14,7 @@ import StatCard from "@/components/common/StatCard.vue";
 import StateTag from "@/components/common/StateTag.vue";
 import DiffSummaryBadge from "@/components/common/DiffSummaryBadge.vue";
 
-echarts.use([PieChart, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer]);
+echarts.use([PieChart, LineChart, TooltipComponent, LegendComponent, GridComponent, CanvasRenderer]);
 
 const router = useRouter();
 
@@ -40,7 +40,7 @@ async function loadSummary() {
 async function loadRecentTasks() {
   recentLoading.value = true;
   try {
-    const result = await listTaskInstances({ page: 1, pageSize: 8 });
+    const result = await listTaskInstances({ page: 1, pageSize: 5 });
     recentTasks.items = result.items || [];
   } finally {
     recentLoading.value = false;
@@ -252,7 +252,7 @@ onBeforeUnmount(() => {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 40% 60%;
+  grid-template-columns: 1fr 1fr;
   gap: 16px;
   flex-shrink: 0;
 }
