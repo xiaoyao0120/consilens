@@ -37,6 +37,7 @@ strategy:
   bisectionThreshold: 8000
   batchSize: 5000
   enableProfiling: true
+  maxDifferences: 100000000
 
 concurrency:
   io:

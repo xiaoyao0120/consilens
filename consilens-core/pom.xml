@@ -22,6 +22,7 @@
         <failsafe.external-database.exclude.1>**/CrossDatabaseDockerITest.java</failsafe.external-database.exclude.1>
         <failsafe.external-database.exclude.2>**/OceanBaseSameDbComparisonTest.java</failsafe.external-database.exclude.2>
         <failsafe.external-database.exclude.3>**/OceanBaseCrossDbComparisonTest.java</failsafe.external-database.exclude.3>
+        <failsafe.oceanbase-container.exclude>**/CrossDatabaseMysqlOceanBaseITest.java</failsafe.oceanbase-container.exclude>
     </properties>
 
     <dependencies>
@@ -323,6 +324,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <configuration>
+                    <failIfNoTests>true</failIfNoTests>
                     <includes>
                         <include>**/*ITest.java</include>
                         <include>**/OceanBaseSameDbComparisonTest.java</include>
@@ -332,6 +334,7 @@
                         <exclude>${failsafe.external-database.exclude.1}</exclude>
                         <exclude>${failsafe.external-database.exclude.2}</exclude>
                         <exclude>${failsafe.external-database.exclude.3}</exclude>
+                        <exclude>${failsafe.oceanbase-container.exclude}</exclude>
                     </excludes>
                 </configuration>
                 <executions>
@@ -393,6 +396,13 @@
                 <failsafe.external-database.exclude.1>__no_external_database_test_excluded__</failsafe.external-database.exclude.1>
                 <failsafe.external-database.exclude.2>__no_external_database_test_excluded__</failsafe.external-database.exclude.2>
                 <failsafe.external-database.exclude.3>__no_external_database_test_excluded__</failsafe.external-database.exclude.3>
+            </properties>
+        </profile>
+        <profile>
+            <id>oceanbase-testcontainer</id>
+            <properties>
+                <!-- OceanBase has a dedicated mandatory CI job because its image requires more startup resources. -->
+                <failsafe.oceanbase-container.exclude>__no_oceanbase_container_test_excluded__</failsafe.oceanbase-container.exclude>
             </properties>
         </profile>
     </profiles>

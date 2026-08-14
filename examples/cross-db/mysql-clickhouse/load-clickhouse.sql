@@ -122,18 +122,18 @@ SELECT
     concat('v255_', lpad(toString(n), 5, '0'), '_stable_payload') AS col_varchar_255,
     concat('text-', lpad(toString(n), 5, '0')) AS col_text,
     concat('mediumtext-', lpad(toString(n), 5, '0'), '-', repeat('x', modulo(n, 32))) AS col_mediumtext,
-    reinterpretAsString(toUInt64(n)) AS col_binary,
-    reinterpretAsString(toUInt64(n * 17)) AS col_varbinary,
-    reinterpretAsString(toUInt64(n * 31)) AS col_blob,
+    unhex(lpad(hex(toUInt64(n)), 16, '0')) AS col_binary,
+    unhex(lpad(hex(toUInt64(n * 17)), 32, '0')) AS col_varbinary,
+    unhex(lpad(hex(toUInt64(n * 31)), 32, '0')) AS col_blob,
     toDate('2026-05-01') + modulo(n, 7) AS col_date,
     toDateTime('2026-05-01 00:00:00') + modulo(n, 10000) AS col_datetime,
     toDateTime('2026-05-01 00:00:00') + modulo(n, 10000) AS col_timestamp,
-    concat(lpad(toString(modulo(n, 24)), 2, '0'), ':', lpad(toString(modulo(n, 60)), 2, '0'), ':', lpad(toString(modulo(n, 60)), 2, '0')) AS col_time,
+    concat(lpad(toString(intDiv(modulo(n, 86400), 3600)), 2, '0'), ':', lpad(toString(intDiv(modulo(modulo(n, 86400), 3600), 60)), 2, '0'), ':', lpad(toString(modulo(modulo(n, 86400), 60)), 2, '0')) AS col_time,
     if(modulo(n, 2) = 0, 1, 0) AS col_boolean,
     modulo(n, 2) AS col_tinyint_bool,
     CASE modulo(n, 4) WHEN 0 THEN 'new' WHEN 1 THEN 'processing' WHEN 2 THEN 'done' ELSE 'failed' END AS col_enum,
     CASE modulo(n, 3) WHEN 0 THEN 'a,b' WHEN 1 THEN 'b' ELSE 'c' END AS col_set,
-    concat('{"value":"json_', lpad(toString(n), 5, '0'), '"}') AS col_json,
+    concat('{"value": "json_', lpad(toString(n), 5, '0'), '"}') AS col_json,
     concat('user_', lpad(toString(n), 5, '0')) AS user_name,
     concat('user_', lpad(toString(n), 5, '0'), '@example.com') AS email,
     concat('+861380', lpad(toString(n), 6, '0')) AS phone,
@@ -161,7 +161,7 @@ WHERE n != 5;  -- TARGET_MISSING: 跳过 n=5
 
 ALTER TABLE consilens_demo.consilens_performance_demo_table
 UPDATE amount = 99999.9999
-WHERE record_id = 'REC0000000001';
+WHERE record_id = 'REC0000000001' SETTINGS mutations_sync = 1;
 
 -- =========================================================
 -- 制造 MISMATCH: 修改 record_id='REC0000000002' 的 status
@@ -169,7 +169,7 @@ WHERE record_id = 'REC0000000001';
 
 ALTER TABLE consilens_demo.consilens_performance_demo_table
 UPDATE status = 'modified_status'
-WHERE record_id = 'REC0000000002';
+WHERE record_id = 'REC0000000002' SETTINGS mutations_sync = 1;
 
 -- =========================================================
 -- 制造 SOURCE_MISSING: 目标端多出一条记录
@@ -186,14 +186,14 @@ INSERT INTO consilens_demo.consilens_performance_demo_table (
     created_at, updated_at, deleted, dt
 ) VALUES (
     'REC_EXTRA_001', 1, 1, 3, 10, 1000003, 2147483649,
-    1.125, 100000.25, 100.1234, 200.5678,
+    1.125, 1.25, 0.1334, 0.5878,
     'C000000001', 'v50_00001', 'v100_00001_stable', 'v255_00001_stable_payload',
-    'text-00001', 'mediumtext-00001-', '\x01\x00\x00\x00\x00\x00\x00\x00', '11', '1f',
-    toDate('2026-05-01'), toDateTime('2026-05-01 00:00:01'), toDateTime('2026-05-01 00:00:01'), '00:00:01',
-    1, 1, 'new', 'a,b', '{"value":"json_00001"}',
+    'text-00001', 'mediumtext-00001-x', '\x00\x00\x00\x00\x00\x00\x00\x01', '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x11', '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1f',
+    toDate('2026-05-02'), toDateTime('2026-05-01 00:00:01'), toDateTime('2026-05-01 00:00:01'), '00:00:01',
+    0, 1, 'processing', 'b', '{"value": "json_00001"}',
     'user_00001', 'user_00001@example.com', '+861380000001', 'No.1 Consilens Road',
-    'Shanghai', 'CN', '000001', 10.1000, 1000.1000, 5000.1000,
-    'active', 'retail', 1, 1.5,
+    'Beijing', 'CN', '000001', 10.1000, 1000.1000, 5000.1000,
+    'inactive', 'finance', 2, 1.5,
     toDateTime('2026-05-01 00:00:01'), toDateTime('2026-05-01 00:05:01'), 0, toDate('2026-05-01')
 );
 
@@ -285,7 +285,7 @@ SELECT
 FROM consilens_demo.consilens_seq;
 
 -- 制造 MISMATCH: 修改 id=1 的 email
-ALTER TABLE consilens_demo.users UPDATE email = 'modified@example.com' WHERE id = 1;
+ALTER TABLE consilens_demo.users UPDATE email = 'modified@example.com' WHERE id = 1 SETTINGS mutations_sync = 1;
 
 -- =========================================================
 -- orders / orders_backup (用于 same-db-join 测试)
@@ -316,9 +316,9 @@ CREATE TABLE consilens_demo.orders_backup AS consilens_demo.orders;
 INSERT INTO consilens_demo.orders_backup SELECT * FROM consilens_demo.orders;
 
 -- 制造 MISMATCH: orders_backup 修改某订单 amount
-ALTER TABLE consilens_demo.orders_backup UPDATE amount = 99999.9999 WHERE order_id = 1;
+ALTER TABLE consilens_demo.orders_backup UPDATE amount = 99999.9999 WHERE order_id = 1 SETTINGS mutations_sync = 1;
 
--- 制造 SOURCE_MISSING: orders 插入额外订单
+-- 制造 TARGET_MISSING: source 端 orders 插入额外订单（target 端 orders_backup 缺失）
 INSERT INTO consilens_demo.orders (order_id, customer_id, amount, status, created_at)
 VALUES (10001, 100500, 999.99, 'paid', toDateTime('2025-06-15 12:00:00'));
 

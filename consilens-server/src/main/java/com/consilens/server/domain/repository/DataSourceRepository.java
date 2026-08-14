@@ -1,5 +1,6 @@
 package com.consilens.server.domain.repository;
 
+import com.consilens.server.domain.model.DataSourcePage;
 import com.consilens.server.domain.model.DataSourceRecord;
 
 import java.util.List;
@@ -14,6 +15,9 @@ public interface DataSourceRepository {
     Optional<DataSourceRecord> findByName(String name);
 
     List<DataSourceRecord> listAll();
+
+    /** 分页列表（按名称升序）。 */
+    DataSourcePage listPage(int page, int pageSize);
 
     void deleteById(Long id);
 }

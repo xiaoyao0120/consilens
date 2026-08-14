@@ -190,4 +190,13 @@ class CrossDatabaseMysqlTrinoITest {
                 .collect(Collectors.toList());
         assertThat(sourceMissing).hasSizeGreaterThanOrEqualTo(1);
     }
+
+    @Test
+    @Order(3)
+    @DisplayName("MySQL 与 Trino 应对所有公共类型和四类结果给出精确结论")
+    void shouldVerifyPublicTypeFamiliesAndEveryDiffDirection() throws Exception {
+        CrossDatabaseAccuracyFixture.verify(
+                mysqlAdapter, TablePath.of("consilens_demo", "placeholder"),
+                trinoAdapter, TablePath.of("memory", "consilens_demo", "placeholder"));
+    }
 }

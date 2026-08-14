@@ -85,6 +85,11 @@ public class PostgreSQLDatabaseDialect extends AbstractDatabaseDialect {
     }
 
     @Override
+    public DataSourceConfigBuilder getDataSourceConfigBuilder() {
+        return new PostgreSQLDataSourceConfigBuilder();
+    }
+
+    @Override
     public CapabilityProvider getCapabilityProvider() {
         return capabilityProvider;
     }

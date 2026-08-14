@@ -75,6 +75,17 @@ public class SinkManager {
         }
     }
 
+    public long diffRecordCount() {
+        return diffRecordSinks.stream()
+                .mapToLong(holder -> holder.sink().writtenRecordCount())
+                .filter(count -> count >= 0)
+                .sum();
+    }
+
+    public boolean diffRecordTruncated() {
+        return diffRecordSinks.stream().anyMatch(holder -> holder.sink().isTruncated());
+    }
+
     private void safeRun(ThrowingRunnable runnable) {
         try {
             runnable.run();

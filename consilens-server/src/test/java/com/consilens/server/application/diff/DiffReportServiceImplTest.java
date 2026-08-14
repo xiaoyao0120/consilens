@@ -37,6 +37,7 @@ class DefaultDiffReportServiceTest {
     private TaskRepository taskRepository;
     private ArtifactRepository artifactRepository;
     private ArtifactContentStore contentStore;
+    private com.consilens.server.application.artifact.ArtifactQueryService artifactQueryService;
     private DiffReportServiceImpl service;
 
     @BeforeEach
@@ -44,7 +45,9 @@ class DefaultDiffReportServiceTest {
         taskRepository = mock(TaskRepository.class);
         artifactRepository = mock(ArtifactRepository.class);
         contentStore = mock(ArtifactContentStore.class);
+        artifactQueryService = mock(com.consilens.server.application.artifact.ArtifactQueryService.class);
         service = new DiffReportServiceImpl(taskRepository, artifactRepository, contentStore,
+                artifactQueryService,
                 new ObjectMapper());
     }
 
@@ -235,6 +238,47 @@ class DefaultDiffReportServiceTest {
         assertEquals(1L, report.getTotalDifferenceCount());
         assertEquals("EXCELLENT", report.getStatus());
         verify(contentStore, never()).read("storage://old");
+    }
+
+    @Test
+    void shouldPassColumnValuesThroughFromJsonlDifferences() {
+        TaskInstanceRecord task = task(TaskStatus.SUCCEEDED);
+        when(taskRepository.resolveByRef(TASK_KEY)).thenReturn(Optional.of(task));
+        ArtifactRecord runResult = ArtifactRecord.builder()
+                .id("artifact-1")
+                .taskId(TASK_ID)
+                .artifactType(ArtifactKind.RUN_RESULT)
+                .artifactFormat("jsonl")
+                .storageUri("storage://run-result-1")
+                .statisticsJson("{\"sourceRowCount\":10,\"targetRowCount\":10,"
+                        + "\"mismatchCount\":1,\"totalDifferences\":1,\"differencePercentage\":10.0}")
+                .differencesUri("/tmp/run-result-1.jsonl")
+                .differenceRows(1L)
+                .metadataJson("{}")
+                .build();
+        when(artifactRepository.listByTaskId(TASK_ID)).thenReturn(List.of(runResult));
+        when(artifactQueryService.listDifferences("artifact-1", 0, 100, null, "diff-report"))
+                .thenReturn(com.consilens.server.api.dto.DiffPageDto.builder()
+                        .artifactId("artifact-1")
+                        .total(1L)
+                        .rows(1)
+                        .hasMore(false)
+                        .items(List.of(java.util.Map.of(
+                                "operation", "MISMATCH",
+                                "primaryKey", List.of("1001"),
+                                "columnNames", List.of("name", "amount"),
+                                "sourceValues", List.of("Alice", "100.00"),
+                                "targetValues", List.of("Alicia", "101.00"),
+                                "metadata", Map.of("changedColumnIndices", List.of(0, 1)))))
+                        .build());
+
+        DiffReportDto report = service.getDiffReport(TASK_KEY);
+
+        assertEquals(1, report.getSamples().size());
+        DiffReportDto.SampleDiff sample = report.getSamples().get(0);
+        assertEquals(List.of("name", "amount"), sample.getColumnNames());
+        assertEquals(List.of("Alice", "100.00"), sample.getSourceValues());
+        assertEquals(List.of("Alicia", "101.00"), sample.getTargetValues());
     }
 
     private TaskInstanceRecord task(TaskStatus status) {

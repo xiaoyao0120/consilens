@@ -63,6 +63,16 @@ class PostgreSQLMetadataQueryGeneratorTest {
     }
 
     @Test
+    void testGetDatabaseListSQL() {
+        String sql = generator.getDatabaseListSQL();
+
+        assertTrue(sql.contains("pg_database"));
+        assertTrue(sql.contains("datname"));
+        assertTrue(sql.contains("datistemplate = false"));
+        assertTrue(sql.contains("has_database_privilege"));
+    }
+
+    @Test
     void testGetTablesSQL() {
         String sql = generator.getTablesSQL("public");
 

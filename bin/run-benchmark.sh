@@ -24,6 +24,9 @@
 # 用法：
 #   ./bin/run-benchmark.sh [micro|e2e|all] [--scenario E02,E03] [--update-baseline] \
 #       [--forks N] [--warmup-iterations N] [--measurement-iterations N]
+#       [--e2e-warmup-runs N] [--e2e-measurement-runs N]
+#       [--dataset-id ID] [--key-distribution TYPE] [--difference-type TYPE]
+#       [--expected-differences SCENARIO=COUNT,...]
 # ============================================================
 
 set -euo pipefail

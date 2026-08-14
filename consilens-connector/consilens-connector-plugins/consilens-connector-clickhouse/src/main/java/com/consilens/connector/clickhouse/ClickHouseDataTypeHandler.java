@@ -481,7 +481,10 @@ public class ClickHouseDataTypeHandler extends BaseDataTypeHandler {
         if (sourceType == null) {
             return DataType.UNKNOWN;
         }
-        String type = sourceType.toLowerCase();
+        String type = sourceType.trim().toLowerCase();
+        if ((type.startsWith("nullable(") || type.startsWith("lowcardinality(")) && type.endsWith(")")) {
+            return convertToDataType(type.substring(type.indexOf('(') + 1, type.length() - 1));
+        }
 
         switch (type) {
             case "int8":

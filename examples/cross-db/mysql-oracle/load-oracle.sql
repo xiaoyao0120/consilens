@@ -69,14 +69,14 @@ SELECT
     'C' || LPAD(n, 9, '0'), 'v50_' || LPAD(n, 5, '0'),
     'v100_' || LPAD(n, 5, '0') || '_stable', 'v255_' || LPAD(n, 5, '0') || '_stable_payload',
     'text-' || LPAD(n, 5, '0'), 'mediumtext-' || LPAD(n, 5, '0') || '-' || RPAD('x', MOD(n, 32), 'x'),
-    HEXTORAW(LPAD(TO_CHAR(n), 16, '0')), HEXTORAW(LPAD(TO_CHAR(n * 17), 32, '0')), HEXTORAW(LPAD(TO_CHAR(n * 31), 32, '0')),
+    HEXTORAW(LPAD(TO_CHAR(n, 'fmXXXXXXXXXXXXXXXX'), 16, '0')), HEXTORAW(LPAD(TO_CHAR(n * 17, 'fmXXXXXXXXXXXXXXXX'), 32, '0')), HEXTORAW(LPAD(TO_CHAR(n * 31, 'fmXXXXXXXXXXXXXXXX'), 32, '0')),
     TO_DATE('2026-05-01', 'YYYY-MM-DD') + MOD(n, 7),
     TO_DATE('2026-05-01 00:00:00', 'YYYY-MM-DD HH24:MI:SS') + MOD(n, 10000) / 86400,
     TO_TIMESTAMP('2026-05-01 00:00:00', 'YYYY-MM-DD HH24:MI:SS') + MOD(n, 10000) / 86400,
-    TO_CHAR(MOD(n, 86400) / 86400, 'HH24:MI:SS'), CASE MOD(n, 2) WHEN 0 THEN 1 ELSE 0 END, MOD(n, 2),
+    TO_CHAR(TRUNC(SYSDATE) + MOD(n, 86400) * INTERVAL '1' SECOND, 'HH24:MI:SS'), CASE MOD(n, 2) WHEN 0 THEN 1 ELSE 0 END, MOD(n, 2),
     CASE MOD(n, 4) WHEN 0 THEN 'new' WHEN 1 THEN 'processing' WHEN 2 THEN 'done' ELSE 'failed' END,
     CASE MOD(n, 3) WHEN 0 THEN 'a,b' WHEN 1 THEN 'b' ELSE 'c' END,
-    '{"value":"json_' || LPAD(n, 5, '0') || '"}',
+    '{"value": "json_' || LPAD(n, 5, '0') || '"}',
     'user_' || LPAD(n, 5, '0'), 'user_' || LPAD(n, 5, '0') || '@example.com',
     '+861380' || LPAD(n, 6, '0'), 'No.' || n || ' Consilens Road',
     CASE MOD(n, 4) WHEN 0 THEN 'Shanghai' WHEN 1 THEN 'Beijing' WHEN 2 THEN 'Shenzhen' ELSE 'Hangzhou' END,
@@ -155,7 +155,7 @@ COMMIT;
 UPDATE orders_backup SET amount = 99999.9999 WHERE order_id = 1;
 COMMIT;
 
--- SOURCE_MISSING: orders 插入额外订单
+-- TARGET_MISSING: source 端 orders 插入额外订单（target 端 orders_backup 缺失）
 INSERT INTO orders (order_id, customer_id, amount, status, created_at)
 VALUES (10001, 100500, 999.99, 'paid', TO_DATE('2025-06-15 12:00:00', 'YYYY-MM-DD HH24:MI:SS'));
 COMMIT;

@@ -121,4 +121,16 @@ class DriftCheckerTest {
                 .check(List.of(run("M01", 100.0)), baselineWith(entries));
         assertThat(report.getItems().get(0).getStatus()).isEqualTo(DriftReport.DriftStatus.NEW);
     }
+
+    @Test
+    void higherLatencyIsRegression() {
+        Map<String, BaselineEntry> entries = new LinkedHashMap<>();
+        entries.put("G01", BaselineEntry.builder().score(100).unit("ms").threshold(0.10).build());
+        BenchmarkResult result = run("G01", 120);
+        result.setUnit("ms");
+
+        DriftReport report = new DriftChecker().check(List.of(result), baselineWith(entries));
+
+        assertThat(report.getItems().get(0).getStatus()).isEqualTo(DriftReport.DriftStatus.FAIL);
+    }
 }

@@ -19,9 +19,9 @@ const loading = ref(false);
 const data = reactive({ total: 0, items: [] });
 const pagination = reactive({
   page: 1,
-  pageSize: 20,
+  pageSize: 10,
   itemCount: 0,
-  pageSizes: [20, 50, 100],
+  pageSizes: [10, 20, 50],
   showSizePicker: true,
 });
 
@@ -71,7 +71,7 @@ const columns = [
   {
     title: "实例 ID",
     key: "id",
-    width: 240,
+    width: 220,
     fixed: "left",
     ellipsis: { tooltip: true },
     render: (row) =>
@@ -85,11 +85,11 @@ const columns = [
         row.id || row.taskId
       ),
   },
-  { title: "序号", key: "serialNo", width: 190, ellipsis: { tooltip: true }, render: (row) => h("span", { class: "mono text-secondary" }, row.serialNo) },
+  { title: "序号", key: "serialNo", width: 160, ellipsis: { tooltip: true }, render: (row) => h("span", { class: "mono text-secondary" }, row.serialNo) },
   {
     title: "定义",
     key: "definition",
-    width: 150,
+    width: 130,
     ellipsis: { tooltip: true },
     render: (row) =>
       row.definitionName
@@ -124,9 +124,9 @@ const columns = [
       );
     },
   },
-  { title: "执行节点", key: "executeNodeKey", width: 150, ellipsis: { tooltip: true }, render: (row) => row.executeNodeKey || "-" },
+  { title: "执行节点", key: "executeNodeKey", width: 130, ellipsis: { tooltip: true }, render: (row) => row.executeNodeKey || "-" },
   { title: "重试", key: "retryCount", width: 60, render: (row) => row.retryCount ?? 0 },
-  { title: "提交时间", key: "submitTime", width: 170, render: (row) => h("span", { class: "text-secondary" }, formatTime(row.submitTime)) },
+  { title: "提交时间", key: "submitTime", width: 150, render: (row) => h("span", { class: "text-secondary" }, formatTime(row.submitTime)) },
   {
     title: "耗时",
     key: "duration",
@@ -263,6 +263,7 @@ onMounted(loadData);
         :loading="loading"
         :row-key="(row) => row.taskId"
         :max-height="tableHeight"
+        :scroll-x="1540"
         :bordered="false"
         size="small"
         :pagination="pagination"
@@ -328,5 +329,30 @@ onMounted(loadData);
   &:hover {
     text-decoration: underline;
   }
+}
+// 列表横向滚动条始终可见，避免字段被隐藏的错觉
+:deep(.n-data-table .n-scrollbar-rail--horizontal) {
+  display: block !important;
+  opacity: 1 !important;
+}
+
+:deep(.n-data-table .n-scrollbar-rail--horizontal .n-scrollbar-rail__scrollbar) {
+  opacity: 1 !important;
+}
+
+// ===== 固定列不透明(防穿透),与差异明细列表处理一致 =====
+:deep(.n-data-table-td--fixed-left),
+:deep(.n-data-table-td--fixed-right) {
+  background-color: var(--n-merged-td-color, #fff) !important;
+}
+
+:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-left),
+:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-right) {
+  background-color: #f4f6ff !important;
+}
+
+:deep(.n-data-table-th--fixed-left),
+:deep(.n-data-table-th--fixed-right) {
+  background-color: var(--n-merged-th-color, #fafafa) !important;
 }
 </style>

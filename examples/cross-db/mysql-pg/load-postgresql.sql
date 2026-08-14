@@ -163,9 +163,9 @@ SELECT
     'v255_' || LPAD(n::TEXT, 5, '0') || '_stable_payload' AS col_varchar_255,
     'text-' || LPAD(n::TEXT, 5, '0') AS col_text,
     'mediumtext-' || LPAD(n::TEXT, 5, '0') || '-' || REPEAT('x', n % 32) AS col_mediumtext,
-    DECODE(RPAD(TO_HEX(n::BIGINT), 16, '0'), 'hex') AS col_binary,
-    DECODE(RPAD(TO_HEX(n::BIGINT * 17), 32, '0'), 'hex') AS col_varbinary,
-    DECODE(RPAD(TO_HEX(n::BIGINT * 31), 32, '0'), 'hex') AS col_blob,
+    DECODE(LPAD(TO_HEX(n::BIGINT), 16, '0'), 'hex') AS col_binary,
+    DECODE(LPAD(TO_HEX(n::BIGINT * 17), 32, '0'), 'hex') AS col_varbinary,
+    DECODE(LPAD(TO_HEX(n::BIGINT * 31), 32, '0'), 'hex') AS col_blob,
     DATE '2026-05-01' + (n % 7) AS col_date,
     TIMESTAMP '2026-05-01 00:00:00' + ((n % 10000) * INTERVAL '1 second') AS col_datetime,
     TIMESTAMP '2026-05-01 00:00:00' + ((n % 10000) * INTERVAL '1 second') AS col_timestamp,
@@ -183,7 +183,7 @@ SELECT
     WHEN 1 THEN 'b'
     ELSE 'c'
     END AS col_set,
-    TO_JSONB(('json_' || LPAD(n::TEXT, 5, '0'))::TEXT) AS col_json,
+    JSONB_BUILD_OBJECT('value', 'json_' || LPAD(n::TEXT, 5, '0')) AS col_json,
     'user_' || LPAD(n::TEXT, 5, '0') AS user_name,
     'user_' || LPAD(n::TEXT, 5, '0') || '@example.com' AS email,
     '+861380' || LPAD(n::TEXT, 6, '0') AS phone,
@@ -252,14 +252,14 @@ INSERT INTO public.consilens_performance_demo_table (
     created_at, updated_at, deleted, dt
 ) VALUES (
     'REC_EXTRA_001', 1, 1, 3, 10, 1000003, 2147483649,
-    1.125, 100000.25, 100.1234, 200.5678,
+    1.125, 1.25, 0.1334, 0.5878,
     'C000000001', 'v50_00001', 'v100_00001_stable', 'v255_00001_stable_payload',
-    'text-00001', 'mediumtext-00001-', '\x0000000000000001', '\x0000000000000011', '\x000000000000001f',
-    '2026-05-01', '2026-05-01 00:00:01', '2026-05-01 00:00:01', '00:00:01',
-    true, 1, 'new', 'a,b', '{"value":"json_00001"}',
+    'text-00001', 'mediumtext-00001-x', '\x0000000000000001', '\x0000000000000011', '\x000000000000001f',
+    '2026-05-02', '2026-05-01 00:00:01', '2026-05-01 00:00:01', '00:00:01',
+    false, 1, 'processing', 'b', '{"value":"json_00001"}',
     'user_00001', 'user_00001@example.com', '+861380000001', 'No.1 Consilens Road',
-    'Shanghai', 'CN', '000001', 10.1000, 1000.1000, 5000.1000,
-    'active', 'retail', 1, 1.5,
+    'Beijing', 'CN', '000001', 10.1000, 1000.1000, 5000.1000,
+    'inactive', 'finance', 2, 1.5,
     '2026-05-01 00:00:01', '2026-05-01 00:05:01', 0, '2026-05-01'
 );
 
@@ -396,7 +396,7 @@ CREATE TABLE public.orders_backup AS SELECT * FROM public.orders;
 -- 制造 MISMATCH: orders_backup 修改某订单 amount
 UPDATE public.orders_backup SET amount = 99999.9999 WHERE order_id = 1;
 
--- 制造 SOURCE_MISSING: orders_backup 插入额外订单
+-- 制造 TARGET_MISSING: source 端 orders 插入额外订单（target 端 orders_backup 缺失）
 INSERT INTO public.orders (order_id, customer_id, amount, status, created_at)
 VALUES (10001, 100500, 999.99, 'paid', '2025-06-15 12:00:00');
 

@@ -22,9 +22,9 @@ const loading = ref(false);
 const data = reactive({ total: 0, items: [] });
 const pagination = reactive({
   page: 1,
-  pageSize: 20,
+  pageSize: 10,
   itemCount: 0,
-  pageSizes: [20, 50, 100],
+  pageSizes: [10, 20, 50],
   showSizePicker: true,
 });
 const filters = reactive({ keyword: "", enabled: null });
@@ -249,5 +249,21 @@ onMounted(loadData);
 
 .filter-item {
   width: 180px;
+}
+
+// ===== 固定列不透明(防穿透),与差异明细列表处理一致 =====
+:deep(.n-data-table-td--fixed-left),
+:deep(.n-data-table-td--fixed-right) {
+  background-color: var(--n-merged-td-color, #fff) !important;
+}
+
+:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-left),
+:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-right) {
+  background-color: #f4f6ff !important;
+}
+
+:deep(.n-data-table-th--fixed-left),
+:deep(.n-data-table-th--fixed-right) {
+  background-color: var(--n-merged-th-color, #fafafa) !important;
 }
 </style>

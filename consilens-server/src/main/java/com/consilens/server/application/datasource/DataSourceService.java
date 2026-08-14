@@ -5,6 +5,8 @@ import com.consilens.server.api.dto.DataSourceCreateRequest;
 import com.consilens.server.api.dto.DataSourceDto;
 import com.consilens.server.api.dto.DataSourceTypeDto;
 import com.consilens.server.api.dto.MetadataColumnDto;
+import com.consilens.server.api.dto.PageResponse;
+import com.consilens.connector.api.DataSourceField;
 
 import java.util.List;
 
@@ -12,9 +14,15 @@ public interface DataSourceService {
 
     List<DataSourceTypeDto> listTypes();
 
+    /** Datasource parameter template (form fields) for a connector type. */
+    List<DataSourceField> getTypeConfig(String type);
+
     DataSourceDto create(DataSourceCreateRequest request);
 
     List<DataSourceDto> list();
+
+    /** 分页列表（列表页默认每页 10 条）。 */
+    PageResponse<DataSourceDto> listPage(int page, int pageSize);
 
     DataSourceDto get(Long id);
 

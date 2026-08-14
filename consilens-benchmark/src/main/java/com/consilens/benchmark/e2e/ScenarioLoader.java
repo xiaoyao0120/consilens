@@ -5,6 +5,8 @@ import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * e2e 场景编号到 examples yaml 路径的映射。场景编号稳定，避免基线失效。
@@ -19,9 +21,17 @@ public final class ScenarioLoader {
     public static final String JOIN = "join";
     public static final String GENERATED = "G01";
     public static final String GENERATED_POSTGRESQL = "G02";
+    public static final String CHECKSUM_CONCAT = "C-CONCAT";
+    public static final String CHECKSUM_ROW_HASH = "C-ROW-HASH";
+    public static final String CHECKSUM_FULL = "C-FULL";
+    public static final String CHECKSUM_COMPOSITE = "C-COMPOSITE";
+    public static final String JOIN_WHOLE = "J-WHOLE";
+    public static final String JOIN_SEGMENTED = "J-SEGMENTED";
 
     private static final List<String> DEFAULT_SCENARIOS =
-            Collections.unmodifiableList(Arrays.asList(E02, E03, JOIN));
+            Collections.unmodifiableList(Arrays.asList(GENERATED, CHECKSUM_CONCAT,
+                    CHECKSUM_ROW_HASH, CHECKSUM_FULL, CHECKSUM_COMPOSITE,
+                    JOIN_WHOLE, JOIN_SEGMENTED));
 
     private final Path examplesDir;
 
@@ -49,22 +59,61 @@ public final class ScenarioLoader {
         switch (id) {
             case E02:
                 return new Scenario(E02, examplesDir.resolve("cross-db/mysql-pg/03-large-table.yaml"),
-                        Arrays.asList("MYSQL_USER", "MYSQL_PASSWORD", "PG_USER", "PG_PASSWORD"));
+                        Arrays.asList("MYSQL_USER", "MYSQL_PASSWORD", "PG_USER", "PG_PASSWORD"),
+                        dimensions("checksum", "concat", "continuous", "mixed"));
             case E03:
                 return new Scenario(E03, examplesDir.resolve("cross-db/mysql-pg/06-performance-full-fields.yaml"),
-                        Arrays.asList("MYSQL_USER", "MYSQL_PASSWORD", "PG_USER", "PG_PASSWORD"));
+                        Arrays.asList("MYSQL_USER", "MYSQL_PASSWORD", "PG_USER", "PG_PASSWORD"),
+                        dimensions("checksum", "concat", "continuous", "mixed"));
             case JOIN:
                 return new Scenario(JOIN, examplesDir.resolve("same-db/mysql/02-join-diff.yaml"),
-                        Arrays.asList("MYSQL_USER", "MYSQL_PASSWORD"));
+                        Arrays.asList("MYSQL_USER", "MYSQL_PASSWORD"),
+                        dimensions("join", "whole-table", "continuous", "mixed"));
             case GENERATED:
                 return new Scenario(GENERATED, generatedConfigPath(),
-                        Arrays.asList("BENCHMARK_JDBC_URL", "BENCHMARK_DB_USER", "BENCHMARK_DB_PASSWORD"));
+                        Arrays.asList("BENCHMARK_JDBC_URL", "BENCHMARK_DB_USER", "BENCHMARK_DB_PASSWORD"),
+                        dimensions("checksum", "xor", "generated", "generated"));
             case GENERATED_POSTGRESQL:
                 return new Scenario(GENERATED_POSTGRESQL, generatedPostgresqlConfigPath(),
-                        Arrays.asList("BENCHMARK_JDBC_URL", "BENCHMARK_DB_USER", "BENCHMARK_DB_PASSWORD"));
+                        Arrays.asList("BENCHMARK_JDBC_URL", "BENCHMARK_DB_USER", "BENCHMARK_DB_PASSWORD"),
+                        dimensions("checksum", "xor", "generated", "generated"));
+            case CHECKSUM_CONCAT:
+                return generatedScenario(CHECKSUM_CONCAT, "generated-checksum-concat.yaml",
+                        dimensions("checksum", "concat", "generated", "generated"));
+            case CHECKSUM_ROW_HASH:
+                return generatedScenario(CHECKSUM_ROW_HASH, "generated-row-hash.yaml",
+                        dimensions("checksum", "xor+row-hash", "generated", "generated"));
+            case CHECKSUM_FULL:
+                return generatedScenario(CHECKSUM_FULL, "generated-full.yaml",
+                        dimensions("checksum", "xor+full", "generated", "generated"));
+            case CHECKSUM_COMPOSITE:
+                return generatedScenario(CHECKSUM_COMPOSITE, "generated-composite-key.yaml",
+                        dimensions("checksum", "xor+row-hash", "composite", "generated"));
+            case JOIN_WHOLE:
+                return generatedScenario(JOIN_WHOLE, "generated-join-whole.yaml",
+                        dimensions("join", "whole-table", "generated", "generated"));
+            case JOIN_SEGMENTED:
+                return Scenario.unsupported(JOIN_SEGMENTED,
+                        "core JoinDiffer currently has no segmented-join execution plan",
+                        dimensions("join", "segmented", "generated", "generated"));
             default:
                 return null;
         }
+    }
+
+    private Scenario generatedScenario(String id, String fileName, Map<String, String> dimensions) {
+        return new Scenario(id, Paths.get("consilens-benchmark/src/main/resources/e2e").resolve(fileName),
+                Arrays.asList("BENCHMARK_JDBC_URL", "BENCHMARK_DB_USER", "BENCHMARK_DB_PASSWORD"), dimensions);
+    }
+
+    private static Map<String, String> dimensions(String strategy, String algorithm,
+                                                   String keyDistribution, String differenceType) {
+        Map<String, String> dimensions = new LinkedHashMap<>();
+        dimensions.put("strategy", strategy);
+        dimensions.put("algorithm", algorithm);
+        dimensions.put("keyDistribution", keyDistribution);
+        dimensions.put("differenceType", differenceType);
+        return dimensions;
     }
 
     private Path generatedConfigPath() {
@@ -91,11 +140,29 @@ public final class ScenarioLoader {
         private final String id;
         private final Path configPath;
         private final List<String> requiredEnvVars;
+        private final Map<String, String> dimensions;
+        private final String unsupportedReason;
 
         public Scenario(String id, Path configPath, List<String> requiredEnvVars) {
+            this(id, configPath, requiredEnvVars, Collections.emptyMap());
+        }
+
+        public Scenario(String id, Path configPath, List<String> requiredEnvVars,
+                        Map<String, String> dimensions) {
+            this(id, configPath, requiredEnvVars, dimensions, null);
+        }
+
+        private Scenario(String id, Path configPath, List<String> requiredEnvVars,
+                         Map<String, String> dimensions, String unsupportedReason) {
             this.id = id;
             this.configPath = configPath;
             this.requiredEnvVars = Collections.unmodifiableList(requiredEnvVars);
+            this.dimensions = Collections.unmodifiableMap(new LinkedHashMap<>(dimensions));
+            this.unsupportedReason = unsupportedReason;
+        }
+
+        public static Scenario unsupported(String id, String reason, Map<String, String> dimensions) {
+            return new Scenario(id, null, Collections.emptyList(), dimensions, reason);
         }
 
         public String id() {
@@ -108,6 +175,18 @@ public final class ScenarioLoader {
 
         public List<String> requiredEnvVars() {
             return requiredEnvVars;
+        }
+
+        public Map<String, String> dimensions() {
+            return dimensions;
+        }
+
+        public boolean supported() {
+            return unsupportedReason == null;
+        }
+
+        public String unsupportedReason() {
+            return unsupportedReason;
         }
     }
 }

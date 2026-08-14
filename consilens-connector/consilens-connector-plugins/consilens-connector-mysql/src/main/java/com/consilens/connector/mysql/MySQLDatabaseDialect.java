@@ -82,6 +82,11 @@ public class MySQLDatabaseDialect extends AbstractDatabaseDialect {
     }
 
     @Override
+    public DataSourceConfigBuilder getDataSourceConfigBuilder() {
+        return new MysqlDataSourceConfigBuilder();
+    }
+
+    @Override
     public CapabilityProvider getCapabilityProvider() {
         return capabilityProvider;
     }

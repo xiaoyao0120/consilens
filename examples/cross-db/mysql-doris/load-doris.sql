@@ -38,7 +38,7 @@ DROP TABLE IF EXISTS consilens_demo.consilens_performance_demo_table;
 CREATE TABLE consilens_demo.consilens_performance_demo_table (
     record_id VARCHAR(16) NOT NULL, col_tinyint TINYINT, col_smallint SMALLINT,
     col_mediumint INT, col_int INT, col_bigint BIGINT,
-    col_unsigned_int INT, col_float FLOAT, col_double DOUBLE,
+    col_unsigned_int BIGINT, col_float FLOAT, col_double DOUBLE,
     col_decimal DECIMAL(18,4), col_numeric DECIMAL(18,4), col_char CHAR(10),
     col_varchar_50 VARCHAR(50), col_varchar_100 VARCHAR(100), col_varchar_255 VARCHAR(255),
     col_text VARCHAR(65533), col_mediumtext VARCHAR(65533), col_binary STRING,
@@ -65,11 +65,11 @@ SELECT
     CONCAT('C',LPAD(n,9,'0')), CONCAT('v50_',LPAD(n,5,'0')),
     CONCAT('v100_',LPAD(n,5,'0'),'_stable'), CONCAT('v255_',LPAD(n,5,'0'),'_stable_payload'),
     CONCAT('text-',LPAD(n,5,'0')), CONCAT('mediumtext-',LPAD(n,5,'0'),'-',REPEAT('x',MOD(n,32))),
-    UNHEX(LPAD(HEX(n),16,'0')), UNHEX(LPAD(HEX(n*17),32,'0')), UNHEX(LPAD(HEX(n*31),32,'0')),
+    LOWER(LPAD(HEX(n),16,'0')), LOWER(LPAD(HEX(n*17),32,'0')), LOWER(LPAD(HEX(n*31),32,'0')),
     DATE_ADD('2026-05-01',INTERVAL MOD(n,7) DAY),
     DATE_ADD('2026-05-01 00:00:00',INTERVAL MOD(n,10000) SECOND),
     DATE_ADD('2026-05-01 00:00:00',INTERVAL MOD(n,10000) SECOND),
-    CAST(MOD(n,86400) AS STRING), MOD(n,2)=0, MOD(n,2),
+    CONCAT(LPAD(CAST(FLOOR(MOD(n,86400)/3600) AS CHAR),2,'0'),':',LPAD(CAST(FLOOR(MOD(MOD(n,86400),3600)/60) AS CHAR),2,'0'),':',LPAD(CAST(MOD(n,60) AS CHAR),2,'0')), MOD(n,2)=0, MOD(n,2),
     CASE MOD(n,4) WHEN 0 THEN 'new' WHEN 1 THEN 'processing' WHEN 2 THEN 'done' ELSE 'failed' END,
     CASE MOD(n,3) WHEN 0 THEN 'a,b' WHEN 1 THEN 'b' ELSE 'c' END,
     JSON_OBJECT('value',CONCAT('json_',LPAD(n,5,'0'))),
@@ -143,7 +143,7 @@ INSERT INTO mydb.orders_backup SELECT * FROM mydb.orders;
 -- MISMATCH: orders_backup 修改某订单 amount
 UPDATE mydb.orders_backup SET amount = 99999.9999 WHERE order_id = 1;
 
--- SOURCE_MISSING: orders 插入额外订单
+-- TARGET_MISSING: source 端 orders 插入额外订单（target 端 orders_backup 缺失）
 INSERT INTO mydb.orders (order_id, customer_id, amount, status, created_at)
 VALUES (10001, 100500, 999.99, 'paid', '2025-06-15 12:00:00');
 

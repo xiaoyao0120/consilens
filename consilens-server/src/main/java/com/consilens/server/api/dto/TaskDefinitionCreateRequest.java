@@ -12,7 +12,7 @@ import java.util.Map;
 public class TaskDefinitionCreateRequest {
 
     @NotBlank(message = "name is required")
-    @Pattern(regexp = ApiValidationRules.SAFE_ID_PATTERN, message = "name contains invalid characters")
+    @Pattern(regexp = ApiValidationRules.NAME_PATTERN, message = "name contains invalid characters")
     @Size(max = 128)
     private String name;
 

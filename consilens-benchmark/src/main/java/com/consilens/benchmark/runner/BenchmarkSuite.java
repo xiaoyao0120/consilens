@@ -108,7 +108,10 @@ public final class BenchmarkSuite {
     }
 
     public List<BenchmarkResult> runE2e() {
-        return new EndToEndBenchmark(new ArrayList<>(options.scenarios())).run();
+        return new EndToEndBenchmark(new ArrayList<>(options.scenarios()),
+                options.e2eWarmupRuns(), options.e2eMeasurementRuns(), options::expectedDifferences,
+                options.datasetId(), options.keyDistribution(), options.differenceType(),
+                options.scenarioConfigs()).run();
     }
 
     /**
@@ -135,18 +138,26 @@ public final class BenchmarkSuite {
             System.err.println("benchmark: report generation failed: " + e.getMessage());
         }
 
-        if (options.updateBaseline() && !results.isEmpty()) {
-            writeBaseline(results, baselinePath);
+        if (options.updateBaseline() && results.stream().anyMatch(result -> "RUN".equals(result.getStatus()))) {
+            writeBaseline(results, baseline, baselinePath);
         }
 
         boolean hasRegression = drift.hasRegression();
-        System.out.println("benchmark: regression=" + hasRegression + ", results=" + results.size());
-        return hasRegression ? 1 : 0;
+        boolean hasExecutionFailure = results.stream().anyMatch(result -> "FAILED".equals(result.getStatus()));
+        System.out.println("benchmark: regression=" + hasRegression + ", executionFailure="
+                + hasExecutionFailure + ", results=" + results.size());
+        return hasRegression || hasExecutionFailure ? 1 : 0;
     }
 
-    private void writeBaseline(List<BenchmarkResult> results, Path baselinePath) {
+    private void writeBaseline(List<BenchmarkResult> results, Baseline existingBaseline, Path baselinePath) {
         Map<String, BaselineEntry> entries = new TreeMap<>();
+        if (existingBaseline != null && existingBaseline.getEntries() != null) {
+            entries.putAll(existingBaseline.getEntries());
+        }
         for (BenchmarkResult r : results) {
+            if (!"RUN".equals(r.getStatus())) {
+                continue;
+            }
             BaselineEntry entry = new BaselineEntry();
             entry.setScore(r.getScore());
             entry.setUnit(r.getUnit());
@@ -171,7 +182,7 @@ public final class BenchmarkSuite {
 
     private static double defaultThreshold(String scenarioId) {
         // 微基准收紧，e2e 放宽
-        return scenarioId.startsWith("E") ? 0.25 : 0.15;
+        return scenarioId.startsWith("M") ? 0.15 : 0.25;
     }
 
     private static String resolveScenarioId(String rows, String diffRatio) {

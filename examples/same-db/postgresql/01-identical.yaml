@@ -10,7 +10,7 @@ source:
     password: ${env.PG_PASSWORD}
   resource:
     type: table
-    name: public.public.orders
+    name: public.orders
 
 target:
   type: postgresql
@@ -21,7 +21,7 @@ target:
     password: ${env.PG_PASSWORD}
   resource:
     type: table
-    name: public.public.orders
+    name: public.orders
 
 comparison:
   keys:

@@ -37,6 +37,7 @@ comparison:
       - col_int
       - col_bigint
       - col_unsigned_int
+      - col_float
       - col_double
       - col_decimal
       - col_numeric
@@ -81,6 +82,7 @@ comparison:
       - col_int
       - col_bigint
       - col_unsigned_int
+      - col_float
       - col_double
       - col_decimal
       - col_numeric

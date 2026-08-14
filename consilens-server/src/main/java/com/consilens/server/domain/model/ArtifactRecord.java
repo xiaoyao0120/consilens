@@ -23,5 +23,10 @@ public class ArtifactRecord {
     private String storageUri;
     private String sha256;
     private String metadataJson;
+    private String statisticsJson;
+    private Long differenceCount;
+    private Boolean differenceTruncated;
+    private Long differenceRows;
+    private String differencesUri;
     private Instant createdAt;
 }

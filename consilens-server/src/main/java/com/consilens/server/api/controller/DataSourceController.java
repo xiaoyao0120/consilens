@@ -7,7 +7,9 @@ import com.consilens.server.api.dto.DataSourceCreateRequest;
 import com.consilens.server.api.dto.DataSourceDto;
 import com.consilens.server.api.dto.DataSourceTypeDto;
 import com.consilens.server.api.dto.MetadataColumnDto;
+import com.consilens.server.api.dto.PageResponse;
 import com.consilens.server.application.datasource.DataSourceService;
+import com.consilens.connector.api.DataSourceField;
 import com.consilens.server.support.trace.TraceIdSupport;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
@@ -18,10 +20,13 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.validation.Valid;
+import javax.validation.constraints.Max;
+import javax.validation.constraints.Min;
 import javax.validation.constraints.Pattern;
 import java.util.List;
 
@@ -45,10 +50,28 @@ public class DataSourceController {
         return ResponseEntity.ok(ApiResponse.success(dataSourceService.listTypes(), traceId));
     }
 
+    @GetMapping("/types/{type}/config")
+    public ResponseEntity<ApiResponse<List<DataSourceField>>> getTypeConfig(
+            @PathVariable @Pattern(regexp = "[A-Za-z0-9_-]{1,64}",
+                    message = "type contains invalid characters") String type,
+            HttpServletRequest httpServletRequest) {
+        String traceId = TraceIdSupport.getOrCreateTraceId(httpServletRequest);
+        return ResponseEntity.ok(ApiResponse.success(dataSourceService.getTypeConfig(type), traceId));
+    }
+
     @GetMapping
     public ResponseEntity<ApiResponse<List<DataSourceDto>>> list(HttpServletRequest httpServletRequest) {
         String traceId = TraceIdSupport.getOrCreateTraceId(httpServletRequest);
         return ResponseEntity.ok(ApiResponse.success(dataSourceService.list(), traceId));
+    }
+
+    @GetMapping("/page")
+    public ResponseEntity<ApiResponse<PageResponse<DataSourceDto>>> listPage(
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(200) int pageSize,
+            HttpServletRequest httpServletRequest) {
+        String traceId = TraceIdSupport.getOrCreateTraceId(httpServletRequest);
+        return ResponseEntity.ok(ApiResponse.success(dataSourceService.listPage(page, pageSize), traceId));
     }
 
     @PostMapping

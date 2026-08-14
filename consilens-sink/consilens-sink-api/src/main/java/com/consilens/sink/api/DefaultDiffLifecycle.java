@@ -55,4 +55,14 @@ public class DefaultDiffLifecycle implements DiffLifecycle {
     public void close() throws Exception {
         sinkManager.close();
     }
+
+    /** 差异记录实际写入行数（sink 聚合）。 */
+    public long writtenRecordCount() {
+        return sinkManager.diffRecordCount();
+    }
+
+    /** 差异写入是否达到行数上限被截断。 */
+    public boolean isTruncated() {
+        return sinkManager.diffRecordTruncated();
+    }
 }

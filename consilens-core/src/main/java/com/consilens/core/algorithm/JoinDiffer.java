@@ -284,6 +284,9 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
      */
     private int processDiffResults(List<Object[]> differences, JoinQueryPlan queryPlan, String segmentId,
             InfoTreeRecorder infoTreeRecorder) {
+        if (differences != null && !differences.isEmpty()) {
+            infoTreeRecorder.markFirstDifference();
+        }
         int diffCount = 0;
         long sourceMissingDelta = 0;
         long targetMissingDelta = 0;

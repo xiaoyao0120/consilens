@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestMethodOrder;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MySQLContainer;
+import org.testcontainers.containers.Network;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.containers.wait.strategy.LogMessageWaitStrategy;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -37,6 +39,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("跨数据库 MySQL vs Doris Checksum Diff 集成测试")
 class CrossDatabaseMysqlDorisITest {
 
+    private static final String DORIS_FE_IP = "172.30.0.2";
+    private static final String DORIS_BE_IP = "172.30.0.3";
+
+    private static final Network DORIS_NETWORK = Network.builder()
+            .createNetworkCmdModifier(command -> command.withIpam(
+                    new com.github.dockerjava.api.model.Network.Ipam()
+                            .withConfig(new com.github.dockerjava.api.model.Network.Ipam.Config()
+                                    .withSubnet("172.30.0.0/24"))))
+            .build();
+
     @Container
     private static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0")
             .withDatabaseName("consilens_demo")
@@ -45,12 +57,29 @@ class CrossDatabaseMysqlDorisITest {
             .withCommand("--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci");
 
     @Container
-    private static final GenericContainer<?> DORIS = new GenericContainer<>(
-            DockerImageName.parse("apache/doris.be:latest"))
+    private static final GenericContainer<?> DORIS_FE = new GenericContainer<>(
+            DockerImageName.parse("apache/doris:fe-latest"))
+            .withNetwork(DORIS_NETWORK)
+            .withNetworkAliases("doris-fe")
+            .withCreateContainerCmdModifier(command -> command.withIpv4Address(DORIS_FE_IP))
+            .withEnv("FE_SERVERS", "fe1:" + DORIS_FE_IP + ":9010")
+            .withEnv("FE_ID", "1")
             .withExposedPorts(9030, 8030)
             .waitingFor(new LogMessageWaitStrategy()
-                    .withRegEx(".*Enjoy the freedom and flexibility of Apache Doris.*\\s")
-                    .withStartupTimeout(Duration.ofMinutes(5)));
+                    .withRegEx(".*Starting master FE node.*\\s")
+                    .withStartupTimeout(Duration.ofMinutes(10)));
+
+    @Container
+    private static final GenericContainer<?> DORIS_BE = new GenericContainer<>(
+            DockerImageName.parse("apache/doris:be-latest"))
+            .withNetwork(DORIS_NETWORK)
+            .withNetworkAliases("doris-be")
+            .withCreateContainerCmdModifier(command -> command.withIpv4Address(DORIS_BE_IP))
+            .withEnv("FE_SERVERS", "fe1:" + DORIS_FE_IP + ":9010")
+            .withEnv("BE_ADDR", DORIS_BE_IP + ":9050")
+            .dependsOn(DORIS_FE)
+            .waitingFor(Wait.forLogMessage(".*BE node is ready.*\\s", 1)
+                    .withStartupTimeout(Duration.ofMinutes(10)));
 
     private static DatabaseAdapter mysqlAdapter;
     private static DatabaseAdapter dorisAdapter;
@@ -59,8 +88,8 @@ class CrossDatabaseMysqlDorisITest {
     static void setUp() throws Exception {
         mysqlAdapter = CrossDatabaseITestBase.createAdapter("mysql-source", MYSQL, "mysql");
 
-        String dorisHost = DORIS.getHost();
-        Integer dorisPort = DORIS.getMappedPort(9030);
+        String dorisHost = DORIS_FE.getHost();
+        Integer dorisPort = DORIS_FE.getMappedPort(9030);
 
         // First create database on Doris (connect without database)
         String dorisRootUrl = "jdbc:mysql://" + dorisHost + ":" + dorisPort + "/?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai";
@@ -178,5 +207,14 @@ class CrossDatabaseMysqlDorisITest {
                 .filter(r -> r.getOperation() == DiffOperation.SOURCE_MISSING)
                 .collect(Collectors.toList());
         assertThat(sourceMissing).hasSizeGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("MySQL 与 Doris 应对所有公共类型和四类结果给出精确结论")
+    void shouldVerifyPublicTypeFamiliesAndEveryDiffDirection() throws Exception {
+        CrossDatabaseAccuracyFixture.verify(
+                mysqlAdapter, TablePath.of("consilens_demo", "placeholder"),
+                dorisAdapter, TablePath.of("consilens_demo", "placeholder"));
     }
 }

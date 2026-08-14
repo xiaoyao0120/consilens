@@ -10,7 +10,7 @@ import javax.validation.constraints.Pattern;
 import java.util.Map;
 
 @Data
-@Builder
+@Builder(toBuilder = true)
 @NoArgsConstructor
 @AllArgsConstructor
 public class ConnectionTestRequest {

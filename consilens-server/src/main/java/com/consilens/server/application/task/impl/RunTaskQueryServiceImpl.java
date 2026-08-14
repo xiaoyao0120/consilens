@@ -1,6 +1,6 @@
 package com.consilens.server.application.task.impl;
 
-import com.consilens.server.api.dto.ArtifactRefDto;
+import com.consilens.server.api.dto.ArtifactListDto;
 import com.consilens.server.api.dto.PageResponse;
 import com.consilens.server.api.dto.TaskDiffSummaryDto;
 import com.consilens.server.api.dto.TaskQueryResponse;
@@ -146,28 +146,22 @@ public class RunTaskQueryServiceImpl implements RunTaskQueryService {
     private TaskDiffSummaryDto readDiffSummary(TaskInstanceRecord task) {
         try {
             ArtifactRecord runResult = latestRunResult(task.getId());
-            if (runResult == null || runResult.getStorageUri() == null) {
+            if (runResult == null) {
                 return null;
             }
-            // 列表场景避免全量读取超大 content：超过阈值仅返回 null（摘要可空降级）
-            if (artifactContentStore.size(runResult.getStorageUri()) > MAX_SUMMARY_CONTENT_BYTES) {
+            if (runResult.getDifferenceCount() == null && runResult.getStorageUri() == null) {
                 return null;
             }
-            JsonNode root = objectMapper.readTree(artifactContentStore.read(runResult.getStorageUri()));
-            if (root.path("success").isBoolean() && !root.path("success").asBoolean()) {
-                return null;
-            }
-            JsonNode statistics = root.get("statistics");
+            // 统计优先读 DB statistics_json（免文件 IO）；旧格式回退读 content
+            JsonNode statistics = statisticsNode(runResult);
             long totalDifferenceCount;
             if (statistics != null && statistics.isObject()
                     && statistics.path("totalDifferences").isNumber()) {
                 totalDifferenceCount = statistics.path("totalDifferences").asLong();
+            } else if (runResult.getDifferenceCount() != null) {
+                totalDifferenceCount = runResult.getDifferenceCount();
             } else {
-                JsonNode topLevel = root.get("differenceCount");
-                if (topLevel == null || !topLevel.isNumber()) {
-                    return null;
-                }
-                totalDifferenceCount = topLevel.asLong();
+                return null;
             }
             Double differencePercentage = statistics != null
                     && statistics.path("differencePercentage").isNumber()
@@ -186,6 +180,21 @@ public class RunTaskQueryServiceImpl implements RunTaskQueryService {
         }
     }
 
+    private JsonNode statisticsNode(ArtifactRecord record) {
+        if (record.getStatisticsJson() != null && !record.getStatisticsJson().isBlank()) {
+            try {
+                return objectMapper.readTree(record.getStatisticsJson());
+            } catch (Exception ignored) {
+                // fall through to content
+            }
+        }
+        try {
+            return objectMapper.readTree(artifactContentStore.read(record.getStorageUri())).get("statistics");
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
     private ArtifactRecord latestRunResult(Long taskId) {
         return artifactRepository.listByTaskId(taskId).stream()
                 .filter(r -> r.getArtifactType() == ArtifactKind.RUN_RESULT)
@@ -193,12 +202,31 @@ public class RunTaskQueryServiceImpl implements RunTaskQueryService {
                 .orElse(null);
     }
 
-    private ArtifactRefDto toArtifactRef(ArtifactRecord record) {
-        return ArtifactRefDto.builder()
-                .id(record.getId())
-                .type(record.getArtifactType().name())
+    private ArtifactListDto toArtifactRef(ArtifactRecord record) {
+        return ArtifactListDto.builder()
+                .artifactId(record.getId())
+                .artifactType(record.getArtifactType().name())
                 .format(record.getArtifactFormat())
+                .sizeBytes(null)
+                .createdAt(record.getCreatedAt())
+                .differenceCount(record.getDifferenceCount())
+                .differenceRows(record.getDifferenceRows())
+                .differenceTruncated(record.getDifferenceTruncated())
+                .differencesUri(record.getDifferencesUri())
+                .statistics(parseStatistics(record.getStatisticsJson()))
                 .build();
+    }
+
+    private Map<String, Object> parseStatistics(String statisticsJson) {
+        if (statisticsJson == null || statisticsJson.isBlank()) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(statisticsJson, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {
+            });
+        } catch (Exception exception) {
+            return null;
+        }
     }
 
     private List<String> nextActions(TaskInstanceRecord task) {

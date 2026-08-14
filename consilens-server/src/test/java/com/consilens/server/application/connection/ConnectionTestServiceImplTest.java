@@ -181,6 +181,58 @@ class DefaultConnectionTestServiceTest {
         assertEquals("secret", propertiesCaptor.getValue().getProperty("password"));
     }
 
+    @Test
+    void shouldForwardWhitelistedOptionsToDialectUrlParams() throws Exception {
+        Connection connection = mock(Connection.class);
+        when(connection.isClosed()).thenReturn(false);
+        when(opener.open(any(), any())).thenReturn(connection);
+        when(dialect.getConnectorType()).thenReturn("oracle");
+        when(dialectSupport.find("oracle")).thenReturn(Optional.of(dialect));
+
+        service.test(ConnectionTestRequest.builder()
+                .type("oracle")
+                .host("8.8.8.8")
+                .port(1521)
+                .database("ORCL")
+                .username("admin")
+                .password("secret")
+                .options(java.util.Map.of(
+                        "sid", "ORCL",
+                        "schema", "public",
+                        "properties", "useSSL=false",
+                        "evil", "jdbc:oracle:thin:@//attacker",
+                        "host", "6.6.6.6"))
+                .build());
+
+        ArgumentCaptor<Map<String, Object>> paramsCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(dialect).buildJdbcUrl(paramsCaptor.capture());
+        Map<String, Object> params = paramsCaptor.getValue();
+        // 白名单键透传
+        assertEquals("ORCL", params.get("sid"));
+        assertEquals("public", params.get("schema"));
+        assertEquals("useSSL=false", params.get("properties"));
+        // 非白名单键被丢弃
+        assertFalse(params.containsKey("evil"));
+        // 已有值不被 options 覆盖
+        assertEquals("8.8.8.8", params.get("host"));
+        assertEquals(1521, params.get("port"));
+        assertEquals("ORCL", params.get("database"));
+    }
+
+    @Test
+    void shouldIgnoreOptionsWhenAbsentOrEmpty() throws Exception {
+        Connection connection = mock(Connection.class);
+        when(connection.isClosed()).thenReturn(false);
+        when(opener.open(any(), any())).thenReturn(connection);
+
+        service.test(request("mysql", "8.8.8.8", null, "db", null, null)
+                .toBuilder().options(java.util.Map.of()).build());
+
+        ArgumentCaptor<Map<String, Object>> paramsCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(dialect).buildJdbcUrl(paramsCaptor.capture());
+        assertFalse(paramsCaptor.getValue().containsKey("schema"));
+    }
+
     private ConnectionTestRequest request(String type, String host, Integer port,
                                           String database, String username, String password) {
         return ConnectionTestRequest.builder()

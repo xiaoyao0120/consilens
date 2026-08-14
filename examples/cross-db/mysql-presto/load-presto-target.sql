@@ -149,7 +149,7 @@ INSERT INTO mydb_target.orders_backup SELECT * FROM mydb_target.orders;
 -- MISMATCH: orders_backup 修改某订单 amount
 UPDATE mydb_target.orders_backup SET amount = 99999.9999 WHERE order_id = 1;
 
--- SOURCE_MISSING: orders 插入额外订单
+-- TARGET_MISSING: source 端 orders 插入额外订单（target 端 orders_backup 缺失）
 INSERT INTO mydb_target.orders (order_id, customer_id, amount, status, created_at)
 VALUES (10001, 100500, 999.99, 'paid', '2025-06-15 12:00:00');
 

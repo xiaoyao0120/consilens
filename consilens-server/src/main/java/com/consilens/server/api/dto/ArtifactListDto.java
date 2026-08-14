@@ -23,4 +23,16 @@ public class ArtifactListDto {
 
     /** Total difference count for RUN_RESULT artifacts; null for other kinds. */
     private Long differenceCount;
+
+    /** Rows written to the differences file; null for other kinds or legacy format. */
+    private Long differenceRows;
+
+    /** Whether the differences file was truncated at maxRows; null for other kinds. */
+    private Boolean differenceTruncated;
+
+    /** Storage URI of the differences file (jsonl); null when differences are inline/absent. */
+    private String differencesUri;
+
+    /** Parsed statistics (summary/column stats) for RUN_RESULT artifacts; null when absent. */
+    private Map<String, Object> statistics;
 }

@@ -24,11 +24,6 @@ const message = computed(() => {
   }
   return `共发现 ${formatNumber(props.total)} 条差异记录，当前展示前 ${formatNumber(props.sampleSize)} 条样本`;
 });
-
-const tip = computed(() => {
-  if (!props.hasDifferences || !props.truncated) return "";
-  return "样本由运行节点抽样采集，完整差异明细请查看 Artifact 内容。";
-});
 </script>
 
 <template>
@@ -39,6 +34,5 @@ const tip = computed(() => {
     :title="message"
     style="margin-bottom: 14px"
   >
-    <template v-if="tip"> {{ tip }} </template>
   </n-alert>
 </template>

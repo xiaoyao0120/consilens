@@ -60,7 +60,7 @@ class CrossDatabaseMysqlClickHouseITest {
         // First create database on ClickHouse (connect without database)
         String chHost = CLICKHOUSE.getHost();
         Integer chPort = CLICKHOUSE.getMappedPort(8123);
-        String chRootUrl = "jdbc:clickhouse://" + chHost + ":" + chPort + "/?protocol=http";
+        String chRootUrl = "jdbc:clickhouse://" + chHost + ":" + chPort + "/";
         DatabaseAdapter chRootAdapter = TestDatabaseHelper.createAdapter(
                 "clickhouse-root", chRootUrl, "test", "test123",
                 "clickhouse", com.consilens.common.enums.ChecksumAlgorithm.CONCAT);
@@ -68,7 +68,7 @@ class CrossDatabaseMysqlClickHouseITest {
         chRootAdapter.close();
 
         // Now connect with database
-        String chUrl = "jdbc:clickhouse://" + chHost + ":" + chPort + "/consilens_demo?protocol=http";
+        String chUrl = "jdbc:clickhouse://" + chHost + ":" + chPort + "/consilens_demo";
         clickhouseAdapter = TestDatabaseHelper.createAdapter(
                 "clickhouse-target", chUrl, "test", "test123",
                 "clickhouse", com.consilens.common.enums.ChecksumAlgorithm.CONCAT);
@@ -187,5 +187,14 @@ class CrossDatabaseMysqlClickHouseITest {
                 .filter(r -> r.getOperation() == DiffOperation.SOURCE_MISSING)
                 .collect(Collectors.toList());
         assertThat(sourceMissing).hasSizeGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("MySQL 与 ClickHouse 应对所有公共类型和四类结果给出精确结论")
+    void shouldVerifyPublicTypeFamiliesAndEveryDiffDirection() throws Exception {
+        CrossDatabaseAccuracyFixture.verify(
+                mysqlAdapter, TablePath.of("consilens_demo", "placeholder"),
+                clickhouseAdapter, TablePath.of("consilens_demo", "placeholder"));
     }
 }

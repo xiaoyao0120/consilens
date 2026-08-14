@@ -291,7 +291,7 @@ public class DiffResult {
         }
 
         public long getUnchangedCount() {
-            return Math.min(sourceRowCount, targetRowCount) - mismatchCount;
+            return Math.max(0, Math.min(sourceRowCount, targetRowCount) - mismatchCount);
         }
 
         public DiffStatistics merge(DiffStatistics other) {

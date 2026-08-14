@@ -19,6 +19,7 @@ import org.testcontainers.containers.wait.strategy.LogMessageWaitStrategy;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
+import org.testcontainers.utility.MountableFile;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -48,10 +49,18 @@ class CrossDatabaseMysqlPrestoITest {
     private static final GenericContainer<?> PRESTO = new GenericContainer<>(
             DockerImageName.parse("prestodb/presto:0.284"))
             .withExposedPorts(8080)
-            .withFileSystemBind("/tmp/presto-config", "/opt/presto-server/etc", org.testcontainers.containers.BindMode.READ_WRITE)
+            .withCopyFileToContainer(
+                    MountableFile.forClasspathResource("presto/config.properties"),
+                    "/opt/presto-server/etc/config.properties")
+            .withCopyFileToContainer(
+                    MountableFile.forClasspathResource("presto/jvm.config"),
+                    "/opt/presto-server/etc/jvm.config")
+            .withCopyFileToContainer(
+                    MountableFile.forClasspathResource("presto/memory.properties"),
+                    "/opt/presto-server/etc/catalog/memory.properties")
             .waitingFor(new LogMessageWaitStrategy()
                     .withRegEx(".*SERVER STARTED.*\\s")
-                    .withStartupTimeout(Duration.ofMinutes(5)));
+                    .withStartupTimeout(Duration.ofMinutes(2)));
 
     private static DatabaseAdapter mysqlAdapter;
     private static DatabaseAdapter prestoAdapter;
@@ -65,7 +74,7 @@ class CrossDatabaseMysqlPrestoITest {
 
         // Wait for Presto worker to fully register (SERVER STARTED log is not enough)
         System.out.println("Waiting for Presto worker to register...");
-        Thread.sleep(15000);
+        Thread.sleep(3000);
 
         // First connect without schema to create the schema
         String prestoRootUrl = "jdbc:presto://" + prestoHost + ":" + prestoPort + "/memory";
@@ -189,5 +198,14 @@ class CrossDatabaseMysqlPrestoITest {
                 .filter(r -> r.getOperation() == DiffOperation.SOURCE_MISSING)
                 .collect(Collectors.toList());
         assertThat(sourceMissing).hasSizeGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    @Order(3)
+    @DisplayName("MySQL 与 Presto 应对所有公共类型和四类结果给出精确结论")
+    void shouldVerifyPublicTypeFamiliesAndEveryDiffDirection() throws Exception {
+        CrossDatabaseAccuracyFixture.verify(
+                mysqlAdapter, TablePath.of("consilens_demo", "placeholder"),
+                prestoAdapter, TablePath.of("memory", "consilens_demo", "placeholder"));
     }
 }

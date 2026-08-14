@@ -50,6 +50,10 @@ export function getArtifactContent(artifactId, config) {
   return request.get(`/artifacts/${artifactId}/content`, config || {});
 }
 
+export function listArtifactDifferences(artifactId, params) {
+  return request.get(`/artifacts/${artifactId}/differences`, { params });
+}
+
 // ===== 节点 =====
 
 export function listNodes() {
@@ -72,8 +76,17 @@ export function listDatasourceTypes() {
   return request.get("/datasources/types");
 }
 
+// 数据源类型的连接参数模板：返回 [{field,title,type,placeholder,required,defaultValue,rows,options}]
+export function getDatasourceTypeConfig(type) {
+  return request.get(`/datasources/types/${encodeURIComponent(type)}/config`);
+}
+
 export function listDatasources() {
   return request.get("/datasources");
+}
+
+export function listDatasourcesPage(page, pageSize) {
+  return request.get("/datasources/page", { params: { page, pageSize } });
 }
 
 export function createDatasource(payload) {

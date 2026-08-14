@@ -55,6 +55,11 @@ public class PrestoDatabaseDialect extends AbstractDatabaseDialect {
     }
 
     @Override
+    public DataSourceConfigBuilder getDataSourceConfigBuilder() {
+        return new PrestoDataSourceConfigBuilder();
+    }
+
+    @Override
     public CapabilityProvider getCapabilityProvider() {
         return capabilityProvider;
     }

@@ -16,7 +16,7 @@ import java.util.Map;
 public class DataSourceCreateRequest {
 
     @NotBlank(message = "name is required")
-    @Pattern(regexp = ApiValidationRules.SAFE_ID_PATTERN, message = "name contains invalid characters")
+    @Pattern(regexp = ApiValidationRules.NAME_PATTERN, message = "name contains invalid characters")
     private String name;
 
     @NotBlank(message = "type is required")

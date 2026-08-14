@@ -85,6 +85,32 @@ public class BenchmarkReportGenerator {
                     nullSafe(item.getMessage())));
         }
 
+        md.append("\n## 主链路指标\n\n");
+        md.append("| 场景 | 样本数 | p50(ms) | p95(ms) | 首次观察差异 p50(ms) | 查询 p50 | 分段 p50 | 扫描行 p50 | 堆峰值 p95(bytes) | 准确性 |\n");
+        md.append("|------|-------:|--------:|--------:|--------------------:|---------:|---------:|-----------:|------------------:|--------|\n");
+        for (BenchmarkResult result : results) {
+            md.append("| ").append(nullSafe(result.getScenarioId())).append(" | ")
+                    .append(metric(result, "sampleCount")).append(" | ")
+                    .append(metric(result, "durationP50Ms")).append(" | ")
+                    .append(metric(result, "durationP95Ms")).append(" | ")
+                    .append(metric(result, "firstDifferenceObservedMsP50")).append(" | ")
+                    .append(metric(result, "instrumentedQueryCountP50")).append(" | ")
+                    .append(metric(result, "segmentCountP50")).append(" | ")
+                    .append(metric(result, "logicalRowsScannedP50")).append(" | ")
+                    .append(metric(result, "heapPeakBytesP95")).append(" | ")
+                    .append(metric(result, "accuracy")).append(" |\n");
+        }
+
+        md.append("\n## 未采集指标\n\n");
+        md.append("| 场景 | 指标 | 原因 |\n|------|------|------|\n");
+        for (BenchmarkResult result : results) {
+            if (result.getUnavailableMetrics() != null) {
+                result.getUnavailableMetrics().forEach((key, reason) -> md.append("| ")
+                        .append(nullSafe(result.getScenarioId())).append(" | ")
+                        .append(key).append(" | ").append(reason).append(" |\n"));
+            }
+        }
+
         int pass = count(drift, DriftStatus.PASS);
         int warn = count(drift, DriftStatus.WARN);
         int fail = count(drift, DriftStatus.FAIL);
@@ -117,6 +143,24 @@ public class BenchmarkReportGenerator {
                 ObjectNode sub = node.putObject("subMetrics");
                 r.getSubMetrics().forEach(sub::put);
             }
+            if (r.getDimensions() != null && !r.getDimensions().isEmpty()) {
+                ObjectNode dimensions = node.putObject("dimensions");
+                r.getDimensions().forEach(dimensions::put);
+            }
+            if (r.getUnavailableMetrics() != null && !r.getUnavailableMetrics().isEmpty()) {
+                ObjectNode unavailable = node.putObject("unavailableMetrics");
+                r.getUnavailableMetrics().forEach(unavailable::put);
+            }
+            if (r.getSamples() != null && !r.getSamples().isEmpty()) {
+                ArrayNode samples = node.putArray("samples");
+                r.getSamples().forEach(sample -> {
+                    ObjectNode sampleNode = samples.addObject();
+                    sampleNode.put("iteration", sample.getIteration());
+                    sampleNode.put("durationMs", sample.getDurationMs());
+                    ObjectNode metrics = sampleNode.putObject("metrics");
+                    sample.getMetrics().forEach(metrics::put);
+                });
+            }
         }
         ArrayNode driftArr = root.putArray("drift");
         for (DriftItem item : drift.getItems()) {
@@ -145,5 +189,12 @@ public class BenchmarkReportGenerator {
 
     private static String nullSafe(String s) {
         return s == null ? "" : s;
+    }
+
+    private static String metric(BenchmarkResult result, String key) {
+        if (result.getSubMetrics() == null || !result.getSubMetrics().containsKey(key)) {
+            return "N/A";
+        }
+        return String.format(Locale.ROOT, "%.2f", result.getSubMetrics().get(key));
     }
 }

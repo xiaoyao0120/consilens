@@ -4,6 +4,7 @@ import com.consilens.server.api.advice.GlobalExceptionHandler;
 import com.consilens.server.api.dto.ConnectionTestResponse;
 import com.consilens.server.api.dto.DataSourceCreateRequest;
 import com.consilens.server.api.dto.DataSourceDto;
+import com.consilens.server.api.dto.PageResponse;
 import com.consilens.server.api.dto.DataSourceTypeDto;
 import com.consilens.server.api.dto.MetadataColumnDto;
 import com.consilens.server.application.datasource.DataSourceService;
@@ -70,6 +71,24 @@ class DataSourceControllerTest {
     }
 
     @Test
+    void shouldListDatasourcesPage() throws Exception {
+        PageResponse<DataSourceDto> page = PageResponse.<DataSourceDto>builder()
+                .total(1)
+                .page(1)
+                .pageSize(10)
+                .items(List.of(dto()))
+                .build();
+        when(dataSourceService.listPage(1, 10)).thenReturn(page);
+
+        mockMvc.perform(get("/v1/datasources/page").param("page", "1").param("pageSize", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.pageSize").value(10))
+                .andExpect(jsonPath("$.data.items[0].name").value("orders-db"))
+                .andExpect(jsonPath("$.data.items[0].param").doesNotExist());
+    }
+
+    @Test
     void shouldCreateDatasource() throws Exception {
         when(dataSourceService.create(any(DataSourceCreateRequest.class))).thenReturn(dto());
 
@@ -114,6 +133,24 @@ class DataSourceControllerTest {
         mockMvc.perform(delete("/v1/datasources/1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true));
+    }
+
+    @Test
+    void shouldReturnTypeConfigTemplate() throws Exception {
+        when(dataSourceService.getTypeConfig("postgresql")).thenReturn(List.of(
+                com.consilens.connector.api.DataSourceField.builder()
+                        .field("host").title("地址").type("input").required(true).build(),
+                com.consilens.connector.api.DataSourceField.builder()
+                        .field("schema").title("模式").type("input").required(true)
+                        .defaultValue("public").build()));
+
+        mockMvc.perform(get("/v1/datasources/types/postgresql/config"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[0].field").value("host"))
+                .andExpect(jsonPath("$.data[0].required").value(true))
+                .andExpect(jsonPath("$.data[1].field").value("schema"))
+                .andExpect(jsonPath("$.data[1].defaultValue").value("public"));
     }
 
     @Test

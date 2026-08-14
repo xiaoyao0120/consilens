@@ -52,9 +52,17 @@ public class OracleDatabaseDialect extends AbstractDatabaseDialect {
     public String buildJdbcUrl(Map<String, Object> params) {
         String host = String.valueOf(params.get("host"));
         int port = params.get("port") != null ? ((Number) params.get("port")).intValue() : getDefaultPort();
-        // database 参数视为 Oracle service name
-        String service = params.get("database") != null ? String.valueOf(params.get("database")) : "";
+        // 优先使用 sid 参数(Oracle service name),为空时回退 database 以兼容存量数据
+        String service = params.get("sid") != null ? String.valueOf(params.get("sid")) : "";
+        if (service.isEmpty() && params.get("database") != null) {
+            service = String.valueOf(params.get("database"));
+        }
         return "jdbc:oracle:thin:@//" + host + ":" + port + "/" + service;
+    }
+
+    @Override
+    public DataSourceConfigBuilder getDataSourceConfigBuilder() {
+        return new OracleDataSourceConfigBuilder();
     }
 
     @Override

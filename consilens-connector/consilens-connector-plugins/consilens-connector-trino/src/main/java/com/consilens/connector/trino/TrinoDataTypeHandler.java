@@ -294,7 +294,7 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeTimestamp(String quotedCol) {
-        return quotedCol;
+        return "COALESCE(FORMAT_DATETIME(" + quotedCol + ", 'yyyy-MM-dd HH:mm:ss'), '')";
     }
 
     /**

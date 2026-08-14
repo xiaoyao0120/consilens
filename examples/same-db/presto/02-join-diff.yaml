@@ -1,5 +1,5 @@
 # PRESTO 同库 join 差异比对配置
-# 目标：orders vs orders_backup，覆盖 SOURCE_MISSING + MISMATCH。基线：total=2。
+# 目标：orders vs orders_backup，覆盖 TARGET_MISSING + MISMATCH。基线：total=2。
 
 source:
   type: presto

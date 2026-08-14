@@ -49,6 +49,13 @@ public class ArtifactRepositoryImpl implements ArtifactRepository {
     }
 
     @Override
+    public ArtifactRecord update(ArtifactRecord artifactRecord) {
+        ArtifactEntity entity = toEntity(artifactRecord);
+        artifactPersistenceService.updateById(entity);
+        return toRecord(entity);
+    }
+
+    @Override
     public ArtifactPage listArtifactPage(int page,
                                          int pageSize,
                                          Collection<ArtifactKind> kinds,
@@ -102,6 +109,11 @@ public class ArtifactRepositoryImpl implements ArtifactRepository {
         entity.setStorageUri(record.getStorageUri());
         entity.setSha256(record.getSha256());
         entity.setMetadataJson(record.getMetadataJson());
+        entity.setStatisticsJson(record.getStatisticsJson());
+        entity.setDifferenceCount(record.getDifferenceCount());
+        entity.setDifferenceTruncated(record.getDifferenceTruncated());
+        entity.setDifferenceRows(record.getDifferenceRows());
+        entity.setDifferencesUri(record.getDifferencesUri());
         entity.setCreatedAt(DbTimeSupport.toLocalDateTime(record.getCreatedAt()));
         return entity;
     }
@@ -120,6 +132,11 @@ public class ArtifactRepositoryImpl implements ArtifactRepository {
                 .storageUri(entity.getStorageUri())
                 .sha256(entity.getSha256())
                 .metadataJson(entity.getMetadataJson())
+                .statisticsJson(entity.getStatisticsJson())
+                .differenceCount(entity.getDifferenceCount())
+                .differenceTruncated(entity.getDifferenceTruncated())
+                .differenceRows(entity.getDifferenceRows())
+                .differencesUri(entity.getDifferencesUri())
                 .createdAt(DbTimeSupport.toInstant(entity.getCreatedAt()))
                 .build();
     }

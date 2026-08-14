@@ -108,12 +108,51 @@ jobs:
           cache: maven
       - name: Verify Testcontainers integration suite
         run: scripts/release/release-check.sh --docker-verify-only
+      - name: Preserve Failsafe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failsafe-testcontainers-reports
+          path: |
+            consilens-core/target/failsafe-reports/
+            target/release-checks/
+          if-no-files-found: error
+
+  oceanbase-verify:
+    name: CI-OceanBase-Verify
+    needs: paths-filter
+    if: ${{ (needs.paths-filter.outputs.not-ignore == 'true') || (github.event_name == 'push') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+          cache: maven
+      - name: Show Docker resources
+        run: docker info
+      - name: Verify official OceanBase Testcontainer
+        run: scripts/release/release-check.sh --oceanbase-verify-only
+      - name: Preserve OceanBase Failsafe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failsafe-oceanbase-reports
+          path: |
+            consilens-core/target/failsafe-reports/
+            target/release-checks/
+          if-no-files-found: error
 
   result:
     name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [ build, mcp, docker-verify, paths-filter ]
+    needs: [ build, mcp, docker-verify, oceanbase-verify, paths-filter ]
     if: always()
     steps:
       - name: Status
@@ -132,5 +171,9 @@ jobs:
           fi
           if [[ '${{ needs.docker-verify.result }}' != 'success' ]]; then
             echo "Docker Verify Failed!"
+            exit 1
+          fi
+          if [[ '${{ needs.oceanbase-verify.result }}' != 'success' ]]; then
+            echo "OceanBase Verify Failed!"
             exit 1
           fi

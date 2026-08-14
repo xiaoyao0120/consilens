@@ -81,5 +81,14 @@ public class DiffReportDto {
 
         /** Merged deduplicated changed column names (changedColumns1 union changedColumns2). */
         private List<String> changedColumns;
+
+        /** 完整列名（与 sourceValues/targetValues 下标对齐；旧格式数据可能为 null）。 */
+        private List<String> columnNames;
+
+        /** 源表完整行值（MISMATCH / 删除行有值；新增行无）。 */
+        private List<Object> sourceValues;
+
+        /** 目标表完整行值（MISMATCH / 新增行有值；删除行无）。 */
+        private List<Object> targetValues;
     }
 }

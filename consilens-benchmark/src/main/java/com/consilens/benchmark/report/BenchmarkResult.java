@@ -3,6 +3,8 @@ package com.consilens.benchmark.report;
 import lombok.Data;
 
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -24,6 +26,15 @@ public class BenchmarkResult {
 
     /** 附加子指标，如 p99、sampleCount。 */
     private Map<String, Double> subMetrics = new LinkedHashMap<>();
+
+    /** 原始测量样本；micro 结果由 JMH 自身保存统计，因此可为空。 */
+    private List<BenchmarkSample> samples = new ArrayList<>();
+
+    /** 无法通用采集的指标及原因，避免把缺失值误报为 0。 */
+    private Map<String, String> unavailableMetrics = new LinkedHashMap<>();
+
+    /** 场景维度，如策略、键分布和差异类型。 */
+    private Map<String, String> dimensions = new LinkedHashMap<>();
 
     /** 执行状态字符串："RUN"、"SKIPPED"、"FAILED"。 */
     private String status = "RUN";

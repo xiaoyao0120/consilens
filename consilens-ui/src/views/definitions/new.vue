@@ -1,11 +1,13 @@
 <script setup>
-import { ref, reactive, computed } from "vue";
+import { ref, reactive, computed, watch, nextTick } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useMessage } from "naive-ui";
 import { NButton, NIcon, NInput, NInputNumber, NSelect, NDynamicTags, NSwitch, NSpin, NCheckbox, NRadioGroup, NRadioButton, NModal } from "naive-ui";
 import { ArrowBackOutline, ArrowForwardOutline, CheckmarkCircleOutline, GitCompareOutline, RefreshOutline, SaveOutline } from "@vicons/ionicons5";
-import { createTaskDefinition, updateTaskDefinition, getTaskDefinition, runTaskDefinition, listDatasources, listDatasourceDatabases, listDatasourceTables, listDatasourceColumns, listDatasourceTypes, createDatasource, testConnection } from "@/api/modules";
+import { createTaskDefinition, updateTaskDefinition, getTaskDefinition, runTaskDefinition, listDatasources, listDatasourceDatabases, listDatasourceTables, listDatasourceColumns, listDatasourceTypes, getDatasourceTypeConfig, createDatasource, testConnection } from "@/api/modules";
 import { generateSerialNo } from "@/utils/format";
+import DataSourceForm from "@/components/DataSourceForm.vue";
+import { FALLBACK_DS_FIELDS, collectDsParam, splitTestOptions } from "@/common/datasourceDefaults";
 
 const router = useRouter();
 const route = useRoute();
@@ -85,21 +87,50 @@ const dsModal = reactive({
   testing: false,
   testResult: null,
   types: [],
+  fields: [], // 当前类型的连接参数模板（来自后端）
+  values: {}, // 模板字段值（字符串）
   form: {
     name: "",
     type: "mysql",
-    host: "",
-    port: null,
-    database: "",
-    username: "",
-    password: "",
   },
 });
+
+// 动态表单实例（validateAndGetValues / setValues）
+const dsFormRef = ref(null);
+
+// 拉取类型模板：失败时使用兜底模板；序号防止快速切换类型时竞态覆盖
+let dsConfigSeq = 0;
+async function loadDsConfig(type) {
+  const seq = ++dsConfigSeq;
+  dsModal.fields = [];
+  dsModal.values = {};
+  let fields = FALLBACK_DS_FIELDS;
+  try {
+    const config = await getDatasourceTypeConfig(type);
+    if (seq !== dsConfigSeq) return;
+    fields = Array.isArray(config) && config.length ? config : FALLBACK_DS_FIELDS;
+  } catch {
+    if (seq !== dsConfigSeq) return;
+  }
+  dsModal.fields = fields;
+  await nextTick();
+  if (seq === dsConfigSeq) {
+    dsFormRef.value?.setValues({});
+  }
+}
+
+// 切换类型：重置模板与表单值
+watch(
+  () => dsModal.form.type,
+  (type) => {
+    if (dsModal.show && type) loadDsConfig(type);
+  }
+);
 
 async function openDsModal(side) {
   dsModal.side = side;
   dsModal.testResult = null;
-  dsModal.form = { name: "", type: "mysql", host: "", port: null, database: "", username: "", password: "" };
+  dsModal.form = { name: "", type: "mysql" };
   if (!dsModal.types.length) {
     try {
       dsModal.types = (await listDatasourceTypes()) || [];
@@ -110,6 +141,8 @@ async function openDsModal(side) {
   const defaultType = dsModal.types.find((t) => t.type === "mysql")?.type || dsModal.types[0]?.type || "mysql";
   dsModal.form.type = defaultType;
   dsModal.show = true;
+  // type 未变化时 watch 不触发，这里显式加载模板
+  loadDsConfig(defaultType);
 }
 
 const dsTypeOptions = computed(() =>
@@ -117,20 +150,18 @@ const dsTypeOptions = computed(() =>
 );
 
 async function handleDsTest() {
-  if (!dsModal.form.host.trim()) {
-    message.warning("请先填写主机地址");
-    return;
-  }
+  const { valid, values } = (await dsFormRef.value?.validateAndGetValues()) || { valid: false, values: null };
+  if (!valid) return;
   dsModal.testing = true;
   dsModal.testResult = null;
   try {
+    // 仅当字段有值才放入；sid / schema / properties 放入 options
+    const param = collectDsParam(values, dsModal.fields);
+    const options = splitTestOptions(param);
     const result = await testConnection({
       type: dsModal.form.type,
-      host: dsModal.form.host.trim(),
-      port: dsModal.form.port || undefined,
-      database: dsModal.form.database.trim() || undefined,
-      username: dsModal.form.username.trim() || undefined,
-      password: dsModal.form.password || undefined,
+      ...param,
+      options,
     });
     dsModal.testResult = { ok: result.success, text: result.error || "连接成功" };
   } catch (error) {
@@ -141,22 +172,18 @@ async function handleDsTest() {
 }
 
 async function handleDsCreate() {
-  if (!dsModal.form.name.trim() || !dsModal.form.host.trim()) {
-    message.warning("请填写名称与主机地址");
+  if (!dsModal.form.name.trim()) {
+    message.warning("请填写名称");
     return;
   }
+  const { valid, values } = (await dsFormRef.value?.validateAndGetValues()) || { valid: false, values: null };
+  if (!valid) return;
   dsModal.saving = true;
   try {
     const created = await createDatasource({
       name: dsModal.form.name.trim(),
       type: dsModal.form.type,
-      param: {
-        host: dsModal.form.host.trim(),
-        port: dsModal.form.port || undefined,
-        database: dsModal.form.database.trim() || undefined,
-        username: dsModal.form.username.trim() || undefined,
-        password: dsModal.form.password || undefined,
-      },
+      param: collectDsParam(values, dsModal.fields),
     });
     message.success("数据源已创建");
     dsModal.show = false;
@@ -320,6 +347,19 @@ function regenerateSerialNo() {
   runForm.serialNo = generateSerialNo();
 }
 
+// ===== 比对策略高级选项（对齐 CLI strategy 配置）=====
+const advForm = reactive({
+  mode: "checksum",          // strategy.mode: checksum | join
+  algorithm: "concat",       // strategy.algorithm / checksumAlgorithm
+  bisectionFactor: 4,        // strategy.bisectionFactor
+  bisectionThreshold: 5000,  // strategy.bisectionThreshold
+  batchSize: 1000,           // strategy.batchSize（透传 attributes）
+  localCompareMode: "full",  // strategy.localCompare.mode: full | auto
+  validateUniqueKeys: true,  // 校验唯一键
+  maxDifferences: null,      // 最大差异数（可选）
+  enableProfiling: false,    // 性能分析
+});
+
 // ===== Step 4: 确认（Plan → Validate → Execute）=====
 function sideHasInput(side) {
   if (planForm[side].mode === "sql") {
@@ -405,6 +445,17 @@ async function loadForEdit() {
       compareForm.fieldMappings = comparison.fields.map((field) => ({ source: field, target: field }));
     }
     compareForm.ignoreColumns = comparison.ignoreColumns || [];
+    const exec = config.executionOptions || {};
+    const strategyPref = config.hints?.strategyPreference || {};
+    advForm.mode = (strategyPref.preferredPlans?.[0] || "CHECKSUM").toLowerCase();
+    advForm.algorithm = exec.checksumAlgorithm || "concat";
+    advForm.bisectionFactor = exec.bisectionFactor ?? 4;
+    advForm.bisectionThreshold = exec.bisectionThreshold ?? 5000;
+    advForm.batchSize = exec.batchSize ?? 1000;
+    advForm.localCompareMode = exec.localCompareMode || "full";
+    advForm.validateUniqueKeys = exec.validateUniqueKeys ?? true;
+    advForm.maxDifferences = exec.maxDifferences ?? null;
+    advForm.enableProfiling = exec.enableProfiling ?? false;
     defForm.name = definition.name;
     defForm.description = definition.description || "";
     // 编辑默认回到第一步，便于逐项确认与修改
@@ -439,8 +490,22 @@ function buildConfig() {
     comparison: {},
     executionOptions: {
       timeoutMs: runForm.timeoutMs || undefined,
+      bisectionFactor: advForm.bisectionFactor,
+      bisectionThreshold: advForm.bisectionThreshold,
+      checksumAlgorithm: advForm.algorithm,
+      localCompareMode: advForm.localCompareMode,
+      validateUniqueKeys: advForm.validateUniqueKeys,
+      maxDifferences: advForm.maxDifferences || undefined,
+      enableProfiling: advForm.enableProfiling,
+      batchSize: advForm.batchSize,
     },
-    hints: buildHints(),
+    hints: {
+      ...buildHints(),
+      strategyPreference: {
+        preferredPlans: [advForm.mode.toUpperCase()],
+        allowFallback: true,
+      },
+    },
   };
   const hints = buildHints();
   if (hints.keyMappings) config.comparison.keyMappings = hints.keyMappings;
@@ -732,6 +797,65 @@ if (editId.value) {
           <h2 class="panel-title">高级选项</h2>
           <p class="panel-desc">任务序号、超时与运行模式</p>
         </div>
+        <div class="section">
+          <div class="section-head">
+            <div class="section-title">比对策略</div>
+            <div class="section-tip">对齐 CLI strategy 配置，控制比对引擎行为</div>
+          </div>
+          <div class="adv-grid">
+            <div class="field">
+              <label class="field-label">比对模式</label>
+              <n-select v-model:value="advForm.mode" :options="[
+                { label: 'checksum（默认）', value: 'checksum' },
+                { label: 'join', value: 'join' },
+              ]" />
+            </div>
+            <div class="field">
+              <label class="field-label">校验算法</label>
+              <n-select v-model:value="advForm.algorithm" :options="[
+                { label: 'concat（拼接后 MD5，默认）', value: 'concat' },
+                { label: 'xor（XOR 聚合，顺序不敏感）', value: 'xor' },
+              ]" />
+            </div>
+            <div class="field">
+              <label class="field-label">分段因子</label>
+              <n-input-number v-model:value="advForm.bisectionFactor" :min="1" :max="64" class="flex-1" />
+            </div>
+            <div class="field">
+              <label class="field-label">分段阈值</label>
+              <n-input-number v-model:value="advForm.bisectionThreshold" :min="100" :step="1000" class="flex-1" />
+            </div>
+            <div class="field">
+              <label class="field-label">批大小</label>
+              <n-input-number v-model:value="advForm.batchSize" :min="1" :step="100" class="flex-1" />
+            </div>
+            <div class="field">
+              <label class="field-label">本地比对模式</label>
+              <n-select v-model:value="advForm.localCompareMode" :options="[
+                { label: 'full', value: 'full' },
+                { label: 'auto', value: 'auto' },
+              ]" />
+            </div>
+            <div class="field switch-field">
+              <div class="switch-text">
+                <span class="field-label">校验唯一键</span>
+                <span class="field-desc">比对前验证主键唯一性</span>
+              </div>
+              <n-switch v-model:value="advForm.validateUniqueKeys" />
+            </div>
+            <div class="field switch-field">
+              <div class="switch-text">
+                <span class="field-label">性能分析</span>
+                <span class="field-desc">记录比对性能指标</span>
+              </div>
+              <n-switch v-model:value="advForm.enableProfiling" />
+            </div>
+            <div class="field">
+              <label class="field-label">最大差异数</label>
+              <n-input-number v-model:value="advForm.maxDifferences" :min="1" :step="1000" class="flex-1" placeholder="不限制" />
+            </div>
+          </div>
+        </div>
         <div class="field">
           <label class="field-label">任务序号</label>
           <div class="inline-row">
@@ -817,46 +941,37 @@ if (editId.value) {
       </div>
 
       <!-- 新建数据源弹框 -->
-      <n-modal v-model:show="dsModal.show" preset="card" style="width: 560px" title="新建数据源">
+      <n-modal v-model:show="dsModal.show" preset="card" style="width: 640px" title="新建数据源">
         <div class="ds-form">
-          <div class="field">
-            <label class="field-label">名称</label>
-            <n-input v-model:value="dsModal.form.name" placeholder="例如：生产订单库" maxlength="128" />
-          </div>
-          <div class="field">
-            <label class="field-label">类型</label>
-            <n-select v-model:value="dsModal.form.type" :options="dsTypeOptions" />
-          </div>
-          <div class="field">
-            <label class="field-label">主机</label>
-            <div class="inline-row">
-              <n-input v-model:value="dsModal.form.host" placeholder="IP 或主机名" class="flex-1" />
-              <n-input-number v-model:value="dsModal.form.port" placeholder="端口" style="width: 120px" :min="1" :max="65535" />
+          <div class="ds-row-top">
+            <div class="field">
+              <label class="field-label">名称</label>
+              <n-input v-model:value="dsModal.form.name" placeholder="例如：生产订单库" maxlength="128" />
+            </div>
+            <div class="field">
+              <label class="field-label">类型</label>
+              <n-select v-model:value="dsModal.form.type" :options="dsTypeOptions" />
             </div>
           </div>
-          <div class="field">
-            <label class="field-label">数据库</label>
-            <n-input v-model:value="dsModal.form.database" placeholder="数据库 / schema" />
-          </div>
-          <div class="field">
-            <label class="field-label">用户名</label>
-            <n-input v-model:value="dsModal.form.username" />
-          </div>
-          <div class="field">
-            <label class="field-label">密码</label>
-            <n-input v-model:value="dsModal.form.password" type="password" show-password-on="click" />
-          </div>
-          <div class="test-row">
-            <n-button class="btn-ghost btn-sm" :loading="dsModal.testing" @click="handleDsTest">测试连接</n-button>
-            <span v-if="dsModal.testResult" class="conn-result" :class="dsModal.testResult.ok ? 'ok' : 'fail'">
-              <span class="conn-dot" />{{ dsModal.testResult.text }}
-            </span>
+          <div class="ds-separator" />
+          <data-source-form
+            ref="dsFormRef"
+            v-model:model-value="dsModal.values"
+            :fields="dsModal.fields"
+          />
+          <div v-if="dsModal.fields.length === 0" class="field text-muted" style="font-size: 12px">
+            连接参数加载中…
           </div>
         </div>
         <template #footer>
-          <div class="flex-bc">
-            <div />
-            <div class="flex-ac" style="gap: 8px">
+          <div class="modal-footer">
+            <div class="modal-footer-left">
+              <n-button class="btn-ghost btn-sm" :loading="dsModal.testing" @click="handleDsTest">测试连接</n-button>
+              <span v-if="dsModal.testResult" class="conn-result" :class="dsModal.testResult.ok ? 'ok' : 'fail'">
+                <span class="conn-dot" />{{ dsModal.testResult.text }}
+              </span>
+            </div>
+            <div class="modal-footer-right">
               <n-button class="btn-ghost" @click="dsModal.show = false">取消</n-button>
               <n-button class="btn-primary" :loading="dsModal.saving" @click="handleDsCreate">创建</n-button>
             </div>
@@ -1528,14 +1643,49 @@ if (editId.value) {
   }
 }
 
+// ===== Step3 比对策略 =====
+.adv-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 16px;
+}
+
 // ===== 数据源快捷创建弹框 =====
 .ds-form {
   padding-top: 4px;
 }
 
-.test-row {
+.ds-row-top {
+  display: grid;
+  grid-template-columns: 1fr 200px;
+  gap: 16px;
+  align-items: start;
+}
+
+.ds-separator {
+  height: 1px;
+  margin: 4px 0 16px;
+  background: var(--border);
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-footer-left {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
+}
+
+.modal-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 </style>

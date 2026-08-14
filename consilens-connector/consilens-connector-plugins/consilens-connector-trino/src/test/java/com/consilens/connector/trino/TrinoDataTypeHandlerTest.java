@@ -33,6 +33,12 @@ class TrinoDataTypeHandlerTest {
     }
 
     @Test
+    void testNormalizeColumnTimestamp() {
+        String result = handler.normalizeColumn("created_at", DataType.TIMESTAMP);
+        assertEquals("COALESCE(FORMAT_DATETIME(\"created_at\", 'yyyy-MM-dd HH:mm:ss'), '')", result);
+    }
+
+    @Test
     void testFormatDateForChecksum() {
         String result = handler.formatDateForChecksum("\"created_at\"");
         assertTrue(result.contains("CAST(\"created_at\" AS VARCHAR)"));

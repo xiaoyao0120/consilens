@@ -43,6 +43,21 @@ public class ArtifactEntity implements Serializable {
     @TableField("metadata_json")
     private String metadataJson;
 
+    @TableField("statistics_json")
+    private String statisticsJson;
+
+    @TableField("difference_count")
+    private Long differenceCount;
+
+    @TableField("difference_truncated")
+    private Boolean differenceTruncated;
+
+    @TableField("difference_rows")
+    private Long differenceRows;
+
+    @TableField("differences_uri")
+    private String differencesUri;
+
     @TableField("created_at")
     private LocalDateTime createdAt;
 }
