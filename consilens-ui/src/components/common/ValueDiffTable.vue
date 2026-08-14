@@ -198,7 +198,7 @@ const drawer = ref({ show: false, rows: [], title: "" });
 
 function openDetail(sample) {
   const pk = parsePrimaryKey(sample.primaryKey);
-  const opText = { mismatch: "更新", source_missing: "新增", target_missing: "删除" }[opKey(sample)] || sample.operation;
+  const opText = { mismatch: "不一致", source_missing: "源端缺失", target_missing: "目标缺失" }[opKey(sample)] || sample.operation;
   drawer.value = {
     show: true,
     rows: allFieldPairs(sample),

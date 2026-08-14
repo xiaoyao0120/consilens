@@ -206,9 +206,6 @@ onBeforeUnmount(() => {
 
     <div class="dashboard-grid">
       <n-card :bordered="true" title="状态分布">
-        <div v-if="!recentTasks.items.length && !recentLoading" class="chart-empty text-muted">
-          暂无任务数据
-        </div>
         <div ref="statusChartRef" class="chart-box" />
       </n-card>
       <n-card :bordered="true" title="近 7 天趋势">

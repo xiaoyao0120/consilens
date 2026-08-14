@@ -128,15 +128,25 @@ const diffPage = reactive({
 
 // 操作类型筛选（图例勾选框，多选；默认全选 = 全部类型，取消勾选即只看其余类型）
 const FILTER_OPS = [
-  { value: "mismatch", label: "更新" },
-  { value: "source_missing", label: "新增" },
-  { value: "target_missing", label: "删除" },
+  { value: "mismatch", label: "不一致" },
+  { value: "source_missing", label: "源端缺失" },
+  { value: "target_missing", label: "目标缺失" },
 ];
 const diffOps = ref(["mismatch", "source_missing", "target_missing"]);
 
 async function loadDiffPage(page = 1) {
   const runResult = (task.value?.artifacts || []).find((item) => item.artifactType === "RUN_RESULT");
   if (!runResult) return;
+  // 全部类型都未勾选时不返回数据
+  if (diffOps.value.length === 0) {
+    diffPage.items = [];
+    diffPage.total = 0;
+    diffPage.truncated = false;
+    diffPage.page = page;
+    diffPage.loaded = true;
+    diffPage.loading = false;
+    return;
+  }
   diffPage.loading = true;
   try {
     const result = await listArtifactDifferences(runResult.artifactId, {
