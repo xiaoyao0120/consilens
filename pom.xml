@@ -60,6 +60,7 @@
     </properties>
 
     <modules>
+        <module>consilens-agent</module>
         <module>consilens-ai</module>
         <module>consilens-common</module>
         <module>consilens-spi</module>
@@ -81,11 +82,35 @@
                 <version>${project.version}</version>
             </dependency>
 
-            <dependency>
-                <groupId>com.consilens</groupId>
-                <artifactId>consilens-core</artifactId>
-                <version>${project.version}</version>
-            </dependency>
+        <dependency>
+            <groupId>com.consilens</groupId>
+            <artifactId>consilens-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.consilens</groupId>
+            <artifactId>consilens-agent-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.consilens</groupId>
+            <artifactId>consilens-agent-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.consilens</groupId>
+            <artifactId>consilens-agent-model-openai-compatible</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.consilens</groupId>
+            <artifactId>consilens-agent-eval</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
             <dependency>
                 <groupId>com.consilens</groupId>
@@ -229,6 +254,19 @@
                 <groupId>org.mockito</groupId>
                 <artifactId>mockito-junit-jupiter</artifactId>
                 <version>${mockito.version}</version>
+            </dependency>
+
+            <!-- assertj-core 3.24.2 pulls byte-buddy 1.12.x which breaks Mockito 5.x;
+                 pin to the version Mockito 5.6.0 requires. -->
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy</artifactId>
+                <version>1.14.8</version>
+            </dependency>
+            <dependency>
+                <groupId>net.bytebuddy</groupId>
+                <artifactId>byte-buddy-agent</artifactId>
+                <version>1.14.8</version>
             </dependency>
 
             <!-- Lombok -->

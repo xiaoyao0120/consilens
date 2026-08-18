@@ -8,9 +8,11 @@ import com.consilens.server.api.dto.ArtifactRefDto;
 import com.consilens.server.application.artifact.ArtifactService;
 import com.consilens.server.application.capability.config.ServerCompareConfig;
 import com.consilens.server.application.capability.config.ServerCompareConfigService;
+import com.consilens.server.application.connection.DatasourceConnectionPolicy;
 import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.exception.InvalidInputException;
+import com.consilens.server.domain.exception.ResourceNotFoundException;
 import com.consilens.server.application.capability.config.EndpointConfig;
 import com.consilens.server.domain.model.DataSourceRecord;
 import com.consilens.server.domain.model.TaskExecutionContext;
@@ -18,7 +20,7 @@ import com.consilens.server.domain.model.TaskExecutionResult;
 import com.consilens.server.application.datasource.DialectSupport;
 import com.consilens.server.domain.repository.DataSourceRepository;
 import com.consilens.server.domain.repository.TaskRepository;
-import com.consilens.server.support.crypto.CryptoSupport;
+import com.consilens.server.support.crypto.SecretProtector;
 import com.consilens.core.compare.DefaultCompareRuntime;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
@@ -53,10 +55,8 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
     private final ServerCompareConfigService configService;
     private final TaskRepository taskRepository;
     private final DataSourceRepository dataSourceRepository;
-    private final CryptoSupport cryptoSupport;
+    private final SecretProtector secretProtector;
     private final DialectSupport dialectSupport;
-    private static final String NAME_CHARS_PATTERN = "[A-Za-z0-9_.$: \\-]{1,256}";
-
     private final ConsilensServerProperties properties;
     private final ObjectMapper objectMapper;
 
@@ -64,7 +64,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
                           ServerCompareConfigService configService,
                           TaskRepository taskRepository,
                           DataSourceRepository dataSourceRepository,
-                          CryptoSupport cryptoSupport,
+                          SecretProtector secretProtector,
                           DialectSupport dialectSupport,
                           ConsilensServerProperties properties,
                           ObjectMapper objectMapper) {
@@ -72,7 +72,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         this.configService = configService;
         this.taskRepository = taskRepository;
         this.dataSourceRepository = dataSourceRepository;
-        this.cryptoSupport = cryptoSupport;
+        this.secretProtector = secretProtector;
         this.dialectSupport = dialectSupport;
         this.properties = properties;
         this.objectMapper = objectMapper;
@@ -92,11 +92,11 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
             return;
         }
         Map<String, Object> connection = endpoint.getConnection();
-        // 情况1：提交端加密存储的密码（enc: 前缀）→ 解密还原（外部直传场景）
+        // 情况1：提交端加密存储的密码（v2 前缀）→ 解密还原（外部直传场景）
         if (connection != null && connection.get("password") instanceof String
-                && ((String) connection.get("password")).startsWith("enc:")) {
+                && ((String) connection.get("password")).startsWith("v2:")) {
             Map<String, Object> fixed = new LinkedHashMap<>(connection);
-            fixed.put("password", cryptoSupport.reveal((String) connection.get("password")));
+            fixed.put("password", secretProtector.reveal((String) connection.get("password")));
             endpoint.setConnection(fixed);
             return;
         }
@@ -115,35 +115,36 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
                     ? endpoint.getDatabase()
                     : stringValue(param.get("database"));
             // database 直接拼入 JDBC URL，复用创建数据源时的名称白名单防 URL 参数注入
-            if (database != null && !database.matches(NAME_CHARS_PATTERN)) {
+            if (database != null && !database.matches(DatasourceConnectionPolicy.NAME_CHARS_PATTERN)) {
                 throw new IllegalArgumentException("database contains invalid characters");
             }
             // connector 执行端需要完整 JDBC URL，按数据源类型经 dialect 构建
-            dialectSupport.find(ds.getType())
-                    .ifPresent(dialect -> {
-                        Map<String, Object> urlParams = new LinkedHashMap<>();
-                        urlParams.put("host", host == null ? "" : host);
-                        urlParams.put("port", port == null ? dialect.getDefaultPort() : port);
-                        urlParams.put("database", database == null ? "" : database);
-                        // 方言扩展参数（Oracle sid / schema / properties）透传，不覆盖已有键
-                        for (String key : new String[]{"sid", "schema", "properties"}) {
-                            Object value = param.get(key);
-                            if (value != null && !String.valueOf(value).isBlank()) {
-                                urlParams.putIfAbsent(key, value);
-                            }
-                        }
-                        injected.put("url", dialect.buildJdbcUrl(urlParams));
-                    });
+            com.consilens.connector.api.DatabaseDialect dialect = dialectSupport.find(ds.getType())
+                    .orElseThrow(() -> new InvalidInputException(
+                            "unsupported datasource type: " + ds.getType()));
+            Map<String, Object> urlParams = new LinkedHashMap<>();
+            urlParams.put("host", host == null ? "" : host);
+            urlParams.put("port", port == null ? dialect.getDefaultPort() : port);
+            urlParams.put("database", database == null ? "" : database);
+            // 方言扩展参数（Oracle sid / schema / properties）透传，不覆盖已有键
+            for (String key : DatasourceConnectionPolicy.OPTION_WHITELIST) {
+                Object value = param.get(key);
+                if (value != null && !String.valueOf(value).isBlank()) {
+                    urlParams.putIfAbsent(key, value);
+                }
+            }
+            injected.put("url", dialect.buildJdbcUrl(urlParams));
             injected.put("host", host);
             injected.put("port", port);
             injected.put("database", database);
             injected.put("username", stringValue(param.get("username")));
-            injected.put("password", cryptoSupport.reveal(
+            injected.put("password", secretProtector.reveal(
                     param.get("password") != null ? String.valueOf(param.get("password")) : null));
             endpoint.setConnection(injected);
-        }, () -> org.slf4j.LoggerFactory.getLogger(RunTaskHandler.class)
-                .warn("datasourceId {} referenced by config not found; connection left empty",
-                        endpoint.getDatasourceId()));
+        }, () -> {
+            throw new ResourceNotFoundException(
+                    "datasource not found: " + endpoint.getDatasourceId());
+        });
     }
 
     private String stringValue(Object value) {

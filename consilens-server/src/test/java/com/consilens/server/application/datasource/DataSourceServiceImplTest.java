@@ -10,7 +10,8 @@ import com.consilens.server.application.connection.ConnectionTestService;
 import com.consilens.server.domain.exception.ResourceNotFoundException;
 import com.consilens.server.domain.model.DataSourceRecord;
 import com.consilens.server.domain.repository.DataSourceRepository;
-import com.consilens.server.support.crypto.CryptoSupport;
+import com.consilens.server.support.crypto.AesGcmSecretProtector;
+import com.consilens.server.support.crypto.SecretProtectorTestKeys;
 import com.consilens.connector.api.DatabaseDialect;
 import com.consilens.connector.api.MetadataQueryGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -57,7 +58,8 @@ class DefaultDataSourceServiceTest {
         metadataQueryGenerator = mock(MetadataQueryGenerator.class);
         opener = mock(DataSourceServiceImpl.MetadataConnectionOpener.class);
         service = new DataSourceServiceImpl(repository, dialectSupport, connectionTestService,
-                new ObjectMapper(), new CryptoSupport(""), opener);
+                new ObjectMapper(), SecretProtectorTestKeys.protector(),
+                mock(DatasourceDefinitionValidator.class), opener);
         when(dialect.getConnectorType()).thenReturn("mysql");
         when(dialect.getMetadataQueryGenerator()).thenReturn(metadataQueryGenerator);
         when(dialectSupport.find("mysql")).thenReturn(Optional.of(dialect));
@@ -110,10 +112,11 @@ class DefaultDataSourceServiceTest {
 
     @Test
     void shouldExposeParamWithoutPassword() {
+        AesGcmSecretProtector protector = SecretProtectorTestKeys.protector();
         when(repository.findById(DS_ID)).thenReturn(Optional.of(DataSourceRecord.builder()
                 .id(DS_ID).name("orders-db").type("mysql")
                 .paramJson("{\"host\":\"10.0.0.5\",\"port\":3306,\"database\":\"orders\","
-                        + "\"username\":\"root\",\"password\":\"secret\"}")
+                        + "\"username\":\"root\",\"password\":\"" + protector.protect("secret") + "\"}")
                 .build()));
 
         DataSourceDto dto = service.get(DS_ID);
@@ -245,10 +248,10 @@ class DefaultDataSourceServiceTest {
 
     @Test
     void shouldEncryptPasswordWhenKeyConfigured() {
-        CryptoSupport crypto = new CryptoSupport(java.util.Base64.getEncoder()
-                .encodeToString(new byte[32]));
+        AesGcmSecretProtector crypto = SecretProtectorTestKeys.protector();
         DataSourceServiceImpl encryptedService = new DataSourceServiceImpl(repository,
-                dialectSupport, connectionTestService, new ObjectMapper(), crypto, opener);
+                dialectSupport, connectionTestService, new ObjectMapper(), crypto,
+                mock(DatasourceDefinitionValidator.class), opener);
         when(repository.save(any())).thenAnswer(invocation -> {
             DataSourceRecord record = invocation.getArgument(0);
             record.setId(DS_ID);
@@ -368,10 +371,11 @@ class DefaultDataSourceServiceTest {
 
     @Test
     void shouldForwardExtraParamsAsOptionsWhenTesting() {
+        AesGcmSecretProtector protector = SecretProtectorTestKeys.protector();
         when(repository.findById(DS_ID)).thenReturn(Optional.of(DataSourceRecord.builder()
                 .id(DS_ID).name("pg").type("postgresql")
                 .paramJson("{\"host\":\"10.0.0.5\",\"port\":5432,\"database\":\"orders\","
-                        + "\"username\":\"admin\",\"password\":\"secret\","
+                        + "\"username\":\"admin\",\"password\":\"" + protector.protect("secret") + "\","
                         + "\"schema\":\"public\",\"properties\":\"ssl=true\"}")
                 .build()));
         when(connectionTestService.test(any())).thenReturn(ConnectionTestResponse.builder()
@@ -439,10 +443,10 @@ class DefaultDataSourceServiceTest {
 
     @Test
     void shouldDecryptPasswordWhenTestingEncryptedDataSource() {
-        CryptoSupport crypto = new CryptoSupport(java.util.Base64.getEncoder()
-                .encodeToString(new byte[32]));
+        AesGcmSecretProtector crypto = SecretProtectorTestKeys.protector();
         DataSourceServiceImpl encryptedService = new DataSourceServiceImpl(repository,
-                dialectSupport, connectionTestService, new ObjectMapper(), crypto, opener);
+                dialectSupport, connectionTestService, new ObjectMapper(), crypto,
+                mock(DatasourceDefinitionValidator.class), opener);
         String encrypted = crypto.protect("s3cret");
         when(repository.findById(DS_ID)).thenReturn(Optional.of(DataSourceRecord.builder()
                 .id(DS_ID).name("secure").type("mysql")
@@ -461,10 +465,10 @@ class DefaultDataSourceServiceTest {
 
     @Test
     void shouldKeepPasswordWhenUpdatingWithBlankPassword() {
-        CryptoSupport crypto = new CryptoSupport(java.util.Base64.getEncoder()
-                .encodeToString(new byte[32]));
+        AesGcmSecretProtector crypto = SecretProtectorTestKeys.protector();
         DataSourceServiceImpl encryptedService = new DataSourceServiceImpl(repository,
-                dialectSupport, connectionTestService, new ObjectMapper(), crypto, opener);
+                dialectSupport, connectionTestService, new ObjectMapper(), crypto,
+                mock(DatasourceDefinitionValidator.class), opener);
         when(repository.findById(DS_ID)).thenReturn(Optional.of(DataSourceRecord.builder()
                 .id(DS_ID).name("secure").type("mysql")
                 .paramJson("{\"host\":\"10.0.0.5\",\"password\":\"" + crypto.protect("old-pass") + "\"}")
@@ -479,19 +483,17 @@ class DefaultDataSourceServiceTest {
         ArgumentCaptor<DataSourceRecord> captor = ArgumentCaptor.forClass(DataSourceRecord.class);
         verify(repository).save(captor.capture());
         String stored = captor.getValue().getParamJson();
-        // 保留的旧密码被重新加密存储（enc: 前缀且非明文）
-        assertTrue(stored.contains("enc:"));
+        // 保留的旧密码被重新加密存储（v2 前缀且非明文）
+        assertTrue(stored.contains("v2:"));
         assertTrue(!stored.contains("old-pass"));
     }
 
     @Test
-    void shouldPassThroughAlreadyEncryptedValue() {
-        CryptoSupport crypto = new CryptoSupport(java.util.Base64.getEncoder()
-                .encodeToString(new byte[32]));
-        String encrypted = crypto.protect("secret");
-
-        // 已带 enc: 前缀的值不再二次加密（客户端回传场景）
-        assertEquals(encrypted, crypto.protect(encrypted));
+    void protectNeverReturnsPlaintext() {
+        AesGcmSecretProtector protector = SecretProtectorTestKeys.protector();
+        String envelope = protector.protect("secret");
+        assertTrue(envelope.startsWith("v2:"));
+        assertTrue(!envelope.contains("secret"));
     }
 
     private DataSourceRecord record() {
@@ -500,7 +502,8 @@ class DefaultDataSourceServiceTest {
                 .name("orders-db")
                 .type("mysql")
                 .paramJson("{\"host\":\"10.0.0.5\",\"port\":3306,\"database\":\"orders\","
-                        + "\"username\":\"admin\",\"password\":\"secret\"}")
+                        + "\"username\":\"admin\",\"password\":\""
+                        + SecretProtectorTestKeys.protector().protect("secret") + "\"}")
                 .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .updatedAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .build();
@@ -561,13 +564,14 @@ class DefaultDataSourceServiceTest {
 
     @Test
     void shouldMaskLegacyPlaintextPropertiesInList() throws Exception {
+        AesGcmSecretProtector protector = SecretProtectorTestKeys.protector();
         // 存量数据：paramJson 里 properties 含明文密码
         DataSourceRecord legacy = DataSourceRecord.builder()
                 .id(9L)
                 .name("legacy-db")
                 .type("postgresql")
                 .paramJson("{\"host\":\"10.0.0.9\",\"port\":5432,\"database\":\"orders\","
-                        + "\"username\":\"app\",\"password\":\"enc:abc\","
+                        + "\"username\":\"app\",\"password\":\"" + protector.protect("real-secret") + "\","
                         + "\"properties\":\"ssl=true&password=plaintext-secret&search_path=public\"}")
                 .createdAt(Instant.parse("2025-01-01T00:00:00Z"))
                 .updatedAt(Instant.parse("2025-01-01T00:00:00Z"))

@@ -13,6 +13,7 @@ public class ConsilensServerProperties {
     private final Database database = new Database();
     private final Security security = new Security();
     private final Api api = new Api();
+    private final Ai ai = new Ai();
 
     @Data
     public static class Node {
@@ -55,5 +56,35 @@ public class ConsilensServerProperties {
     @Data
     public static class Api {
         private long maxRequestBodyBytes = 10L * 1024L * 1024L;
+    }
+
+    /**
+     * AI Agent runtime settings (design section 30). API key and secret key
+     * are referenced by environment variable name only; values never appear
+     * in properties or actuator output.
+     */
+    @Data
+    public static class Ai {
+        private boolean enabled = false;
+        private String backend = "deepseek";
+        private String model = "deepseek-chat";
+        private String baseUrl = "https://api.deepseek.com";
+        private String apiKeyEnv = "DEEPSEEK_API_KEY";
+        /** 直接配置的 API Key 值（优先于 apiKeyEnv 环境变量；仅本地开发建议）。 */
+        private String apiKey = "";
+        private int maxTurns = 8;
+        private int maxToolCalls = 20;
+        private int runTimeoutSeconds = 120;
+        private int toolTimeoutSeconds = 30;
+        private int leaseSeconds = 30;
+        private int secretTtlSeconds = 600;
+        private int secretMaxReads = 8;
+        private String secretStore = "encrypted-db";
+        private String secretKeyEnv = "CONSILENS_AGENT_SECRET_KEY";
+        /** 直接配置的临时 secret 加密 key（Base64 32 字节，优先于 secretKeyEnv）。 */
+        private String secretKey = "";
+        private int maxConcurrentRuns = 4;
+        private boolean pollerEnabled = true;
+        private boolean failFast = true;
     }
 }

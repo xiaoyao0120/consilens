@@ -1,5 +1,8 @@
 // ===== shadcn 风格设计 token（与 common/theme.js 的 naive overrides 配合） =====
+// 定义在 :root（含 :root.dark）上：naive-ui 弹层（抽屉/弹窗）teleport 到 body，
+// 脱离 .app-layout 的 .bright/.dark 作用域，必须让变量挂在根元素才能继承。
 
+:root,
 .bright {
   --bg: #fafafa;
   --card: #ffffff;
@@ -15,6 +18,7 @@
   --card-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
 }
 
+:root.dark,
 .dark {
   --bg: #09090b;
   --card: #18181b;

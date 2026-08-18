@@ -5,6 +5,7 @@ import { NIcon } from "naive-ui";
 import { useAppStore } from "@/store";
 import {
   GridOutline,
+  SparklesOutline,
   PlayCircleOutline,
   PulseOutline,
   ServerOutline,
@@ -19,6 +20,7 @@ function renderIcon(icon) {
 
 const menuOptions = [
   { label: "工作台", key: "/dashboard", icon: renderIcon(GridOutline) },
+  { label: "AI 助手", key: "/ai", icon: renderIcon(SparklesOutline) },
   { label: "任务定义", key: "/definitions", icon: renderIcon(PlayCircleOutline) },
   { label: "运行实例", key: "/instances", icon: renderIcon(PulseOutline) },
   { label: "数据源", key: "/datasources", icon: renderIcon(LinkOutline) },
