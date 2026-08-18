@@ -1,10 +1,22 @@
 <script setup>
+import { watch } from "vue";
 import { useRoute } from "vue-router";
 import { useAppStore } from "@/store";
 import SideMenu from "./SideMenu.vue";
 
 const route = useRoute();
 const appStore = useAppStore();
+
+// 主题类同步到 <html>：naive-ui 的抽屉/弹窗默认 teleport 到 body，
+// 挂在根元素上才能让全局 CSS 变量（--card/--border/...）在弹层内继承。
+watch(
+  () => appStore.theme,
+  (theme) => {
+    document.documentElement.classList.toggle("dark", theme === "dark");
+    document.documentElement.classList.toggle("bright", theme !== "dark");
+  },
+  { immediate: true }
+);
 </script>
 
 <template>

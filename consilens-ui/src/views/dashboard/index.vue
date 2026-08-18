@@ -209,9 +209,6 @@ onBeforeUnmount(() => {
         <div ref="statusChartRef" class="chart-box" />
       </n-card>
       <n-card :bordered="true" title="近 7 天趋势">
-        <div v-if="!(summary?.recent7dTrend || []).length" class="chart-empty text-muted">
-          暂无趋势数据
-        </div>
         <div ref="trendChartRef" class="chart-box" />
       </n-card>
     </div>
@@ -273,14 +270,6 @@ onBeforeUnmount(() => {
 
 .chart-box {
   height: 190px;
-}
-
-.chart-empty {
-  position: relative;
-  text-align: center;
-  margin-top: -200px;
-  z-index: 1;
-  font-size: 13px;
 }
 
 .diff-empty {

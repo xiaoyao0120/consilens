@@ -1,5 +1,7 @@
 package com.consilens.server.application.capability;
 
+import com.consilens.server.support.crypto.SecretProtectorTestKeys;
+
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.compare.CompareRuntime;
@@ -37,10 +39,36 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class RunTaskHandlerTest {
 
     @Test
+    void missingDatasourceFailsLoudlyDuringInjection() {
+        com.consilens.server.domain.repository.DataSourceRepository dataSourceRepository =
+                mock(com.consilens.server.domain.repository.DataSourceRepository.class);
+        when(dataSourceRepository.findById(404L)).thenReturn(java.util.Optional.empty());
+        com.consilens.server.application.capability.config.ServerCompareConfigService configService =
+                new com.consilens.server.application.capability.config.ServerCompareConfigService(
+                        mock(com.consilens.server.application.artifact.ArtifactService.class),
+                        new com.fasterxml.jackson.databind.ObjectMapper());
+        RunTaskHandler handler = new RunTaskHandler(null, configService, null, dataSourceRepository,
+                SecretProtectorTestKeys.protector(),
+                new com.consilens.server.application.datasource.DialectSupport(),
+                new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper());
+
+        com.consilens.server.application.capability.config.ServerCompareConfig config =
+                configService.fromContent(java.util.Map.of(
+                        "version", "1.0",
+                        "source", java.util.Map.of("type", "mysql", "table", "t", "datasourceId", 404),
+                        "target", java.util.Map.of("type", "mysql", "table", "t", "datasourceId", 404),
+                        "keys", java.util.List.of("id")));
+
+        assertThrows(com.consilens.server.domain.exception.ResourceNotFoundException.class,
+                () -> handler.injectConnections(config));
+    }
+
+    @Test
     void shouldNotExposeRawDiffValuesByDefault() {
         RunTaskHandler handler = new RunTaskHandler(null, null, null,
                         mock(com.consilens.server.domain.repository.DataSourceRepository.class),
-                        new com.consilens.server.support.crypto.CryptoSupport(""),
+                        SecretProtectorTestKeys.protector(),
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper());
@@ -69,7 +97,7 @@ class RunTaskHandlerTest {
         RunTaskHandler handler = new RunTaskHandler(artifactService, configService,
                 mock(com.consilens.server.domain.repository.TaskRepository.class),
                 dataSourceRepository,
-                new com.consilens.server.support.crypto.CryptoSupport(""),
+                SecretProtectorTestKeys.protector(),
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper());
@@ -77,7 +105,8 @@ class RunTaskHandlerTest {
         com.consilens.server.domain.model.DataSourceRecord ds = com.consilens.server.domain.model.DataSourceRecord.builder()
                 .id(6L).name("ds-6").type("oracle")
                 .paramJson("{\"host\":\"10.0.0.6\",\"port\":1521,\"sid\":\"ORCLPDB1\","
-                        + "\"username\":\"system\",\"password\":\"p@ss\"}")
+                        + "\"username\":\"system\",\"password\":\""
+                        + SecretProtectorTestKeys.protector().protect("p@ss") + "\"}")
                 .build();
         when(dataSourceRepository.findById(6L)).thenReturn(java.util.Optional.of(ds));
 
@@ -110,7 +139,7 @@ class RunTaskHandlerTest {
         RunTaskHandler handler = new RunTaskHandler(artifactService, configService,
                 mock(com.consilens.server.domain.repository.TaskRepository.class),
                 dataSourceRepository,
-                new com.consilens.server.support.crypto.CryptoSupport(""),
+                SecretProtectorTestKeys.protector(),
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper());
@@ -118,7 +147,8 @@ class RunTaskHandlerTest {
         com.consilens.server.domain.model.DataSourceRecord ds = com.consilens.server.domain.model.DataSourceRecord.builder()
                 .id(5L).name("ds-5").type("mysql")
                 .paramJson("{\"host\":\"10.0.0.5\",\"port\":3306,\"database\":\"orders\","
-                        + "\"username\":\"root\",\"password\":\"p@ss\"}")
+                        + "\"username\":\"root\",\"password\":\""
+                        + SecretProtectorTestKeys.protector().protect("p@ss") + "\"}")
                 .build();
         when(dataSourceRepository.findById(5L)).thenReturn(java.util.Optional.of(ds));
 
@@ -151,7 +181,7 @@ class RunTaskHandlerTest {
                 configService,
                 mock(com.consilens.server.domain.repository.TaskRepository.class),
                 dataSourceRepository,
-                new com.consilens.server.support.crypto.CryptoSupport(""),
+                SecretProtectorTestKeys.protector(),
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper());
@@ -177,9 +207,8 @@ class RunTaskHandlerTest {
 
     @Test
     void shouldRevealEncryptedDirectConnectionPassword() {
-        com.consilens.server.support.crypto.CryptoSupport crypto =
-                new com.consilens.server.support.crypto.CryptoSupport(
-                        java.util.Base64.getEncoder().encodeToString(new byte[32]));
+        com.consilens.server.support.crypto.AesGcmSecretProtector crypto =
+                SecretProtectorTestKeys.protector();
         com.consilens.server.application.capability.config.ServerCompareConfigService configService =
                 new com.consilens.server.application.capability.config.ServerCompareConfigService(
                         mock(com.consilens.server.application.artifact.ArtifactService.class),
@@ -213,7 +242,7 @@ class RunTaskHandlerTest {
     void shouldBoundDiffRowsInResultArtifact() {
         RunTaskHandler handler = new RunTaskHandler(null, null, null,
                         mock(com.consilens.server.domain.repository.DataSourceRepository.class),
-                        new com.consilens.server.support.crypto.CryptoSupport(""),
+                        SecretProtectorTestKeys.protector(),
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper());
@@ -256,7 +285,7 @@ class RunTaskHandlerTest {
         RecordingLifecycle lifecycle = new RecordingLifecycle();
         RunTaskHandler handler = new RunTaskHandler(artifactService, configService, null,
                         mock(com.consilens.server.domain.repository.DataSourceRepository.class),
-                        new com.consilens.server.support.crypto.CryptoSupport(""),
+                        SecretProtectorTestKeys.protector(),
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper()) {
@@ -335,7 +364,7 @@ class RunTaskHandlerTest {
                 .thenReturn(ArtifactRefDto.builder().id("run-result").type("RUN_RESULT").format("json").build());
         return new RunTaskHandler(artifactService, configService, null,
                         mock(com.consilens.server.domain.repository.DataSourceRepository.class),
-                        new com.consilens.server.support.crypto.CryptoSupport(""),
+                        SecretProtectorTestKeys.protector(),
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper()) {

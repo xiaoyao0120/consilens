@@ -3,7 +3,7 @@ const tableHeight = "calc(100vh - 250px)";
 import { ref, reactive, computed, h, onMounted, watch, nextTick } from "vue";
 import { useMessage, useDialog } from "naive-ui";
 import { NButton, NIcon, NInput, NSelect, NModal, NCard, NDrawer, NDrawerContent, NTree, NDataTable, NTag, NSpin, NPopconfirm, NEmpty, NPagination } from "naive-ui";
-import { AddOutline, LinkOutline, CubeOutline, GridOutline, ListOutline, ServerOutline, EyeOutline } from "@vicons/ionicons5";
+import { AddOutline, LinkOutline, CubeOutline, GridOutline, ListOutline, ServerOutline, EyeOutline, SparklesOutline } from "@vicons/ionicons5";
 import {
   listDatasourceTypes,
   getDatasourceTypeConfig,
@@ -19,6 +19,7 @@ import {
 } from "@/api/modules";
 import { formatTime } from "@/utils/format";
 import DataSourceForm from "@/components/DataSourceForm.vue";
+import AiAssistantDrawer from "@/components/ai/AiAssistantDrawer.vue";
 import { FALLBACK_DS_FIELDS, collectDsParam, splitTestOptions } from "@/common/datasourceDefaults";
 
 const message = useMessage();
@@ -26,6 +27,7 @@ const dialog = useDialog();
 
 // ===== 列表 =====
 const loading = ref(false);
+const aiDrawerShow = ref(false);
 const items = ref([]);
 const types = ref([]);
 const pagination = reactive({
@@ -411,6 +413,11 @@ onMounted(() => {
         <div class="page-title">数据源</div>
         <div class="page-desc">管理数据连接，供任务创建时直接选用，支持实时浏览库 / 表 / 列</div>
       </div>
+      <n-button quaternary circle title="AI 辅助" @click="aiDrawerShow = true">
+        <template #icon>
+          <n-icon><SparklesOutline /></n-icon>
+        </template>
+      </n-button>
       <n-button type="primary" @click="openCreate">
         <template #icon>
           <n-icon><AddOutline /></n-icon>
@@ -418,6 +425,8 @@ onMounted(() => {
         新建数据源
       </n-button>
     </div>
+
+    <ai-assistant-drawer v-model:show="aiDrawerShow" />
 
     <n-card :bordered="true">
       <template #header>

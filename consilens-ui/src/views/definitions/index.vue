@@ -4,7 +4,7 @@ import { ref, reactive, h, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useMessage, useDialog } from "naive-ui";
 import { NButton, NIcon, NDataTable, NTag, NSwitch, NPopconfirm, NInput } from "naive-ui";
-import { AddOutline, RefreshOutline, PlayCircleOutline } from "@vicons/ionicons5";
+import { AddOutline, RefreshOutline, PlayCircleOutline, SparklesOutline } from "@vicons/ionicons5";
 import {
   listTaskDefinitions,
   deleteTaskDefinition,
@@ -13,12 +13,14 @@ import {
 } from "@/api/modules";
 import { formatTime } from "@/utils/format";
 import StateTag from "@/components/common/StateTag.vue";
+import AiAssistantDrawer from "@/components/ai/AiAssistantDrawer.vue";
 
 const router = useRouter();
 const message = useMessage();
 const dialog = useDialog();
 
 const loading = ref(false);
+const aiDrawerShow = ref(false);
 const data = reactive({ total: 0, items: [] });
 const pagination = reactive({
   page: 1,
@@ -180,6 +182,11 @@ onMounted(loadData);
         <div class="page-title">任务定义</div>
         <div class="page-desc">保存可复用的数据校验配置，支持随时运行与停用</div>
       </div>
+      <n-button quaternary circle title="AI 辅助" @click="aiDrawerShow = true">
+        <template #icon>
+          <n-icon><SparklesOutline /></n-icon>
+        </template>
+      </n-button>
       <n-button type="primary" @click="router.push('/definitions/new')">
         <template #icon>
           <n-icon><AddOutline /></n-icon>
@@ -187,6 +194,8 @@ onMounted(loadData);
         新建定义
       </n-button>
     </div>
+
+    <ai-assistant-drawer v-model:show="aiDrawerShow" />
 
     <n-card :bordered="true" class="mb-16">
       <div class="filter-bar">

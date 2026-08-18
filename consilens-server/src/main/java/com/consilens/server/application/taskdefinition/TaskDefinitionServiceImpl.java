@@ -8,6 +8,7 @@ import com.consilens.server.api.dto.TaskDefinitionDetailDto;
 import com.consilens.server.api.dto.TaskDefinitionDto;
 import com.consilens.server.api.dto.TaskDefinitionRunRequest;
 import com.consilens.server.application.capability.config.ServerCompareConfig;
+import com.consilens.server.application.capability.config.TaskDefinitionConfigValidator;
 import com.consilens.server.application.capability.config.ServerCompareConfigService;
 import com.consilens.server.application.task.RunTaskSubmissionService;
 import com.consilens.server.domain.exception.ResourceNotFoundException;
@@ -33,6 +34,7 @@ public class TaskDefinitionServiceImpl implements TaskDefinitionService {
     private final TaskRepository taskRepository;
     private final RunTaskSubmissionService submissionService;
     private final ServerCompareConfigService configService;
+    private final TaskDefinitionConfigValidator configValidator;
     private final ObjectMapper objectMapper;
 
     @Autowired
@@ -40,11 +42,13 @@ public class TaskDefinitionServiceImpl implements TaskDefinitionService {
                                         TaskRepository taskRepository,
                                         RunTaskSubmissionService submissionService,
                                         ServerCompareConfigService configService,
+                                        TaskDefinitionConfigValidator configValidator,
                                         ObjectMapper objectMapper) {
         this.definitionRepository = definitionRepository;
         this.taskRepository = taskRepository;
         this.submissionService = submissionService;
         this.configService = configService;
+        this.configValidator = configValidator;
         this.objectMapper = objectMapper;
     }
 
@@ -149,6 +153,7 @@ public class TaskDefinitionServiceImpl implements TaskDefinitionService {
     private void validateConfig(Map<String, Object> config) {
         rejectInlinePasswords(config, "source");
         rejectInlinePasswords(config, "target");
+        configValidator.validateDatasourceRefs(config);
         validateConfigSchema(config);
     }
 

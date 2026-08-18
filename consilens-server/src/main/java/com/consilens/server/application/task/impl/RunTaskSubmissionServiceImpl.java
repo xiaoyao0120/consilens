@@ -8,7 +8,7 @@ import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.exception.ConflictException;
 import com.consilens.server.domain.model.TaskInstanceRecord;
 import com.consilens.server.domain.exception.InvalidInputException;
-import com.consilens.server.support.crypto.CryptoSupport;
+import com.consilens.server.support.crypto.SecretProtector;
 import com.consilens.server.domain.repository.TaskRepository;
 import com.consilens.server.support.hash.Sha256Support;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,7 +29,7 @@ public class RunTaskSubmissionServiceImpl implements RunTaskSubmissionService {
     private final ConsilensServerProperties properties;
     private final ObjectMapper objectMapper;
     private final ObjectMapper yamlMapper;
-    private final CryptoSupport cryptoSupport;
+    private final SecretProtector secretProtector;
     private final TransactionTemplate transactionTemplate;
 
     public RunTaskSubmissionServiceImpl(TaskRepository taskRepository,
@@ -37,13 +37,13 @@ public class RunTaskSubmissionServiceImpl implements RunTaskSubmissionService {
                                         ConsilensServerProperties properties,
                                         ObjectMapper objectMapper,
                                         TransactionTemplate transactionTemplate,
-                                        CryptoSupport cryptoSupport) {
+                                        SecretProtector secretProtector) {
         this.taskRepository = taskRepository;
         this.runTaskCommandEnqueueService = runTaskCommandEnqueueService;
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.yamlMapper = new ObjectMapper(new com.fasterxml.jackson.dataformat.yaml.YAMLFactory());
-        this.cryptoSupport = cryptoSupport;
+        this.secretProtector = secretProtector;
         this.transactionTemplate = transactionTemplate;
     }
 
@@ -176,7 +176,7 @@ public class RunTaskSubmissionServiceImpl implements RunTaskSubmissionService {
                                 connectionMap.put("password",
                                         fixedMask != null
                                                 ? fixedMask
-                                                : cryptoSupport.protect(String.valueOf(rawPassword)));
+                                                : secretProtector.protect(String.valueOf(rawPassword)));
                             }
                         }
                         endpoint.put("connection", connectionMap);

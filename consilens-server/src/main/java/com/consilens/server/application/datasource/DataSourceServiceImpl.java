@@ -8,12 +8,13 @@ import com.consilens.server.api.dto.DataSourceTypeDto;
 import com.consilens.server.api.dto.MetadataColumnDto;
 import com.consilens.server.api.dto.PageResponse;
 import com.consilens.server.application.connection.ConnectionTestService;
+import com.consilens.server.application.connection.DatasourceConnectionPolicy;
 import com.consilens.server.application.connection.JdbcConnectionSupport;
 import com.consilens.server.domain.exception.ResourceNotFoundException;
 import com.consilens.server.domain.model.DataSourcePage;
 import com.consilens.server.domain.model.DataSourceRecord;
 import com.consilens.server.domain.repository.DataSourceRepository;
-import com.consilens.server.support.crypto.CryptoSupport;
+import com.consilens.server.support.crypto.SecretProtector;
 import com.consilens.conncetor.base.BaseDataSourceConfigBuilder;
 import com.consilens.connector.api.DataSourceConfigBuilder;
 import com.consilens.connector.api.DataSourceField;
@@ -31,6 +32,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -41,29 +43,33 @@ public class DataSourceServiceImpl implements DataSourceService {
     private final ConnectionTestService connectionTestService;
     private final ObjectMapper objectMapper;
     private final MetadataConnectionOpener metadataConnectionOpener;
-    private final CryptoSupport cryptoSupport;
+    private final SecretProtector secretProtector;
+    private final DatasourceDefinitionValidator definitionValidator;
 
     @Autowired
     public DataSourceServiceImpl(DataSourceRepository dataSourceRepository,
                                     DialectSupport dialectSupport,
                                     ConnectionTestService connectionTestService,
                                     ObjectMapper objectMapper,
-                                    CryptoSupport cryptoSupport) {
-        this(dataSourceRepository, dialectSupport, connectionTestService, objectMapper, cryptoSupport,
-                DataSourceServiceImpl::openJdbcConnection);
+                                    SecretProtector secretProtector,
+                                    DatasourceDefinitionValidator definitionValidator) {
+        this(dataSourceRepository, dialectSupport, connectionTestService, objectMapper, secretProtector,
+                definitionValidator, DataSourceServiceImpl::openJdbcConnection);
     }
 
     DataSourceServiceImpl(DataSourceRepository dataSourceRepository,
                              DialectSupport dialectSupport,
                              ConnectionTestService connectionTestService,
                              ObjectMapper objectMapper,
-                             CryptoSupport cryptoSupport,
+                             SecretProtector secretProtector,
+                             DatasourceDefinitionValidator definitionValidator,
                              MetadataConnectionOpener metadataConnectionOpener) {
         this.dataSourceRepository = dataSourceRepository;
         this.dialectSupport = dialectSupport;
         this.connectionTestService = connectionTestService;
         this.objectMapper = objectMapper;
-        this.cryptoSupport = cryptoSupport;
+        this.secretProtector = secretProtector;
+        this.definitionValidator = definitionValidator;
         this.metadataConnectionOpener = metadataConnectionOpener;
     }
 
@@ -118,6 +124,7 @@ public class DataSourceServiceImpl implements DataSourceService {
         Map<String, Object> param = new java.util.HashMap<>(request.getParam() == null
                 ? java.util.Map.of()
                 : request.getParam());
+        definitionValidator.validateDefinition(request.getType(), param, true);
         stripMaskedSensitiveProperties(param);
         validateParam(param);
         protectPassword(param);
@@ -153,6 +160,11 @@ public class DataSourceServiceImpl implements DataSourceService {
     }
 
     @Override
+    public Optional<DataSourceDto> findByName(String name) {
+        return dataSourceRepository.findByName(name).map(this::toDto);
+    }
+
+    @Override
     public DataSourceDto update(Long id, DataSourceCreateRequest request) {
         DataSourceRecord record = require(id);
         dataSourceRepository.findByName(request.getName())
@@ -164,6 +176,7 @@ public class DataSourceServiceImpl implements DataSourceService {
         Map<String, Object> newParam = request.getParam() == null
                 ? new java.util.HashMap<>()
                 : new java.util.HashMap<>(request.getParam());
+        definitionValidator.validateDefinition(request.getType(), newParam, false);
         stripMaskedSensitiveProperties(newParam);
         validateParam(newParam);
         // 密码留空（null/空串）时保留旧密码，避免前端编辑时丢失
@@ -222,6 +235,13 @@ public class DataSourceServiceImpl implements DataSourceService {
         return withConnection(id, (dialect, connection, param) ->
                 queryColumns(connection, dialect.getMetadataQueryGenerator()
                         .getTableColumnsSQL(schemaOf(param, database), table)));
+    }
+
+    @Override
+    public List<String> getPrimaryKeys(Long id, String database, String table) {
+        return withConnection(id, (dialect, connection, param) ->
+                queryStringList(connection, dialect.getMetadataQueryGenerator()
+                        .getPrimaryKeysSQL(schemaOf(param, database), table)));
     }
 
     private <T> T withConnection(Long id, JdbcQuery<T> query) {
@@ -317,7 +337,7 @@ public class DataSourceServiceImpl implements DataSourceService {
             }
             int separator = pair.indexOf('=');
             String key = separator > 0 ? pair.substring(0, separator).trim() : pair.trim();
-            if (!key.isEmpty() && SENSITIVE_PROPERTY_KEYS.contains(key.toLowerCase())) {
+            if (!key.isEmpty() && DatasourceConnectionPolicy.isSensitivePropertyKey(key)) {
                 if (builder.length() > 0) {
                     builder.append('&');
                 }
@@ -350,7 +370,7 @@ public class DataSourceServiceImpl implements DataSourceService {
             int separator = pair.indexOf('=');
             String key = separator > 0 ? pair.substring(0, separator).trim() : pair.trim();
             String value = separator > 0 ? pair.substring(separator + 1).trim() : "";
-            if (!key.isEmpty() && SENSITIVE_PROPERTY_KEYS.contains(key.toLowerCase())
+            if (!key.isEmpty() && DatasourceConnectionPolicy.isSensitivePropertyKey(key)
                     && value.matches("\\*+")) {
                 continue; // 掩码占位：跳过，不写入
             }
@@ -373,80 +393,37 @@ public class DataSourceServiceImpl implements DataSourceService {
 
     @SuppressWarnings("unchecked")
     private Map<String, Object> fromParamJson(String json) {
+        Map<String, Object> param;
         try {
-            Map<String, Object> param = objectMapper.readValue(json, Map.class);
-            Object password = param.get("password");
-            if (password != null) {
-                // 解密为明文供连接使用；解密失败（换 key/损坏）时置 null，操作可继续
-                param.put("password", cryptoSupport.reveal(String.valueOf(password)));
-            }
-            return param;
+            param = objectMapper.readValue(json, Map.class);
         } catch (Exception exception) {
             throw new IllegalStateException("datasource param is corrupted");
         }
+        Object password = param.get("password");
+        if (password != null) {
+            // 解密为明文供连接使用；解密失败（换 key/损坏/历史明文）时置 null，
+            // 列表与详情可继续展示，连接时按缺密码处理。
+            try {
+                param.put("password", secretProtector.reveal(String.valueOf(password)));
+            } catch (Exception ignored) {
+                param.put("password", null);
+            }
+        }
+        return param;
     }
-
-    /** 名称类字段(host/database/sid/schema)允许的字符,防止非法值注入 JDBC URL。 */
-    private static final String NAME_CHARS_PATTERN = "[A-Za-z0-9_.$: \\-]{1,256}";
-
-    /** 连接参数串(properties)允许的字符,形如 key=value&key2=value2。 */
-    private static final String PROPERTIES_PATTERN = "[A-Za-z0-9_=.,&:\\- ]{0,1024}";
-
-    /** properties 中禁止携带的敏感 JDBC 连接键（身份/超时由系统接管）。 */
-    private static final java.util.Set<String> SENSITIVE_PROPERTY_KEYS =
-            java.util.Set.of("user", "password", "connecttimeout", "logintimeout");
 
     /**
      * 参数校验：host 必填且字符安全、database/sid/schema 字符安全、properties 字符安全、
      * port 为合法端口。防止非法值注入 JDBC URL（如 database 携带 ?/; 注入连接属性）。
      */
     private void validateParam(Map<String, Object> param) {
-        Object host = param.get("host");
-        if (host == null || String.valueOf(host).isBlank()) {
-            throw new IllegalArgumentException("param.host is required");
-        }
-        if (!String.valueOf(host).matches("[A-Za-z0-9._:\\-]{1,128}")) {
-            throw new IllegalArgumentException("param.host contains invalid characters");
-        }
-        validateNameField(param, "database");
-        validateNameField(param, "sid");
-        validateNameField(param, "schema");
-        Object port = param.get("port");
-        if (port != null) {
-            Integer portValue = integerValue(port);
-            if (portValue == null || portValue < 1 || portValue > 65535) {
-                throw new IllegalArgumentException("param.port is invalid");
-            }
-        }
-        Object properties = param.get("properties");
-        if (properties != null && !String.valueOf(properties).isBlank()) {
-            String propertiesText = String.valueOf(properties);
-            if (!propertiesText.matches(PROPERTIES_PATTERN)) {
-                throw new IllegalArgumentException("param.properties contains invalid characters");
-            }
-            for (String pair : propertiesText.split("&")) {
-                int separator = pair.indexOf('=');
-                String key = separator > 0 ? pair.substring(0, separator).trim() : pair.trim();
-                if (SENSITIVE_PROPERTY_KEYS.contains(key.toLowerCase())) {
-                    throw new IllegalArgumentException("param.properties contains sensitive key: " + key);
-                }
-            }
-        }
-    }
-
-    /** 可空的名称类字段校验(与 database 同一正则)。 */
-    private void validateNameField(Map<String, Object> param, String field) {
-        Object value = param.get(field);
-        if (value != null && !String.valueOf(value).isBlank()
-                && !String.valueOf(value).matches(NAME_CHARS_PATTERN)) {
-            throw new IllegalArgumentException("param." + field + " contains invalid characters");
-        }
+        DatasourceConnectionPolicy.validateParam(param);
     }
 
     private void protectPassword(Map<String, Object> param) {
         Object password = param.get("password");
         if (password != null && !String.valueOf(password).isBlank()) {
-            param.put("password", cryptoSupport.protect(String.valueOf(password)));
+            param.put("password", secretProtector.protect(String.valueOf(password)));
         } else {
             param.remove("password");
         }

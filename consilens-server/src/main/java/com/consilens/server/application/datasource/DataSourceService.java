@@ -9,6 +9,7 @@ import com.consilens.server.api.dto.PageResponse;
 import com.consilens.connector.api.DataSourceField;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface DataSourceService {
 
@@ -26,6 +27,9 @@ public interface DataSourceService {
 
     DataSourceDto get(Long id);
 
+    /** Exact-name lookup for agent dedup; the DTO never contains the password. */
+    Optional<DataSourceDto> findByName(String name);
+
     DataSourceDto update(Long id, DataSourceCreateRequest request);
 
     void delete(Long id);
@@ -39,4 +43,7 @@ public interface DataSourceService {
     List<String> getTables(Long id, String database);
 
     List<MetadataColumnDto> getColumns(Long id, String database, String table);
+
+    /** 主键列名（agent 建比对任务时用于 keys）。 */
+    List<String> getPrimaryKeys(Long id, String database, String table);
 }

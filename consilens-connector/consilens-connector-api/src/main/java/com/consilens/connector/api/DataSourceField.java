@@ -47,4 +47,10 @@ public class DataSourceField {
 
     /** Selectable options (label/value pairs) for select controls. */
     private List<Map<String, Object>> options;
+
+    /**
+     * Whether the field carries a credential (password/token/secret). Agent
+     * tooling must never place such values into model-visible arguments.
+     */
+    private boolean sensitive;
 }

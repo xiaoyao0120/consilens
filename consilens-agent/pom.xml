@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.consilens</groupId>
+        <artifactId>consilens</artifactId>
+        <version>0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>consilens-agent</artifactId>
+    <packaging>pom</packaging>
+    <name>consilens-agent</name>
+    <description>Consilens AI Agent - durable typed agent harness for datasource and compare job provisioning</description>
+
+    <modules>
+        <module>consilens-agent-api</module>
+        <module>consilens-agent-core</module>
+        <module>consilens-agent-eval</module>
+        <module>consilens-agent-model-openai-compatible</module>
+    </modules>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.consilens</groupId>
+                <artifactId>consilens-agent-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.consilens</groupId>
+                <artifactId>consilens-agent-core</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>

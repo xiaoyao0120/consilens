@@ -8,6 +8,12 @@ export const menuRoutes = [
     meta: { title: "工作台", icon: "grid-outline" },
   },
   {
+    path: "/ai",
+    name: "ai-assistant",
+    component: () => import("@/views/aiAssistant/index.vue"),
+    meta: { title: "AI 助手", icon: "sparkles-outline" },
+  },
+  {
     path: "/definitions",
     name: "definitions",
     component: () => import("@/views/definitions/index.vue"),

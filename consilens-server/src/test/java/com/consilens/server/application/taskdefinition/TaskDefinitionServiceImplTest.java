@@ -13,7 +13,7 @@ import com.consilens.server.domain.exception.ResourceNotFoundException;
 import com.consilens.server.domain.model.TaskDefinitionRecord;
 import com.consilens.server.domain.model.TaskInstanceRecord;
 import com.consilens.server.domain.model.DataSourceRecord;
-import com.consilens.server.support.crypto.CryptoSupport;
+import com.consilens.server.application.capability.config.TaskDefinitionConfigValidator;
 import com.consilens.server.domain.repository.DataSourceRepository;
 import com.consilens.server.domain.repository.TaskDefinitionRepository;
 import com.consilens.server.domain.repository.TaskRepository;
@@ -58,6 +58,7 @@ class DefaultTaskDefinitionServiceTest {
                 submissionService,
                 new ServerCompareConfigService(mock(com.consilens.server.application.artifact.ArtifactService.class),
                         new ObjectMapper()),
+                mock(TaskDefinitionConfigValidator.class),
                 new ObjectMapper());
     }
 

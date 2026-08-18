@@ -54,7 +54,7 @@ class RunTaskSubmissionServiceImplTest {
                 new ConsilensServerProperties(),
                 objectMapper,
                 new TransactionTemplate(transactionManager()),
-                new com.consilens.server.support.crypto.CryptoSupport(""));
+                com.consilens.server.support.crypto.SecretProtectorTestKeys.protector());
 
         TaskAcceptedResponse response = service.submit(request, "trace-test");
 
