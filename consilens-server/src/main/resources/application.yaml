@@ -10,7 +10,7 @@ mybatis-plus:
   type-enums-package: com.consilens.server.domain.enums
 
 server:
-  port: 18080
+  port: 16789
 
 management:
   endpoints:
