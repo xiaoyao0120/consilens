@@ -20,6 +20,7 @@ import com.consilens.connector.api.dataset.SegmentDigest;
 import com.consilens.connector.api.dataset.RecordScanner;
 import com.consilens.connector.api.dataset.SnapshotProvider;
 import com.consilens.connector.api.dataset.SplitPlanner;
+import com.consilens.connector.api.dataset.SplitOptions;
 
 import com.consilens.connector.api.model.ComparisonSpec;
 import com.consilens.connector.api.model.ConnectorNativeType;
@@ -43,6 +44,8 @@ import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import lombok.extern.slf4j.Slf4j;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
@@ -138,7 +141,7 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
 
     @Override
     public Optional<SplitPlanner> getSplitPlanner() {
-        return Optional.empty();
+        return Optional.of(this::planKeyRangeSplits);
     }
 
     @Override
@@ -754,6 +757,161 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
                 .addBaseFilter(segment.getFilter())
                 .addSplit(segment.getSplit(), keyColumns)
                 .build();
+    }
+
+    private List<SegmentSplit> planKeyRangeSplits(CompareSegment segment, SplitOptions options) {
+        validateRangeSplitResource();
+        String keyColumn = validateRangeSplitKey(segment);
+        String baseWhereClause = new WhereClauseBuilder(dialect)
+                .addBaseFilter(segment.getFilter())
+                .build();
+        TablePath tablePath = resolveTablePath(resource);
+
+        try (Connection jdbcConnection = openConnection()) {
+            long rowCount = queryCount(jdbcConnection, tablePath, baseWhereClause);
+            if (rowCount == 0) {
+                return List.of();
+            }
+            rejectNullKeys(jdbcConnection, tablePath, keyColumn, baseWhereClause);
+            BigDecimal minKey = queryKeyBound(jdbcConnection, tablePath, keyColumn, true, baseWhereClause);
+            BigDecimal maxKey = queryKeyBound(jdbcConnection, tablePath, keyColumn, false, baseWhereClause);
+            if (minKey == null || maxKey == null) {
+                throw new ConnectorException("JDBC range split key '" + keyColumn + "' must not contain null values");
+            }
+            return buildRangeSplits(minKey, maxKey, resolveSplitCount(options, rowCount));
+        } catch (SQLException e) {
+            throw new ConnectorException("Failed to plan JDBC key range splits for " + tablePath.getFullPath(), e);
+        }
+    }
+
+    private void validateRangeSplitResource() {
+        if (resource == null || resource.getType() == null || !"table".equalsIgnoreCase(resource.getType())) {
+            throw new ConnectorException("JDBC key range splits require a table resource");
+        }
+    }
+
+    private String validateRangeSplitKey(CompareSegment segment) {
+        if (segment == null || segment.getKeySpec() == null || segment.getKeySpec().getFields() == null
+                || segment.getKeySpec().getFields().size() != 1) {
+            throw new ConnectorException("JDBC key range splits require exactly one key column");
+        }
+        String keyColumn = segment.getKeySpec().getFields().get(0);
+        if (keyColumn == null || keyColumn.trim().isEmpty()) {
+            throw new ConnectorException("JDBC key range split column must not be blank");
+        }
+        FieldDescriptor field = findField(getSchema(), keyColumn);
+        if (field == null) {
+            throw new ConnectorException("JDBC key range split column is not present in the table schema: " + keyColumn);
+        }
+        DataType keyType = resolveDataType(resolveCanonicalType(field));
+        if (!isRangeSplitKeyType(keyType)) {
+            throw new ConnectorException("JDBC key range split requires an integer, DECIMAL, or NUMERIC key column: "
+                    + keyColumn);
+        }
+        return field.getName();
+    }
+
+    private boolean isRangeSplitKeyType(DataType keyType) {
+        return keyType == DataType.TINYINT
+                || keyType == DataType.SMALLINT
+                || keyType == DataType.INTEGER
+                || keyType == DataType.BIGINT
+                || keyType == DataType.DECIMAL
+                || keyType == DataType.NUMERIC;
+    }
+
+    private FieldDescriptor findField(SchemaDescriptor schemaDescriptor, String fieldName) {
+        if (schemaDescriptor == null || schemaDescriptor.getFields() == null) {
+            return null;
+        }
+        for (FieldDescriptor field : schemaDescriptor.getFields()) {
+            if (field != null && fieldName.equals(field.getName())) {
+                return field;
+            }
+        }
+        return null;
+    }
+
+    private long queryCount(Connection jdbcConnection, TablePath tablePath, String whereClause) throws SQLException {
+        String sql = dialect.getSqlQueryGenerator().getCountSQL(
+                tablePath.getSchema().orElse(null), tablePath.getTableName(), whereClause);
+        try (PreparedStatement statement = jdbcConnection.prepareStatement(sql);
+             ResultSet resultSet = statement.executeQuery()) {
+            return resultSet.next() ? resultSet.getLong(1) : 0L;
+        }
+    }
+
+    private void rejectNullKeys(Connection jdbcConnection,
+                                TablePath tablePath,
+                                String keyColumn,
+                                String baseWhereClause) throws SQLException {
+        String nullKeyPredicate = dialect.getCapabilityProvider().quote(keyColumn) + " IS NULL";
+        String whereClause = baseWhereClause == null
+                ? nullKeyPredicate
+                : baseWhereClause + " AND " + nullKeyPredicate;
+        if (queryCount(jdbcConnection, tablePath, whereClause) > 0) {
+            throw new ConnectorException("JDBC key range split key must not contain null values: " + keyColumn);
+        }
+    }
+
+    private BigDecimal queryKeyBound(Connection jdbcConnection,
+                                     TablePath tablePath,
+                                     String keyColumn,
+                                     boolean min,
+                                     String whereClause) throws SQLException {
+        String sql = dialect.getSqlQueryGenerator().getMinMaxKeySQL(
+                tablePath.getSchema().orElse(null), tablePath.getTableName(), List.of(keyColumn), min, whereClause);
+        try (PreparedStatement statement = jdbcConnection.prepareStatement(sql);
+             ResultSet resultSet = statement.executeQuery()) {
+            return resultSet.next() ? resultSet.getBigDecimal(1) : null;
+        }
+    }
+
+    private int resolveSplitCount(SplitOptions options, long rowCount) {
+        if (options == null) {
+            throw new ConnectorException("JDBC key range split options are required");
+        }
+        Integer expectedSplitCount = options.getExpectedSplitCount();
+        Long targetRowsPerSplit = options.getTargetRowsPerSplit();
+        if (expectedSplitCount != null && targetRowsPerSplit != null) {
+            throw new ConnectorException("Specify either expectedSplitCount or targetRowsPerSplit for JDBC key range splits");
+        }
+        if (expectedSplitCount != null) {
+            if (expectedSplitCount <= 0) {
+                throw new ConnectorException("expectedSplitCount must be greater than zero");
+            }
+            return (int) Math.min(expectedSplitCount.longValue(), rowCount);
+        }
+        if (targetRowsPerSplit == null || targetRowsPerSplit <= 0) {
+            throw new ConnectorException("targetRowsPerSplit must be greater than zero when expectedSplitCount is absent");
+        }
+        long splitCount = rowCount / targetRowsPerSplit
+                + (rowCount % targetRowsPerSplit == 0 ? 0 : 1);
+        if (splitCount > Integer.MAX_VALUE) {
+            throw new ConnectorException("Derived JDBC key range split count exceeds integer range");
+        }
+        return (int) splitCount;
+    }
+
+    private List<SegmentSplit> buildRangeSplits(BigDecimal minKey, BigDecimal maxKey, int splitCount) {
+        if (minKey.compareTo(maxKey) == 0 || splitCount == 1) {
+            return List.of(KeyRangeSplit.builder().startKey(List.of(minKey)).endKey(null).build());
+        }
+        int scale = Math.max(Math.max(minKey.scale(), maxKey.scale()), 0) + 16;
+        BigDecimal step = maxKey.subtract(minKey)
+                .divide(BigDecimal.valueOf(splitCount), scale, RoundingMode.UP);
+        List<SegmentSplit> splits = new ArrayList<>(splitCount);
+        BigDecimal start = minKey;
+        for (int index = 1; index < splitCount; index++) {
+            BigDecimal end = minKey.add(step.multiply(BigDecimal.valueOf(index)));
+            if (end.compareTo(maxKey) >= 0) {
+                break;
+            }
+            splits.add(KeyRangeSplit.builder().startKey(List.of(start)).endKey(List.of(end)).build());
+            start = end;
+        }
+        splits.add(KeyRangeSplit.builder().startKey(List.of(start)).endKey(null).build());
+        return List.copyOf(splits);
     }
 
     private String buildKeyRangePredicate(KeyRangeSplit split, List<String> keyColumns) {

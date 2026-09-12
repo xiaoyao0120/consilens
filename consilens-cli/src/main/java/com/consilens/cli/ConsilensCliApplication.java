@@ -3,6 +3,7 @@ package com.consilens.cli;
 import com.consilens.cli.command.AiCommand;
 import com.consilens.cli.command.ConfigCommand;
 import com.consilens.cli.command.DiffCommand;
+import com.consilens.cli.command.SubmitCommand;
 
 import lombok.extern.slf4j.Slf4j;
 import picocli.CommandLine;
@@ -17,6 +18,7 @@ import picocli.CommandLine.Command;
  *   <li>{@code diff} - Perform data comparison between databases</li>
  *   <li>{@code config} - Configuration management (generate, validate)</li>
  *   <li>{@code ai} - AI runtime, config generation, diagnosis and repair loop</li>
+ *   <li>{@code submit} - Submit a comparison to an execution backend</li>
  * </ul>
  */
 @Slf4j
@@ -28,7 +30,8 @@ import picocli.CommandLine.Command;
 	    subcommands = {
 	        DiffCommand.class,
 	        ConfigCommand.class,
-	        AiCommand.class
+	        AiCommand.class,
+	        SubmitCommand.class
 	    }
 	)
 public class ConsilensCliApplication implements Runnable {
