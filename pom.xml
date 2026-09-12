@@ -27,6 +27,12 @@
         <!-- CLI -->
         <picocli.version>4.7.5</picocli.version>
 
+        <!-- Hadoop -->
+        <hadoop.version>3.3.4</hadoop.version>
+
+        <!-- Kubernetes -->
+        <fabric8.kubernetes.version>6.12.0</fabric8.kubernetes.version>
+
         <!-- Monitoring -->
         <micrometer.version>1.12.0</micrometer.version>
 
@@ -65,6 +71,7 @@
         <module>consilens-common</module>
         <module>consilens-spi</module>
         <module>consilens-connector</module>
+        <module>consilens-cluster</module>
         <module>consilens-core</module>
         <module>consilens-sink</module>
         <module>consilens-performance</module>
@@ -286,6 +293,30 @@
             <dependency>
                 <groupId>com.consilens</groupId>
                 <artifactId>consilens-connector-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.consilens</groupId>
+                <artifactId>consilens-cluster-api</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.consilens</groupId>
+                <artifactId>consilens-cluster-runtime</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.consilens</groupId>
+                <artifactId>consilens-cluster-yarn</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>com.consilens</groupId>
+                <artifactId>consilens-cluster-kubernetes</artifactId>
                 <version>${project.version}</version>
             </dependency>
 

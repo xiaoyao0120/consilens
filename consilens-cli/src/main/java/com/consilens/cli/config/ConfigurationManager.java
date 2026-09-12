@@ -38,7 +38,7 @@ public class ConfigurationManager {
         this(System.getenv());
     }
 
-    ConfigurationManager(Map<String, String> environment) {
+    public ConfigurationManager(Map<String, String> environment) {
         this.mappers = createMappers();
         this.configCache = new ConcurrentHashMap<>();
         this.listeners = new ConcurrentHashMap<>();
