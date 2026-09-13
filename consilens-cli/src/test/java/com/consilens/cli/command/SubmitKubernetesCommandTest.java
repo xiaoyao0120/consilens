@@ -18,6 +18,7 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -52,7 +53,7 @@ class SubmitKubernetesCommandTest {
                 "--image", "registry.example/consilens:1.0.0",
                 "--descriptor-uri", "https://quality-configs.example/consilens/orders.json",
                 "--namespace", "data-quality", "--name", "consilens-orders",
-                "--memory", "2048", "--cpu-millis", "750", "--max-attempts", "3",
+                "--memory", "2g", "--cpu", "0.75", "--max-attempts", "3",
                 "--service-account", "consilens-runner", "--label", "team=quality",
                 "--label", "app.kubernetes.io/part-of=quality-platform",
                 "--secret-env", "SOURCE_PASSWORD=consilens-database/source-password");
@@ -115,7 +116,7 @@ class SubmitKubernetesCommandTest {
 
         assertEquals(1, exitCode);
         assertFalse(called.get());
-        assertTrue(error.toString(StandardCharsets.UTF_8).contains("Kubernetes submission failed."));
+        assertTrue(error.toString(StandardCharsets.UTF_8).contains("Kubernetes submission failed"));
     }
 
     @Test
@@ -170,7 +171,7 @@ class SubmitKubernetesCommandTest {
                 "--descriptor-uri", "https://quality-configs.example/orders.json");
 
         assertEquals(1, exitCode);
-        assertTrue(error.toString(StandardCharsets.UTF_8).contains("Kubernetes submission failed."));
+        assertTrue(error.toString(StandardCharsets.UTF_8).contains("Kubernetes submission failed"));
         assertFalse(error.toString(StandardCharsets.UTF_8).contains(password));
     }
 
@@ -188,9 +189,9 @@ class SubmitKubernetesCommandTest {
                 .clusterApplicationId("default/consilens-local")
                 .build()), new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "--image", "registry.example/consilens:1.0.0",
-                "--descriptor", descriptorFile.toString(),
                 "--namespace", "default",
-                "--name", "consilens-local");
+                "--name", "consilens-local",
+                descriptorFile.toString());
 
         assertEquals(0, exitCode);
         KubernetesSubmissionSpec spec = captured.get().getKubernetesSubmission();
@@ -201,9 +202,9 @@ class SubmitKubernetesCommandTest {
     }
 
     @Test
-    void shouldAcceptLocalRuntimeWithUploadEndpoint() throws Exception {
-        Path runtime = temporaryDirectory.resolve("consilens-runtime.jar");
-        Files.write(runtime, new byte[]{1, 2, 3});
+    void shouldPassEnvironmentAndPullSecretsAndSparkStyleResources() throws Exception {
+        Path descriptor = temporaryDirectory.resolve("compare.yaml");
+        Files.writeString(descriptor, configuration("${env.SOURCE_PASSWORD}"));
         AtomicReference<ClusterSubmitRequest> captured = new AtomicReference<>();
 
         int exitCode = commandLine(command(captured, () -> ClusterSubmission.builder()
@@ -212,18 +213,19 @@ class SubmitKubernetesCommandTest {
                 .clusterApplicationId("default/consilens-local")
                 .build()), new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "--image", "registry.example/consilens:1.0.0",
-                "--descriptor-uri", "https://configs.example/consilens/comparison.yaml",
-                "--local-runtime", runtime.toString(),
-                "--runtime-upload-url", "https://artifact.example/consilens",
-                "--runtime-download-url", "https://artifact.example/consilens",
-                "--init-image", "curlimages/curl:8.4.0");
+                "--memory", "2g", "--cpu", "0.75",
+                "--env", "JDBC_DRIVER=org.postgresql.Driver",
+                "--image-pull-secret", "registry-credentials",
+                descriptor.toString());
 
         assertEquals(0, exitCode);
         KubernetesSubmissionSpec spec = captured.get().getKubernetesSubmission();
-        assertEquals(runtime.toString(), spec.getLocalRuntimePath());
-        assertEquals("https://artifact.example/consilens", spec.getRuntimeUploadUrl());
-        assertEquals("https://artifact.example/consilens", spec.getRuntimeDownloadUrl());
-        assertEquals("curlimages/curl:8.4.0", spec.getInitContainerImage());
+        assertEquals(2048, spec.getMemoryMiB());
+        assertEquals(750, spec.getCpuMilli());
+        assertEquals("org.postgresql.Driver", spec.getEnvs().get("JDBC_DRIVER"));
+        assertEquals(List.of("registry-credentials"), spec.getImagePullSecrets());
+        // positional descriptor becomes ConfigMap data, like the flink conf ConfigMap
+        assertTrue(spec.getDescriptorData().containsKey("compare.yaml"));
     }
 
     @Test
@@ -239,7 +241,7 @@ class SubmitKubernetesCommandTest {
 
         int exitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "--image", "registry.example/consilens:1.0.0",
-                "--descriptor", descriptorFile.toString());
+                descriptorFile.toString());
 
         assertEquals(1, exitCode);
         assertFalse(factoryCalled.get());
@@ -258,7 +260,7 @@ class SubmitKubernetesCommandTest {
 
         int exitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "--image", "registry.example/consilens:1.0.0",
-                "--descriptor", descriptorFile.toString());
+                descriptorFile.toString());
 
         assertEquals(1, exitCode);
         assertFalse(factoryCalled.get());
@@ -277,9 +279,9 @@ class SubmitKubernetesCommandTest {
                 .clusterApplicationId("default/consilens-placeholder")
                 .build()), new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "--image", "registry.example/consilens:1.0.0",
-                "--descriptor", descriptorFile.toString(),
                 "--namespace", "default",
-                "--name", "consilens-placeholder");
+                "--name", "consilens-placeholder",
+                descriptorFile.toString());
 
         assertEquals(0, exitCode);
         assertTrue(captured.get().getKubernetesSubmission().getDescriptorData()
@@ -299,7 +301,7 @@ class SubmitKubernetesCommandTest {
 
         int exitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "--image", "registry.example/consilens:1.0.0",
-                "--descriptor", descriptorFile.toString());
+                descriptorFile.toString());
 
         assertEquals(1, exitCode);
         assertFalse(factoryCalled.get());
@@ -317,9 +319,9 @@ class SubmitKubernetesCommandTest {
                 .clusterApplicationId("default/consilens-compact")
                 .build()), new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "--image", "registry.example/consilens:1.0.0",
-                "--descriptor", descriptorFile.toString(),
                 "--namespace", "default",
-                "--name", "consilens-compact");
+                "--name", "consilens-compact",
+                descriptorFile.toString());
 
         assertEquals(0, exitCode);
         assertTrue(captured.get().getKubernetesSubmission().getDescriptorData()
@@ -339,7 +341,7 @@ class SubmitKubernetesCommandTest {
 
         int exitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "--image", "registry.example/consilens:1.0.0",
-                "--descriptor", descriptorFile.toString());
+                descriptorFile.toString());
 
         assertEquals(1, exitCode);
         assertFalse(factoryCalled.get());
@@ -358,30 +360,7 @@ class SubmitKubernetesCommandTest {
 
         int exitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "--image", "registry.example/consilens:1.0.0",
-                "--descriptor", descriptorFile.toString());
-
-        assertEquals(1, exitCode);
-        assertFalse(factoryCalled.get());
-    }
-
-    @Test
-    void shouldRejectUnsafeRuntimeFileNameBeforeSubmitterCall() throws Exception {
-        Path runtime = temporaryDirectory.resolve("consilens-runtime;rm.jar");
-        Files.write(runtime, new byte[]{1, 2, 3});
-        AtomicBoolean factoryCalled = new AtomicBoolean();
-        SubmitKubernetesCommand command = new SubmitKubernetesCommand(new ConfigurationManager(), new CompareRequestFactory(),
-                () -> {
-                    factoryCalled.set(true);
-                    return request -> ClusterSubmission.builder().build();
-                }, () -> "submission-kubernetes-7");
-
-        int exitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
-                "--image", "registry.example/consilens:1.0.0",
-                "--descriptor-uri", "https://configs.example/consilens/comparison.yaml",
-                "--local-runtime", runtime.toString(),
-                "--runtime-upload-url", "https://artifact.example/consilens",
-                "--runtime-download-url", "https://artifact.example/consilens",
-                "--init-image", "curlimages/curl:8.4.0");
+                descriptorFile.toString());
 
         assertEquals(1, exitCode);
         assertFalse(factoryCalled.get());

@@ -57,40 +57,22 @@ java -jar consilens-cli-0.1-SNAPSHOT.jar submit yarn \
 
 远端 URI 同样接受：`--runtime-archive hdfs://namenode/apps/consilens/runtime.zip`，descriptor/secret 也可用远端 URI 代替位置参数。`--runtime-archive` 既接受 runtime.zip（以 `ARCHIVE` 解压后按 `consilens-runtime/*` 启动），也接受单个 fat jar（以 `FILE` 本地化后按 `consilens-runtime.jar` 启动），提交器按扩展名自动选择。提交机的 `HADOOP_CONF_DIR` 会作为 LocalResource 打进 AM 容器（同 Spark 的 `__spark_conf__`），因此能提交 Spark 应用的环境无需任何额外配置即可提交 consilens；YARN 容器需由集群提供 Java 11 的 `JAVA_HOME`（如 `yarn.nodemanager.admin-env`）。
 
-Kubernetes 支持两种 descriptor 来源。使用本地文件时，提交器创建 ConfigMap 并挂载到 `/opt/consilens/descriptor`，Coordinator 从挂载路径读取：
+Kubernetes 提交遵循 spark-on-k8s / flink-on-k8s 的应用模型：runtime 打包在 `--image` 内（`/opt/consilens/runtime/`，由 `deploy/cluster/Dockerfile` 构建），没有本地 jar 上传通道；本地 descriptor 像位置参数传入并转为 ConfigMap（同 Flink 用 ConfigMap 承载配置的做法），远端 HTTP(S) URI 直接使用：
 
 ```bash
-java -jar consilens-cli/target/consilens-cli-0.1-SNAPSHOT.jar submit kubernetes \
+# 构建带 runtime 的镜像
+docker build -f deploy/cluster/Dockerfile -t registry.example/consilens-runtime:0.1.0 .
+
+# 提交（descriptor 位置参数，默认等待 Job 结束并输出最终状态）
+java -jar consilens-cli-0.1-SNAPSHOT.jar submit kubernetes \
   --image registry.example/consilens-runtime:0.1.0 \
-  --descriptor comparison.yaml \
+  --memory 1g --cpu 0.5 \
+  --env JDBC_DRIVER=org.postgresql.Driver \
+  --image-pull-secret registry-credentials \
   --secret-env SOURCE_PASSWORD=consilens-database/source-password \
-  --secret-env TARGET_PASSWORD=consilens-database/target-password
+  comparison.yaml
 ```
 
-也可使用容器可访问的 HTTP(S) URI：
-
-```bash
-java -jar consilens-cli/target/consilens-cli-0.1-SNAPSHOT.jar submit kubernetes \
-  --image registry.example/consilens-runtime:0.1.0 \
-  --descriptor-uri https://config.example/consilens/comparison.yaml \
-  --secret-env SOURCE_PASSWORD=consilens-database/source-password \
-  --secret-env TARGET_PASSWORD=consilens-database/target-password
-```
-
-如果 runtime fat jar 尚未内置到镜像，可让提交器通过 HTTP PUT 上传，再由 initContainer 下载到 Pod 内的 `/opt/consilens/runtime`。Kubernetes 本地 runtime 必须是单个 fat jar，不支持这里传 zip（zip 需要先解压，initContainer 不负责解压）：
-
-```bash
-java -jar consilens-cli/target/consilens-cli-0.1-SNAPSHOT.jar submit kubernetes \
-  --image registry.example/consilens-coordinator:0.1.0 \
-  --local-runtime consilens-cluster/consilens-cluster-application/target/consilens-cluster-application-0.1-SNAPSHOT.jar \
-  --runtime-upload-url https://artifact.example/consilens/upload \
-  --runtime-download-url https://artifact.example/consilens/download \
-  --init-image curlimages/curl:8.4.0 \
-  --descriptor comparison.yaml
-```
-
-`runtime-upload-url` 是提交机可写的 HTTP(S) 根目录，`runtime-download-url` 是 Pod 可读的同一共享存储根目录。两者指向同一存储服务时最直接，但也允许由网关转发，业务上必须保证上传后的文件能被 initContainer 下载到。
-
-coordinator 类（`com.consilens.cluster.application.ClusterComparisonCoordinator`）是内部实现细节，不作为 CLI 选项暴露，由 runtime 自带。YARN 模式由固定的 `ConsilensApplicationMaster` 包装类负责 RM 注册、心跳与最终状态上报（与 Spark 的 `ApplicationMaster` 包装用户 driver 相同的模型），coordinator 本身是平台无关的普通 main。staging 布局为 `<stagingDir>/<submissionId>/`（同 Spark `spark.yarn.stagingDir`），AM 执行成功后自动清理该目录。首期执行模型为单个 coordinator process，不包含分片 worker、结果持久化或状态查询。
+资源参数沿用生态格式：`--memory 1g`（spark 内存格式）、`--cpu 0.5`（核心数）。普通环境变量用 `--env KEY=value`，Secret 引用用 `--secret-env ENVIRONMENT=secret-name/secret-key`（容器内以 secretKeyRef 注入）。默认值可通过 `--properties-file`/`--conf` 以 `consilens.kubernetes.*` 键集中配置（image、namespace、name、memory、cpu、serviceAccount、imagePullPolicy、submit.waitAppCompletion），CLI 选项优先。客户端默认阻塞等待 Job 完成并输出 finalStatus（`consilens.kubernetes.submit.waitAppCompletion=false` 关闭），与 spark-submit 的等待语义一致。Job 使用 `backoffLimit=maxAttempts-1` 表达重试。
 
 `-c/--config` 为兼容已有脚本保留的可选参数；YARN/Kubernetes 提交不会读取它。运行时读取的配置来自 `--descriptor-uri`（远端）或 `--descriptor`（本地 ConfigMap/挂载）指向的 descriptor。
