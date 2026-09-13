@@ -19,9 +19,13 @@ import java.util.Objects;
 import java.util.Properties;
 
 /**
- * Process entry point used by a YARN application or Kubernetes Job. Credentials
- * are resolved from the application process environment while loading the
- * descriptor, so they never pass through the cluster submission envelope.
+ * Process entry point used by a YARN ApplicationMaster or Kubernetes Job. It is
+ * a plain main class and knows nothing about the platform that launched it: the
+ * YARN {@link ConsilensApplicationMaster} wrapper handles RM registration and
+ * final-status reporting, exactly as Spark's ApplicationMaster wraps the user's
+ * driver. Credentials are resolved from the application process environment
+ * while loading the descriptor, so they never pass through the cluster
+ * submission envelope.
  */
 public class ClusterComparisonCoordinator {
 
@@ -32,12 +36,10 @@ public class ClusterComparisonCoordinator {
     private final ObjectMapper objectMapper;
     private final PrintStream output;
     private final PrintStream error;
-    private final ApplicationStatusReporter statusReporter;
 
     public ClusterComparisonCoordinator() {
         this(new UriComparisonDescriptorOpener(), new ConfigurationManager(), new CompareRequestFactory(),
-                new DefaultCompareRuntime(), new ObjectMapper(), System.out, System.err,
-                ApplicationStatusReporter.fromEnvironment(System.getenv()));
+                new DefaultCompareRuntime(), new ObjectMapper(), System.out, System.err);
     }
 
     ClusterComparisonCoordinator(ComparisonDescriptorOpener descriptorOpener,
@@ -47,18 +49,6 @@ public class ClusterComparisonCoordinator {
                                  ObjectMapper objectMapper,
                                  PrintStream output,
                                  PrintStream error) {
-        this(descriptorOpener, configurationManager, compareRequestFactory, compareRuntime,
-                objectMapper, output, error, new NoopStatusReporter());
-    }
-
-    ClusterComparisonCoordinator(ComparisonDescriptorOpener descriptorOpener,
-                                 ConfigurationManager configurationManager,
-                                 CompareRequestFactory compareRequestFactory,
-                                 CompareRuntime compareRuntime,
-                                 ObjectMapper objectMapper,
-                                 PrintStream output,
-                                 PrintStream error,
-                                 ApplicationStatusReporter statusReporter) {
         this.descriptorOpener = Objects.requireNonNull(descriptorOpener, "descriptorOpener");
         this.configurationManager = Objects.requireNonNull(configurationManager, "configurationManager");
         this.compareRequestFactory = Objects.requireNonNull(compareRequestFactory, "compareRequestFactory");
@@ -66,7 +56,6 @@ public class ClusterComparisonCoordinator {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.output = Objects.requireNonNull(output, "output");
         this.error = Objects.requireNonNull(error, "error");
-        this.statusReporter = Objects.requireNonNull(statusReporter, "statusReporter");
     }
 
     public static void main(String[] args) {
@@ -76,16 +65,10 @@ public class ClusterComparisonCoordinator {
         }
     }
 
-    int run(String[] args) {
+    public int run(String[] args) {
         if (args == null || (args.length != 2 && args.length != 3)) {
             error.println("Cluster comparison failed.");
             return 2;
-        }
-        try {
-            statusReporter.start();
-        } catch (Exception e) {
-            error.println("Cluster comparison failed: unable to register with the ResourceManager.");
-            return 1;
         }
         try {
             ComparisonDescriptor descriptor = descriptorOpener.open(args[1]);
@@ -95,20 +78,11 @@ public class ClusterComparisonCoordinator {
             }
             CompareRequest request = compareRequestFactory.create(configuration);
             DiffResult result = compareRuntime.execute(request);
-            String summaryJson = objectMapper.writeValueAsString(summary(args[0], result));
-            output.println(summaryJson);
-            statusReporter.reportSucceeded(summaryJson);
+            output.println(objectMapper.writeValueAsString(summary(args[0], result)));
             return 0;
         } catch (Exception e) {
             error.println("Cluster comparison failed.");
-            statusReporter.reportFailed("Cluster comparison failed: " + e.getClass().getName());
             return 1;
-        } finally {
-            try {
-                statusReporter.close();
-            } catch (Exception ignored) {
-                // The attempt outcome is already reported; reporter cleanup is best effort.
-            }
         }
     }
 

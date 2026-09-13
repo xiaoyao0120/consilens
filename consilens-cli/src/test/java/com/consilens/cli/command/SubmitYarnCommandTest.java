@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
@@ -51,9 +52,9 @@ class SubmitYarnCommandTest {
         int exitCode = commandLine.execute("-c", configurationFile.toString(),
                 "--runtime-archive", "hdfs://namenode/apps/consilens/runtime.zip",
                 "--descriptor-uri", "hdfs://namenode/apps/consilens/submission.json",
-                "--am-class", "com.consilens.am.ConsilensApplicationMaster",
                 "--queue", "data-quality", "--name", "orders-compare",
-                "--am-memory", "2048", "--am-vcores", "2", "--max-attempts", "3");
+                "--am-memory", "2g", "--am-vcores", "2",
+                "--conf", "consilens.yarn.maxAppAttempts=3");
 
         ClusterSubmitRequest request = captured.get();
         assertEquals(0, exitCode);
@@ -64,6 +65,7 @@ class SubmitYarnCommandTest {
         assertEquals("orders-compare", request.getYarnSubmission().getApplicationName());
         assertEquals(2048, request.getYarnSubmission().getAmMemoryMb());
         assertEquals(2, request.getYarnSubmission().getAmVCores());
+        assertEquals(3, request.getExecution().getMaxAttempts());
         assertFalse(output.toString(StandardCharsets.UTF_8).contains(password));
         assertFalse(error.toString(StandardCharsets.UTF_8).contains(password));
         assertFalse(serialized(request).contains(password));
@@ -90,7 +92,7 @@ class SubmitYarnCommandTest {
     }
 
     @Test
-    void shouldRejectMissingRequiredYarnOptionsBeforeSubmitterCall() throws Exception {
+    void shouldRejectMissingDescriptorBeforeSubmitterCall() throws Exception {
         Path configurationFile = temporaryDirectory.resolve("compare.yaml");
         Files.writeString(configurationFile, configuration("password"));
         AtomicReference<Boolean> called = new AtomicReference<>(false);
@@ -104,9 +106,32 @@ class SubmitYarnCommandTest {
         int exitCode = commandLine(command, new ByteArrayOutputStream(), error)
                 .execute("-c", configurationFile.toString(), "--runtime-archive", "hdfs://namenode/runtime.zip");
 
-        assertEquals(2, exitCode);
+        assertEquals(1, exitCode);
         assertFalse(called.get());
-        assertTrue(error.toString(StandardCharsets.UTF_8).contains("Missing required option"));
+        assertTrue(error.toString(StandardCharsets.UTF_8).contains("descriptor"));
+    }
+
+    @Test
+    void shouldRejectInvalidMemoryFormatBeforeSubmitterCall() throws Exception {
+        Path configurationFile = temporaryDirectory.resolve("compare.yaml");
+        Files.writeString(configurationFile, configuration("password"));
+        AtomicReference<Boolean> called = new AtomicReference<>(false);
+        SubmitYarnCommand command = new SubmitYarnCommand(new ConfigurationManager(), new CompareRequestFactory(),
+                () -> request -> {
+                    called.set(true);
+                    return ClusterSubmission.builder().build();
+                }, () -> "submission-yarn-2");
+        ByteArrayOutputStream error = new ByteArrayOutputStream();
+
+        int exitCode = commandLine(command, new ByteArrayOutputStream(), error).execute(
+                "-c", configurationFile.toString(),
+                "--am-memory", "2xg",
+                "--runtime-archive", "hdfs://namenode/runtime.zip",
+                "--descriptor-uri", "hdfs://namenode/submission.json");
+
+        assertEquals(1, exitCode);
+        assertFalse(called.get());
+        assertTrue(error.toString(StandardCharsets.UTF_8).contains("invalid memory format"));
     }
 
     @Test
@@ -123,8 +148,7 @@ class SubmitYarnCommandTest {
         int exitCode = commandLine(command, new ByteArrayOutputStream(), error).execute(
                 "-c", configurationFile.toString(),
                 "--runtime-archive", "hdfs://namenode/runtime.zip",
-                "--descriptor-uri", "hdfs://namenode/submission.json",
-                "--am-class", "com.consilens.am.ConsilensApplicationMaster");
+                "--descriptor-uri", "hdfs://namenode/submission.json");
 
         assertEquals(1, exitCode);
         assertTrue(error.toString(StandardCharsets.UTF_8).contains("YARN submission failed"));
@@ -146,12 +170,11 @@ class SubmitYarnCommandTest {
         int invalidUriExitCode = commandLine(command, new ByteArrayOutputStream(), error).execute(
                 "-c", configurationFile.toString(),
                 "--runtime-archive", "hdfs://namenode/runtime.zip",
-                "--descriptor-uri", "hdfs://namenode/submission.json?token=secret",
-                "--am-class", "com.consilens.am.ConsilensApplicationMaster");
+                "--descriptor-uri", "hdfs://namenode/submission.json?token=secret");
 
         assertEquals(1, invalidUriExitCode);
         assertFalse(factoryCalled.get());
-        assertTrue(error.toString(StandardCharsets.UTF_8).contains("YARN submission failed."));
+        assertTrue(error.toString(StandardCharsets.UTF_8).contains("YARN submission failed"));
 
         SubmitYarnCommand attemptsCommand = new SubmitYarnCommand(new ConfigurationManager(), new CompareRequestFactory(),
                 () -> {
@@ -163,8 +186,7 @@ class SubmitYarnCommandTest {
                 "-c", configurationFile.toString(),
                 "--runtime-archive", "hdfs://namenode/runtime.zip",
                 "--descriptor-uri", "hdfs://namenode/submission.json",
-                "--am-class", "com.consilens.am.ConsilensApplicationMaster",
-                "--max-attempts", "0");
+                "--conf", "consilens.yarn.maxAppAttempts=0");
 
         assertEquals(1, invalidAttemptsExitCode);
         assertFalse(factoryCalled.get());
@@ -184,20 +206,21 @@ class SubmitYarnCommandTest {
         int exitCode = commandLine(command, new ByteArrayOutputStream(), error).execute(
                 "-c", configurationFile.toString(),
                 "--runtime-archive", "hdfs://namenode/runtime.zip",
-                "--descriptor-uri", "hdfs://namenode/submission.json",
-                "--am-class", "com.consilens.am.ConsilensApplicationMaster");
+                "--descriptor-uri", "hdfs://namenode/submission.json");
 
         assertEquals(1, exitCode);
-        assertTrue(error.toString(StandardCharsets.UTF_8).contains("YARN submission failed."));
+        assertTrue(error.toString(StandardCharsets.UTF_8).contains("YARN submission failed"));
         assertFalse(error.toString(StandardCharsets.UTF_8).contains(password));
     }
 
     @Test
-    void shouldAcceptLocalRuntimeAndDescriptorWithStagingUri() throws Exception {
+    void shouldAcceptPositionalDescriptorAndConfStagingLikeSparkSubmit() throws Exception {
         Path runtime = temporaryDirectory.resolve("consilens-runtime.zip");
         Path descriptor = temporaryDirectory.resolve("compare.yaml");
+        Path secrets = temporaryDirectory.resolve("secrets.properties");
         Files.write(runtime, new byte[]{1, 2, 3});
         Files.writeString(descriptor, configuration("${env.SOURCE_PASSWORD}"));
+        Files.writeString(secrets, "SOURCE_PASSWORD=value\n");
         AtomicReference<ClusterSubmitRequest> captured = new AtomicReference<>();
 
         int exitCode = commandLine(command(captured, () -> ClusterSubmission.builder()
@@ -206,14 +229,71 @@ class SubmitYarnCommandTest {
                 .clusterApplicationId("application_42_0001")
                 .build()), new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "--runtime-archive", runtime.toString(),
-                "--descriptor-uri", descriptor.toString(),
-                "--staging-uri", "hdfs://namenode/apps/staging/consilens");
+                "--conf", "consilens.yarn.stagingDir=hdfs://namenode/apps/staging/consilens",
+                descriptor.toString(), secrets.toString());
 
         assertEquals(0, exitCode);
         YarnSubmissionSpec spec = captured.get().getYarnSubmission();
         assertEquals(runtime.toString(), spec.getRuntimeArchiveUri());
         assertEquals(descriptor.toString(), spec.getDescriptorUri());
+        assertEquals(secrets.toString(), spec.getSecretEnvironmentUri());
         assertEquals("hdfs://namenode/apps/staging/consilens", spec.getStagingUri());
+        // defaults: --am-memory 1g, --am-vcores 1
+        assertEquals(1024, spec.getAmMemoryMb());
+        assertEquals(1, spec.getAmVCores());
+    }
+
+    @Test
+    void shouldApplyPropertiesFileDefaultsUnderCliFlags() throws Exception {
+        Path propertiesFile = temporaryDirectory.resolve("consilens-defaults.conf");
+        Files.writeString(propertiesFile, "consilens.yarn.queue=data-quality\n"
+                + "consilens.yarn.amMemory=512m\n"
+                + "consilens.yarn.tags=consilens,nightly\n");
+        Path descriptor = temporaryDirectory.resolve("compare.yaml");
+        Files.writeString(descriptor, configuration("password"));
+        AtomicReference<ClusterSubmitRequest> captured = new AtomicReference<>();
+
+        int exitCode = commandLine(command(captured, () -> ClusterSubmission.builder()
+                .submissionId("submission-yarn-1")
+                .executionMode(ExecutionMode.YARN)
+                .clusterApplicationId("application_42_0001")
+                .build()), new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
+                "--properties-file", propertiesFile.toString(),
+                "--queue", "adhoc",
+                "--runtime-archive", "hdfs://namenode/apps/consilens/runtime.zip",
+                descriptor.toString());
+
+        assertEquals(0, exitCode);
+        YarnSubmissionSpec spec = captured.get().getYarnSubmission();
+        // CLI flag wins over the properties file, properties file wins over defaults.
+        assertEquals("adhoc", spec.getQueue());
+        assertEquals(512, spec.getAmMemoryMb());
+        assertEquals(2, spec.getTags().size());
+        assertTrue(spec.getTags().contains("nightly"));
+    }
+
+    @Test
+    void shouldPassFilesAndJarsThroughToSubmission() throws Exception {
+        Path descriptor = temporaryDirectory.resolve("compare.yaml");
+        Files.writeString(descriptor, configuration("password"));
+        Path extraJar = temporaryDirectory.resolve("driver.jar");
+        Files.write(extraJar, new byte[]{1});
+        AtomicReference<ClusterSubmitRequest> captured = new AtomicReference<>();
+
+        int exitCode = commandLine(command(captured, () -> ClusterSubmission.builder()
+                .submissionId("submission-yarn-1")
+                .executionMode(ExecutionMode.YARN)
+                .clusterApplicationId("application_42_0001")
+                .build()), new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
+                "--runtime-archive", "hdfs://namenode/apps/consilens/runtime.zip",
+                "--files", "hdfs://namenode/conf/extra.json#settings.json",
+                "--jars", extraJar.toString(),
+                descriptor.toString());
+
+        assertEquals(0, exitCode);
+        YarnSubmissionSpec spec = captured.get().getYarnSubmission();
+        assertEquals(List.of("hdfs://namenode/conf/extra.json#settings.json"), spec.getFiles());
+        assertEquals(List.of(extraJar.toString()), spec.getJars());
     }
 
     private SubmitYarnCommand command(AtomicReference<ClusterSubmitRequest> captured,

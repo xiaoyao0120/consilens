@@ -32,8 +32,8 @@ class SubmitCommandTest {
 
         int exitCode = commandLine.execute("yarn");
 
-        assertEquals(2, exitCode);
-        assertTrue(error.toString(StandardCharsets.UTF_8).contains("Missing required option"));
+        assertEquals(1, exitCode);
+        assertTrue(error.toString(StandardCharsets.UTF_8).contains("descriptor"));
     }
 
     @Test

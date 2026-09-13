@@ -14,5 +14,7 @@ public interface ServerNodeService extends IService<ServerNodeEntity> {
 
     List<ServerNodeEntity> listAliveSince(LocalDateTime cutoff);
 
+    int deleteStaleBefore(LocalDateTime cutoff);
+
     ServerNodeEntity saveOrUpdateByNodeKey(ServerNodeEntity entity);
 }

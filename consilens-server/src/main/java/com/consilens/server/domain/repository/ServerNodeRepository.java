@@ -14,5 +14,7 @@ public interface ServerNodeRepository {
 
     List<ServerNodeRecord> findAliveSince(Instant cutoff);
 
+    int deleteStaleNodesBefore(Instant cutoff);
+
     ServerNodeRecord save(ServerNodeRecord serverNodeRecord);
 }

@@ -77,10 +77,6 @@ public class SubmitKubernetesCommand implements Callable<Integer> {
             description = "Init container image that downloads --local-runtime into the Job pod")
     private String initContainerImage;
 
-    @Option(names = "--coordinator-class", defaultValue = "com.consilens.cluster.application.ClusterComparisonCoordinator",
-            description = "Coordinator main class supplied by the runtime image")
-    private String coordinatorMainClass;
-
     @Option(names = "--namespace", defaultValue = "default", description = "Kubernetes namespace (default: default)")
     private String namespace;
 
@@ -160,7 +156,6 @@ public class SubmitKubernetesCommand implements Callable<Integer> {
                     .runtimeUploadUrl(runtimeUploadUrl)
                     .runtimeDownloadUrl(runtimeDownloadUrl)
                     .initContainerImage(initContainerImage)
-                    .coordinatorMainClass(coordinatorMainClass)
                     .memoryMiB(memoryMiB)
                     .cpuMilli(cpuMilli)
                     .serviceAccountName(serviceAccountName)

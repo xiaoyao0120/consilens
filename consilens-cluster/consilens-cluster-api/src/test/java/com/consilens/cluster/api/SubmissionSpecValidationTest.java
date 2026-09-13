@@ -10,7 +10,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class SubmissionSpecValidationTest {
 
     @Test
-    void shouldRequireStagingUriForLocalYarnArtifacts() {
+    void shouldAllowLocalYarnArtifactsWithoutStagingUri() {
+        // The submitter falls back to the user's HDFS home staging directory,
+        // mirroring spark-submit's default spark.yarn.stagingDir; a missing
+        // stagingUri is therefore not a spec-level validation error.
         YarnSubmissionSpec spec = YarnSubmissionSpec.builder()
                 .runtimeArchiveUri("runtime.zip")
                 .descriptorUri("comparison.yaml")
@@ -20,7 +23,7 @@ class SubmissionSpecValidationTest {
                 .amVCores(1)
                 .build();
 
-        assertThrows(IllegalArgumentException.class, spec::validate);
+        spec.validate();
     }
 
     @Test

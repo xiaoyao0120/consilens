@@ -10,11 +10,14 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 
+import lombok.extern.slf4j.Slf4j;
+
 import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
 import java.time.Instant;
 import java.util.Optional;
 
+@Slf4j
 @Component
 public class LocalServerNodeLifecycle {
 
@@ -32,7 +35,17 @@ public class LocalServerNodeLifecycle {
 
     @EventListener(ApplicationReadyEvent.class)
     public void register() {
+        deleteStaleNodes();
         heartbeat();
+    }
+
+    @Scheduled(fixedDelayString = "#{${consilens.server.node.heartbeat-interval-seconds:2} * 1000 * 5}")
+    public void deleteStaleNodes() {
+        Instant cutoff = Instant.now().minusSeconds(properties.getNode().getExpireSeconds());
+        int deleted = serverNodeRepository.deleteStaleNodesBefore(cutoff);
+        if (deleted > 0) {
+            log.info("Deleted {} stale server node(s) with no heartbeat since {}", deleted, cutoff);
+        }
     }
 
     @Scheduled(fixedDelayString = "#{${consilens.server.node.heartbeat-interval-seconds:2} * 1000}")

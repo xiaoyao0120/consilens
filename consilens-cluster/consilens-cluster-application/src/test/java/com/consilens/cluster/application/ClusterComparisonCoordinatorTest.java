@@ -19,7 +19,6 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ClusterComparisonCoordinatorTest {
@@ -88,76 +87,6 @@ class ClusterComparisonCoordinatorTest {
 
         assertEquals(2, exitCode);
         assertEquals("Cluster comparison failed.\n", error.toString(StandardCharsets.UTF_8));
-    }
-
-    @Test
-    void shouldReportSuccessToStatusReporterWithPrintedSummary() throws Exception {
-        Path descriptor = temporaryDirectory.resolve("comparison.yaml");
-        Files.writeString(descriptor, configuration("password"));
-        RecordingStatusReporter reporter = new RecordingStatusReporter();
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        ClusterComparisonCoordinator coordinator = new ClusterComparisonCoordinator(
-                new UriComparisonDescriptorOpener(), new ConfigurationManager(), new CompareRequestFactory(),
-                request -> DiffResult.of(List.of(), TablePath.of("source_orders"), TablePath.of("target_orders")),
-                new ObjectMapper(), new PrintStream(output), new PrintStream(new ByteArrayOutputStream()),
-                reporter);
-
-        int exitCode = coordinator.run(new String[]{"submission-42", descriptor.toString()});
-
-        assertEquals(0, exitCode);
-        assertTrue(reporter.started);
-        assertNull(reporter.failure);
-        assertTrue(reporter.success.contains("submission-42"));
-        assertEquals(output.toString(StandardCharsets.UTF_8).trim(), reporter.success);
-    }
-
-    @Test
-    void shouldReportFailureToStatusReporterWithoutLeakingCredentials() throws Exception {
-        Path descriptor = temporaryDirectory.resolve("comparison.yaml");
-        Files.writeString(descriptor, configuration("secret-password"));
-        RecordingStatusReporter reporter = new RecordingStatusReporter();
-        ClusterComparisonCoordinator coordinator = new ClusterComparisonCoordinator(
-                new RecordingUriOpener(), new ConfigurationManager(), new CompareRequestFactory(),
-                request -> DiffResult.of(List.of(), TablePath.of("source_orders"), TablePath.of("target_orders")),
-                new ObjectMapper(), new PrintStream(new ByteArrayOutputStream()),
-                new PrintStream(new ByteArrayOutputStream()), reporter);
-
-        int exitCode = coordinator.run(new String[]{"submission-42", descriptor.toString()});
-
-        assertEquals(1, exitCode);
-        assertTrue(reporter.started);
-        assertNull(reporter.success);
-        assertTrue(reporter.failure.startsWith("Cluster comparison failed: "));
-        assertFalse(reporter.failure.contains("secret-password"));
-        assertFalse(reporter.failure.contains(descriptor.toString()));
-    }
-
-    private static final class RecordingUriOpener implements ComparisonDescriptorOpener {
-        @Override
-        public ComparisonDescriptor open(String reference) {
-            throw new IllegalArgumentException("rejected: " + reference.getClass().getSimpleName());
-        }
-    }
-
-    private static final class RecordingStatusReporter implements ApplicationStatusReporter {
-        private boolean started;
-        private String success;
-        private String failure;
-
-        @Override
-        public void start() {
-            started = true;
-        }
-
-        @Override
-        public void reportSucceeded(String summary) {
-            success = summary;
-        }
-
-        @Override
-        public void reportFailed(String diagnostics) {
-            failure = diagnostics;
-        }
     }
 
     private ClusterComparisonCoordinator coordinator(AtomicReference<CompareRequest> captured,
