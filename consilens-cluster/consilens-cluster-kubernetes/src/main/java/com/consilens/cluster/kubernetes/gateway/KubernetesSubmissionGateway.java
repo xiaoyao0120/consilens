@@ -12,6 +12,15 @@ public interface KubernetesSubmissionGateway extends AutoCloseable {
 
     ConfigMap createConfigMap(ConfigMap configMap);
 
+    /**
+     * Terminal completion status of the Job ({@code Complete} or
+     * {@code Failed}), or empty while the Job is still running or unknown,
+     * so the client can block like spark-submit on Kubernetes does.
+     */
+    default java.util.Optional<String> jobCompletionStatus(String namespace, String jobName) {
+        return java.util.Optional.empty();
+    }
+
     @Override
     void close();
 }

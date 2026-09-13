@@ -3,6 +3,7 @@ package com.consilens.cluster.api;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -27,30 +28,17 @@ class SubmissionSpecValidationTest {
     }
 
     @Test
-    void shouldRequireEveryLocalRuntimeFieldForKubernetes() {
-        KubernetesSubmissionSpec spec = KubernetesSubmissionSpec.builder()
-                .namespace("default")
-                .jobName("consilens")
-                .image("registry.example/consilens:1.0.0")
-                .descriptorUri("https://configs.example/consilens/comparison.yaml")
-                .localRuntimePath("runtime.jar")
-                .runtimeUploadUrl("https://artifact.example/consilens")
-                .runtimeDownloadUrl("https://artifact.example/consilens")
-                .coordinatorMainClass("com.consilens.cluster.application.ClusterComparisonCoordinator")
-                .memoryMiB(1024)
-                .cpuMilli(500)
-                .build();
+    void shouldRejectInvalidKubernetesEnvironmentNames() {
+        KubernetesSubmissionSpec spec = validKubernetesSpec();
+        spec.setEnvs(Map.of("invalid-env-name", "value"));
 
         assertThrows(IllegalArgumentException.class, spec::validate);
     }
 
     @Test
-    void shouldRejectUnsafeKubernetesRuntimeFileName() {
+    void shouldRejectInvalidImagePullSecretNames() {
         KubernetesSubmissionSpec spec = validKubernetesSpec();
-        spec.setLocalRuntimePath("consilens-runtime-$(id).jar");
-        spec.setRuntimeUploadUrl("https://artifact.example/consilens");
-        spec.setRuntimeDownloadUrl("https://artifact.example/consilens");
-        spec.setInitContainerImage("curlimages/curl:8.4.0");
+        spec.setImagePullSecrets(List.of("Not_A_Dns_Label"));
 
         assertThrows(IllegalArgumentException.class, spec::validate);
     }

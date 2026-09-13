@@ -39,6 +39,23 @@ public class Fabric8KubernetesSubmissionGateway implements KubernetesSubmissionG
     }
 
     @Override
+    public java.util.Optional<String> jobCompletionStatus(String namespace, String jobName) {
+        Job job = client.batch().v1().jobs()
+                .inNamespace(namespace)
+                .withName(jobName)
+                .get();
+        if (job == null || job.getStatus() == null || job.getStatus().getConditions() == null) {
+            return java.util.Optional.empty();
+        }
+        return job.getStatus().getConditions().stream()
+                .filter(condition -> Boolean.parseBoolean(condition.getStatus()))
+                .filter(condition -> "Complete".equals(condition.getType())
+                        || "Failed".equals(condition.getType()))
+                .map(io.fabric8.kubernetes.api.model.batch.v1.JobCondition::getType)
+                .findFirst();
+    }
+
+    @Override
     public void close() {
         client.close();
     }

@@ -12,7 +12,9 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.net.URI;
 import java.util.Iterator;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -43,7 +45,6 @@ public class KubernetesSubmissionSpec implements Serializable {
     private static final Pattern DESCRIPTOR_FILE_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
     private static final Set<String> IMAGE_PULL_POLICIES = Set.of("Always", "IfNotPresent", "Never");
     private static final Pattern ENV_PLACEHOLDER = Pattern.compile("\\$\\{env\\.[A-Za-z0-9_]+}");
-    private static final Pattern SAFE_RUNTIME_FILE_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*\\.jar");
     private static final Set<String> SECRET_KEY_NAMES = Set.of(
             "password", "passwd", "pwd", "secret", "secretkey", "secret-key", "secret_key",
             "token", "apikey", "api-key", "api_key", "accesskey", "access-key", "access_key",
@@ -63,14 +64,6 @@ public class KubernetesSubmissionSpec implements Serializable {
 
     private String descriptorMountPath;
 
-    private String localRuntimePath;
-
-    private String runtimeUploadUrl;
-
-    private String runtimeDownloadUrl;
-
-    private String initContainerImage;
-
     private String coordinatorMainClass;
 
     private Integer memoryMiB;
@@ -84,6 +77,18 @@ public class KubernetesSubmissionSpec implements Serializable {
     private Map<String, String> labels;
 
     private Map<String, KubernetesSecretKeyRef> secretEnv;
+
+    /**
+     * Plain environment variables for the coordinator container, the
+     * spark-on-k8s {@code spark.kubernetes.driver.env.[Name]} analog.
+     */
+    private Map<String, String> envs;
+
+    /**
+     * Image pull secret names attached to the Job pod, the
+     * {@code spark.kubernetes.imagePullSecrets} analog.
+     */
+    private List<String> imagePullSecrets;
 
     public void validate() {
         requireDnsLabel("namespace", namespace);
@@ -107,7 +112,6 @@ public class KubernetesSubmissionSpec implements Serializable {
         if (serviceAccountName != null) {
             requireDnsLabel("serviceAccountName", serviceAccountName);
         }
-        validateRuntimeSource();
         if (imagePullPolicy != null && !IMAGE_PULL_POLICIES.contains(imagePullPolicy)) {
             throw new IllegalArgumentException("imagePullPolicy must be Always, IfNotPresent, or Never");
         }
@@ -135,6 +139,16 @@ public class KubernetesSubmissionSpec implements Serializable {
                 }
             });
         }
+        if (envs != null) {
+            envs.forEach((environmentName, value) -> {
+                if (environmentName == null || !ENVIRONMENT_NAME.matcher(environmentName).matches()) {
+                    throw new IllegalArgumentException("Kubernetes environment names must be valid environment names");
+                }
+            });
+        }
+        if (imagePullSecrets != null) {
+            imagePullSecrets.forEach(secretName -> requireDnsLabel("imagePullSecrets", secretName));
+        }
     }
 
     public Map<String, String> sanitizedLabels() {
@@ -143,6 +157,14 @@ public class KubernetesSubmissionSpec implements Serializable {
 
     public Map<String, KubernetesSecretKeyRef> sanitizedSecretEnv() {
         return secretEnv == null ? new LinkedHashMap<>() : new LinkedHashMap<>(secretEnv);
+    }
+
+    public Map<String, String> sanitizedEnvs() {
+        return envs == null ? new LinkedHashMap<>() : new LinkedHashMap<>(envs);
+    }
+
+    public List<String> sanitizedImagePullSecrets() {
+        return imagePullSecrets == null ? new ArrayList<>() : new ArrayList<>(imagePullSecrets);
     }
 
     public Map<String, String> sanitizedDescriptorData() {
@@ -237,23 +259,6 @@ public class KubernetesSubmissionSpec implements Serializable {
         return value;
     }
 
-    private void validateRuntimeSource() {
-        boolean hasLocalRuntime = localRuntimePath != null && !localRuntimePath.trim().isEmpty();
-        if (hasLocalRuntime) {
-            String fileName = localRuntimePath.substring(localRuntimePath.lastIndexOf('/') + 1);
-            if (!SAFE_RUNTIME_FILE_NAME.matcher(fileName).matches()) {
-                throw new IllegalArgumentException("localRuntimePath must reference a safe fat jar file name");
-            }
-            if (isBlank(runtimeUploadUrl) || isBlank(runtimeDownloadUrl)) {
-                throw new IllegalArgumentException("runtimeUploadUrl and runtimeDownloadUrl are required for a local runtime");
-            }
-            if (isBlank(initContainerImage)) {
-                throw new IllegalArgumentException("initContainerImage is required for local runtime download");
-            }
-            requireRemoteArtifactUrl("runtimeUploadUrl", runtimeUploadUrl);
-            requireRemoteArtifactUrl("runtimeDownloadUrl", runtimeDownloadUrl);
-        }
-    }
 
     private void requireRemoteArtifactUrl(String name, String value) {
         if (isBlank(value)) {

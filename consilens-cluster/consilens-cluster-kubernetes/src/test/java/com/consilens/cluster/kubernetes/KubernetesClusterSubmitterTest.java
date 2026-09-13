@@ -7,7 +7,6 @@ import com.consilens.cluster.api.ClusterSubmitRequest;
 import com.consilens.cluster.api.KubernetesSubmissionSpec;
 import com.consilens.cluster.api.KubernetesSecretKeyRef;
 import com.consilens.cluster.kubernetes.gateway.KubernetesSubmissionGateway;
-import com.consilens.cluster.kubernetes.gateway.RuntimeArtifactUploader;
 import com.consilens.connector.api.planner.ExecutionMode;
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.Container;
@@ -20,6 +19,7 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -151,29 +151,31 @@ class KubernetesClusterSubmitterTest {
     }
 
     @Test
-    void shouldUploadLocalRuntimeAndAddInitContainer() throws Exception {
+    void shouldAddPlainEnvsSecretEnvsAndImagePullSecrets() {
         RecordingGateway gateway = new RecordingGateway();
-        RecordingUploader uploader = new RecordingUploader();
-        Path runtime = Files.createTempFile("consilens-runtime", ".jar");
-        Files.write(runtime, new byte[]{1, 2, 3});
         KubernetesSubmissionSpec spec = validSpec();
-        spec.setLocalRuntimePath(runtime.toString());
-        spec.setRuntimeUploadUrl("https://artifact.example/consilens");
-        spec.setRuntimeDownloadUrl("https://artifact.example/consilens");
-        spec.setInitContainerImage("curlimages/curl:8.4.0");
+        spec.setEnvs(Map.of("JDBC_DRIVER", "org.postgresql.Driver"));
+        spec.setSecretEnv(Map.of("SOURCE_PASSWORD", KubernetesSecretKeyRef.builder()
+                .secretName("consilens-database")
+                .secretKey("source-password")
+                .build()));
+        spec.setImagePullSecrets(List.of("registry-credentials"));
 
-        new KubernetesClusterSubmitter(gateway, uploader).submit(kubernetesRequest(spec, 1));
+        new KubernetesClusterSubmitter(gateway).submit(kubernetesRequest(spec, 1));
 
-        assertEquals(1, uploader.uploadCalls);
-        assertEquals(1, gateway.createdJob.getSpec().getTemplate().getSpec().getInitContainers().size());
-        List<String> initCommand = gateway.createdJob.getSpec().getTemplate().getSpec().getInitContainers().get(0).getCommand();
-        List<String> initArgs = gateway.createdJob.getSpec().getTemplate().getSpec().getInitContainers().get(0).getArgs();
-        assertEquals(List.of("curl"), initCommand);
-        assertTrue(initArgs.contains("https://artifact.example/consilens/" + runtime.getFileName()));
-        assertFalse(initCommand.toString().contains("sh"));
-        assertTrue(gateway.createdJob.getSpec().getTemplate().getSpec().getContainers().get(0).getArgs()
-                .contains("com.consilens.runtime.KubernetesCoordinator"));
-        Files.deleteIfExists(runtime);
+        var podSpec = gateway.createdJob.getSpec().getTemplate().getSpec();
+        assertEquals(0, podSpec.getInitContainers().size());
+        assertEquals(List.of("registry-credentials"),
+                podSpec.getImagePullSecrets().stream()
+                        .map(ref -> ref.getName())
+                        .collect(Collectors.toList()));
+        var envVars = podSpec.getContainers().get(0).getEnv();
+        assertEquals("org.postgresql.Driver", envVars.stream()
+                .filter(env -> "JDBC_DRIVER".equals(env.getName()))
+                .findFirst().orElseThrow().getValue());
+        assertEquals("consilens-database", envVars.stream()
+                .filter(env -> "SOURCE_PASSWORD".equals(env.getName()))
+                .findFirst().orElseThrow().getValueFrom().getSecretKeyRef().getName());
     }
 
     @Test
@@ -240,22 +242,6 @@ class KubernetesClusterSubmitterTest {
         assertEquals(0, gateway.createCalls);
     }
 
-    @Test
-    void shouldRejectUnsafeRuntimeFileNameBeforeUploading() {
-        RecordingGateway gateway = new RecordingGateway();
-        RecordingUploader uploader = new RecordingUploader();
-        KubernetesSubmissionSpec spec = validSpec();
-        spec.setLocalRuntimePath("consilens-runtime;rm.jar");
-        spec.setRuntimeUploadUrl("https://artifact.example/consilens");
-        spec.setRuntimeDownloadUrl("https://artifact.example/consilens");
-        spec.setInitContainerImage("curlimages/curl:8.4.0");
-
-        assertThrows(IllegalArgumentException.class,
-                () -> new KubernetesClusterSubmitter(gateway, uploader).submit(kubernetesRequest(spec, 1)));
-        assertEquals(0, uploader.uploadCalls);
-        assertEquals(0, gateway.createCalls);
-    }
-
     private void assertRejectedBeforeGateway(ClusterSubmitRequest request) {
         RecordingGateway gateway = new RecordingGateway();
         assertThrows(IllegalArgumentException.class, () -> new KubernetesClusterSubmitter(gateway).submit(request));
@@ -316,14 +302,4 @@ class KubernetesClusterSubmitterTest {
         }
     }
 
-    private static final class RecordingUploader implements RuntimeArtifactUploader {
-
-        private int uploadCalls;
-
-        @Override
-        public String upload(Path localPath, URI uploadRoot) {
-            uploadCalls++;
-            return uploadRoot.resolve(localPath.getFileName().toString()).toString();
-        }
-    }
 }

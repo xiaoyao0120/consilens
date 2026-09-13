@@ -1,14 +1,13 @@
 package com.consilens.cluster.kubernetes;
 
+import com.consilens.cluster.api.ClusterApplicationResult;
 import com.consilens.cluster.api.ClusterSubmission;
 import com.consilens.cluster.api.ClusterSubmitRequest;
 import com.consilens.cluster.api.ClusterSubmitter;
 import com.consilens.cluster.api.KubernetesSecretKeyRef;
 import com.consilens.cluster.api.KubernetesSubmissionSpec;
 import com.consilens.cluster.kubernetes.gateway.Fabric8KubernetesSubmissionGateway;
-import com.consilens.cluster.kubernetes.gateway.HttpRuntimeArtifactUploader;
 import com.consilens.cluster.kubernetes.gateway.KubernetesSubmissionGateway;
-import com.consilens.cluster.kubernetes.gateway.RuntimeArtifactUploader;
 import com.consilens.connector.api.planner.ExecutionMode;
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
@@ -16,6 +15,7 @@ import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.ContainerBuilder;
 import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.EnvVarBuilder;
+import io.fabric8.kubernetes.api.model.LocalObjectReference;
 import io.fabric8.kubernetes.api.model.KeyToPathBuilder;
 import io.fabric8.kubernetes.api.model.PodSpecBuilder;
 import io.fabric8.kubernetes.api.model.PodTemplateSpecBuilder;
@@ -28,10 +28,7 @@ import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.api.model.batch.v1.JobBuilder;
 
-import java.net.URI;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -42,8 +39,12 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * Kubernetes implementation of the cluster submission SPI. It creates one
- * application-style Job whose runtime image resolves the external descriptor URI.
+ * Kubernetes implementation of the cluster submission SPI, following the
+ * spark-on-k8s / flink-on-k8s application model: the runtime ships inside the
+ * container image (there is deliberately no jar-upload side channel), the
+ * descriptor travels as a ConfigMap the way Flink ships its configuration, and
+ * the client blocks until the Job completes unless waitAppCompletion is
+ * disabled.
  */
 public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseable {
 
@@ -51,24 +52,17 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
     private static final String RUNTIME_CLASSPATH = "/opt/consilens/runtime/*";
     private static final String DESCRIPTOR_VOLUME = "comparison-descriptor";
     private static final String DEFAULT_DESCRIPTOR_MOUNT_PATH = "/opt/consilens/descriptor";
-    private static final String RUNTIME_VOLUME = "consilens-runtime";
+    private static final long COMPLETION_POLL_SECONDS = 3;
     private static final Pattern SAFE_SUBMISSION_ID = Pattern.compile("[A-Za-z0-9_-]+");
 
     private final KubernetesSubmissionGateway gateway;
-    private final RuntimeArtifactUploader runtimeArtifactUploader;
 
     public KubernetesClusterSubmitter() {
-        this(new Fabric8KubernetesSubmissionGateway(), new HttpRuntimeArtifactUploader());
+        this(new Fabric8KubernetesSubmissionGateway());
     }
 
     public KubernetesClusterSubmitter(KubernetesSubmissionGateway gateway) {
-        this(gateway, new HttpRuntimeArtifactUploader());
-    }
-
-    public KubernetesClusterSubmitter(KubernetesSubmissionGateway gateway,
-                                      RuntimeArtifactUploader runtimeArtifactUploader) {
         this.gateway = Objects.requireNonNull(gateway, "gateway");
-        this.runtimeArtifactUploader = Objects.requireNonNull(runtimeArtifactUploader, "runtimeArtifactUploader");
     }
 
     @Override
@@ -76,14 +70,38 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         KubernetesSubmissionSpec spec = validateAndExtractSpec(request);
         int maxAttempts = maxAttemptsOrDefault(request);
         createDescriptorConfigMapIfNeeded(spec);
-        KubernetesSubmissionSpec resolvedSpec = RuntimeResolver.resolve(spec, runtimeArtifactUploader);
-        Job created = gateway.create(buildJob(request, resolvedSpec, maxAttempts));
+        Job created = gateway.create(buildJob(request, spec, maxAttempts));
         return ClusterSubmission.builder()
                 .submissionId(request.getSubmissionId())
                 .executionMode(ExecutionMode.KUBERNETES)
                 .submittedAt(Instant.now())
                 .clusterApplicationId(spec.getNamespace() + "/" + created.getMetadata().getName())
                 .build();
+    }
+
+    @Override
+    public ClusterApplicationResult awaitCompletion(ClusterSubmission submission, Duration timeout) {
+        if (submission == null || submission.getClusterApplicationId() == null) {
+            return null;
+        }
+        String[] namespaceAndJob = submission.getClusterApplicationId().split("/", 2);
+        if (namespaceAndJob.length != 2) {
+            return null;
+        }
+        long deadlineNanos = timeout == null ? Long.MAX_VALUE : System.nanoTime() + timeout.toNanos();
+        try {
+            while (System.nanoTime() < deadlineNanos) {
+                String status = gateway.jobCompletionStatus(namespaceAndJob[0], namespaceAndJob[1]).orElse(null);
+                if ("Complete".equals(status) || "Failed".equals(status)) {
+                    return new ClusterApplicationResult(submission.getClusterApplicationId(),
+                            "Complete".equals(status) ? "SUCCEEDED" : "FAILED", null, null);
+                }
+                Thread.sleep(COMPLETION_POLL_SECONDS * 1000L);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return null;
     }
 
     @Override
@@ -121,8 +139,8 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
                 .withImagePullPolicy(spec.getImagePullPolicy())
                 .withCommand("java")
                 .withArgs(commandArguments(request, spec))
-                .withEnv(secretEnvironment(spec))
-                .withVolumeMounts(combinedVolumeMounts(spec))
+                .withEnv(containerEnvironment(spec))
+                .withVolumeMounts(descriptorVolumeMounts(spec))
                 .withResources(new ResourceRequirementsBuilder()
                         .addToRequests("memory", new Quantity(spec.getMemoryMiB() + "Mi"))
                         .addToRequests("cpu", new Quantity(spec.getCpuMilli() + "m"))
@@ -133,11 +151,15 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
 
         PodSpecBuilder podSpec = new PodSpecBuilder()
                 .withRestartPolicy("Never")
-                .withVolumes(combinedVolumes(spec))
-                .withInitContainers(initContainers(spec))
+                .withVolumes(descriptorVolumes(spec))
                 .withContainers(container);
         if (spec.getServiceAccountName() != null) {
             podSpec.withServiceAccountName(spec.getServiceAccountName());
+        }
+        if (!spec.sanitizedImagePullSecrets().isEmpty()) {
+            podSpec.withImagePullSecrets(spec.sanitizedImagePullSecrets().stream()
+                    .map(secretName -> new LocalObjectReference(secretName))
+                    .collect(Collectors.toList()));
         }
 
         return new JobBuilder()
@@ -193,13 +215,6 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
                 .build());
     }
 
-    private List<VolumeMount> combinedVolumeMounts(KubernetesSubmissionSpec spec) {
-        List<VolumeMount> mounts = new ArrayList<>();
-        mounts.addAll(descriptorVolumeMounts(spec));
-        mounts.addAll(runtimeVolumeMounts(spec));
-        return mounts;
-    }
-
     private List<Volume> descriptorVolumes(KubernetesSubmissionSpec spec) {
         if (spec.getDescriptorData() == null || spec.getDescriptorData().isEmpty()) {
             return List.of();
@@ -216,58 +231,6 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
                 .build());
     }
 
-    private List<Volume> combinedVolumes(KubernetesSubmissionSpec spec) {
-        List<Volume> volumes = new ArrayList<>();
-        volumes.addAll(descriptorVolumes(spec));
-        volumes.addAll(runtimeVolumes(spec));
-        return volumes;
-    }
-
-    private List<VolumeMount> runtimeVolumeMounts(KubernetesSubmissionSpec spec) {
-        if (spec.getLocalRuntimePath() == null || spec.getLocalRuntimePath().trim().isEmpty()) {
-            return List.of();
-        }
-        return List.of(new VolumeMountBuilder()
-                .withName(RUNTIME_VOLUME)
-                .withMountPath("/opt/consilens/runtime")
-                .build());
-    }
-
-    private List<Volume> runtimeVolumes(KubernetesSubmissionSpec spec) {
-        if (spec.getLocalRuntimePath() == null || spec.getLocalRuntimePath().trim().isEmpty()) {
-            return List.of();
-        }
-        return List.of(new VolumeBuilder()
-                .withName(RUNTIME_VOLUME)
-                .withNewEmptyDir()
-                .endEmptyDir()
-                .build());
-    }
-
-    private List<Container> initContainers(KubernetesSubmissionSpec spec) {
-        if (spec.getLocalRuntimePath() == null || spec.getLocalRuntimePath().trim().isEmpty()) {
-            return List.of();
-        }
-        String fileName = Paths.get(spec.getLocalRuntimePath()).getFileName().toString();
-        String downloadUrl = directoryUri(spec.getRuntimeDownloadUrl()).resolve(fileName).toString();
-        Container initContainer = new ContainerBuilder()
-                .withName("runtime-download")
-                .withImage(spec.getInitContainerImage())
-                .withCommand("curl")
-                .withArgs("-f", "-L", "-o", "/opt/consilens/runtime/" + fileName, downloadUrl)
-                .withVolumeMounts(new VolumeMountBuilder()
-                        .withName(RUNTIME_VOLUME)
-                        .withMountPath("/opt/consilens/runtime")
-                        .build())
-                .build();
-        return List.of(initContainer);
-    }
-
-    private URI directoryUri(String value) {
-        String normalized = value.endsWith("/") ? value : value + "/";
-        return URI.create(normalized);
-    }
-
     private void createDescriptorConfigMapIfNeeded(KubernetesSubmissionSpec spec) {
         if (spec.getDescriptorData() == null || spec.getDescriptorData().isEmpty()) {
             return;
@@ -282,10 +245,13 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         gateway.createConfigMap(configMap);
     }
 
-    private List<EnvVar> secretEnvironment(KubernetesSubmissionSpec spec) {
-        return spec.sanitizedSecretEnv().entrySet().stream()
-                .map(entry -> secretEnvironment(entry.getKey(), entry.getValue()))
-                .collect(Collectors.toList());
+    private List<EnvVar> containerEnvironment(KubernetesSubmissionSpec spec) {
+        List<EnvVar> envVars = new ArrayList<>();
+        spec.sanitizedEnvs().forEach((name, value) -> envVars.add(
+                new EnvVarBuilder().withName(name).withValue(value).build()));
+        spec.sanitizedSecretEnv().forEach((name, secretRef) -> envVars.add(
+                secretEnvironment(name, secretRef)));
+        return envVars;
     }
 
     private EnvVar secretEnvironment(String environmentName, KubernetesSecretKeyRef secretRef) {
@@ -306,45 +272,5 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
             throw new IllegalArgumentException("maxAttempts must be positive for Kubernetes submission");
         }
         return maxAttempts;
-    }
-
-    private static final class RuntimeResolver {
-
-        private RuntimeResolver() {
-        }
-
-        private static KubernetesSubmissionSpec resolve(KubernetesSubmissionSpec spec,
-                                                        RuntimeArtifactUploader uploader) {
-            if (spec.getLocalRuntimePath() == null || spec.getLocalRuntimePath().trim().isEmpty()) {
-                return spec;
-            }
-            Path localPath = Paths.get(spec.getLocalRuntimePath()).toAbsolutePath().normalize();
-            if (!Files.isRegularFile(localPath)) {
-                throw new IllegalArgumentException("local runtime is not a regular file: " + localPath);
-            }
-            uploader.upload(localPath, URI.create(spec.getRuntimeUploadUrl()));
-            KubernetesSubmissionSpec resolved = KubernetesSubmissionSpec.builder()
-                    .namespace(spec.getNamespace())
-                    .jobName(spec.getJobName())
-                    .image(spec.getImage())
-                    .descriptorUri(spec.getDescriptorUri())
-                    .descriptorData(spec.sanitizedDescriptorData())
-                    .descriptorConfigMapName(spec.getDescriptorConfigMapName())
-                    .descriptorMountPath(spec.getDescriptorMountPath())
-                    .localRuntimePath(localPath.toString())
-                    .runtimeUploadUrl(spec.getRuntimeUploadUrl())
-                    .runtimeDownloadUrl(spec.getRuntimeDownloadUrl())
-                    .initContainerImage(spec.getInitContainerImage())
-                    .coordinatorMainClass(spec.getCoordinatorMainClass())
-                    .memoryMiB(spec.getMemoryMiB())
-                    .cpuMilli(spec.getCpuMilli())
-                    .serviceAccountName(spec.getServiceAccountName())
-                    .imagePullPolicy(spec.getImagePullPolicy())
-                    .labels(spec.sanitizedLabels())
-                    .secretEnv(spec.sanitizedSecretEnv())
-                    .build();
-            resolved.validate();
-            return resolved;
-        }
     }
 }
