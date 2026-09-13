@@ -49,7 +49,7 @@ import java.util.regex.Pattern;
  */
 @Command(
         name = "yarn",
-        description = "Submit a comparison to YARN (consilens submit yarn [options] <descriptor> [<secret-env-file>])",
+        description = "Submit a comparison to YARN (consilens submit yarn [options] <descriptor>)",
         mixinStandardHelpOptions = true
 )
 public class SubmitYarnCommand implements Callable<Integer> {
@@ -87,11 +87,6 @@ public class SubmitYarnCommand implements Callable<Integer> {
                     + "alternative to passing the descriptor positionally")
     private String descriptorUri;
 
-    @Option(names = "--secret-env-file",
-            description = "Remote URI or local path of a protected Java properties file used for runtime ${env.NAME} resolution; "
-                    + "alternative to passing it positionally")
-    private String secretEnvironmentUri;
-
     @Option(names = "--files",
             description = "Comma-separated local paths or remote URIs shipped into the AM container and reachable by file name, "
                     + "with optional #alias (like spark --files); remote URIs are not re-uploaded")
@@ -112,10 +107,6 @@ public class SubmitYarnCommand implements Callable<Integer> {
     @Parameters(index = "0", arity = "0..1",
             description = "Descriptor file (local path or URI), the consilens equivalent of spark-submit's application jar")
     private String descriptorParameter;
-
-    @Parameters(index = "1", arity = "0..1",
-            description = "Optional protected properties file used for runtime ${env.NAME} resolution")
-    private String secretsParameter;
 
     @Spec
     private CommandSpec commandSpec;
@@ -143,8 +134,6 @@ public class SubmitYarnCommand implements Callable<Integer> {
         try {
             String descriptor = resolveExclusive(descriptorParameter, descriptorUri,
                     "descriptor", "--descriptor-uri");
-            String secretEnvironment = resolveExclusive(secretsParameter, secretEnvironmentUri,
-                    "secret-env-file", "--secret-env-file");
             requireValue(descriptor != null, "descriptor is required, like spark-submit's application jar");
             Map<String, String> settings = loadSettings();
             String submissionId = submissionIdFactory.get();
@@ -164,7 +153,6 @@ public class SubmitYarnCommand implements Callable<Integer> {
             submissionRequest.setYarnSubmission(YarnSubmissionSpec.builder()
                     .runtimeArchiveUri(firstNonBlank(runtimeArchiveUri, settings.get("archive")))
                     .descriptorUri(descriptor)
-                    .secretEnvironmentUri(secretEnvironment)
                     .stagingUri(settings.get("stagingDir"))
                     .applicationName(firstNonBlank(applicationName, settings.get("name"),
                             "consilens-" + submissionId))

@@ -104,20 +104,16 @@ class YarnClusterSubmitterTest {
     }
 
     @Test
-    void shouldPreserveDescriptorFormatAndLocalizeProtectedSecretEnvironment() {
+    void shouldPreserveDescriptorFormatForYamlAndYml() {
         RecordingYarnGateway gateway = new RecordingYarnGateway();
         YarnSubmissionSpec spec = validYarnSpec();
         spec.setDescriptorUri("hdfs://namenode/apps/consilens/submission.yaml");
-        spec.setSecretEnvironmentUri("hdfs://namenode/apps/consilens/submission-secrets.properties");
 
         new YarnClusterSubmitter(gateway, hadoopConfDirectory).submit(yarnRequest(spec));
 
         ContainerLaunchContext context = gateway.submittedContext.getAMContainerSpec();
         assertTrue(context.getLocalResources().containsKey("submission-descriptor.yaml"));
-        assertTrue(context.getLocalResources().containsKey("submission-secrets.properties"));
-        String command = context.getCommands().get(0);
-        assertTrue(command.contains("--descriptor submission-descriptor.yaml"));
-        assertTrue(command.contains("--secrets submission-secrets.properties"));
+        assertTrue(context.getCommands().get(0).contains("--descriptor submission-descriptor.yaml"));
     }
 
     @Test

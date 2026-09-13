@@ -165,20 +165,17 @@ public class ConsilensApplicationMaster {
     private static final class AmOptions {
         private final String coordinatorClass;
         private final String descriptor;
-        private final String secrets;
         private final String stagingDir;
 
-        private AmOptions(String coordinatorClass, String descriptor, String secrets, String stagingDir) {
+        private AmOptions(String coordinatorClass, String descriptor, String stagingDir) {
             this.coordinatorClass = coordinatorClass;
             this.descriptor = descriptor;
-            this.secrets = secrets;
             this.stagingDir = stagingDir;
         }
 
         static AmOptions parse(String[] arguments) {
             String coordinatorClass = null;
             String descriptor = null;
-            String secrets = null;
             String stagingDir = null;
             for (int i = 0; i < arguments.length; i += 2) {
                 if (i + 1 >= arguments.length) {
@@ -189,8 +186,6 @@ public class ConsilensApplicationMaster {
                     coordinatorClass = value;
                 } else if ("--descriptor".equals(arguments[i])) {
                     descriptor = value;
-                } else if ("--secrets".equals(arguments[i])) {
-                    secrets = value;
                 } else if ("--staging-dir".equals(arguments[i])) {
                     stagingDir = value;
                 } else {
@@ -200,13 +195,11 @@ public class ConsilensApplicationMaster {
             if (coordinatorClass == null || descriptor == null) {
                 throw new IllegalArgumentException("--coordinator-class and --descriptor are required");
             }
-            return new AmOptions(coordinatorClass, descriptor, secrets, stagingDir);
+            return new AmOptions(coordinatorClass, descriptor, stagingDir);
         }
 
         String[] coordinatorArguments() {
-            return secrets == null
-                    ? new String[]{"consilens", descriptor}
-                    : new String[]{"consilens", descriptor, secrets};
+            return new String[]{"consilens", descriptor};
         }
     }
 

@@ -1,5 +1,7 @@
 # 集群 Comparison Runtime
 
+> 完整的使用文档（参数表、配置键、行为细节、排查方法）见 [docs/06-集群提交指南.md](../../docs/06-集群提交指南.md)。
+
 `consilens-cluster-application` 是 YARN ApplicationMaster 和 Kubernetes Job 的实际入口。它读取 YAML/JSON descriptor，解析运行环境中的 `${env.NAME}`，调用现有 `DefaultCompareRuntime` 执行一次数据比对，并只向 stdout 输出统计摘要。
 
 ## 构建
@@ -69,7 +71,6 @@ java -jar consilens-cli-0.1-SNAPSHOT.jar submit kubernetes \
   --memory 1g --cpu 0.5 \
   --env JDBC_DRIVER=org.postgresql.Driver \
   --image-pull-secret registry-credentials \
-  --secret-env SOURCE_PASSWORD=consilens-database/source-password \
   comparison.yaml
 ```
 

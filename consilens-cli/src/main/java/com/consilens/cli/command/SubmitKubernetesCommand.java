@@ -94,11 +94,11 @@ public class SubmitKubernetesCommand implements Callable<Integer> {
     @Option(names = "--image-pull-secret", description = "Image pull secret name; repeatable")
     private List<String> imagePullSecrets;
 
-    @Option(names = "--env", description = "Plain environment variable in KEY=value form; repeatable")
-    private Map<String, String> environments = new LinkedHashMap<>();
-
     @Option(names = "--secret-env", description = "Environment mapping in ENVIRONMENT=secret-name/secret-key form; repeatable")
     private Map<String, String> secretEnvironmentReferences = new LinkedHashMap<>();
+
+    @Option(names = "--env", description = "Plain environment variable in KEY=value form; repeatable")
+    private Map<String, String> environments = new LinkedHashMap<>();
 
     @Option(names = "--label", description = "Job label in key=value form; repeatable")
     private Map<String, String> labels = new LinkedHashMap<>();

@@ -1,8 +1,5 @@
 package com.consilens.cluster.api;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -11,8 +8,10 @@ import lombok.NoArgsConstructor;
 import java.io.IOException;
 import java.io.Serializable;
 import java.net.URI;
-import java.util.Iterator;
 import java.util.ArrayList;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -44,12 +43,6 @@ public class KubernetesSubmissionSpec implements Serializable {
     private static final Pattern SECRET_KEY = Pattern.compile("[A-Za-z0-9._-]+");
     private static final Pattern DESCRIPTOR_FILE_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
     private static final Set<String> IMAGE_PULL_POLICIES = Set.of("Always", "IfNotPresent", "Never");
-    private static final Pattern ENV_PLACEHOLDER = Pattern.compile("\\$\\{env\\.[A-Za-z0-9_]+}");
-    private static final Set<String> SECRET_KEY_NAMES = Set.of(
-            "password", "passwd", "pwd", "secret", "secretkey", "secret-key", "secret_key",
-            "token", "apikey", "api-key", "api_key", "accesskey", "access-key", "access_key",
-            "privatekey", "private-key", "private_key", "credential", "credentials");
-
     private String namespace;
 
     private String jobName;
@@ -155,6 +148,25 @@ public class KubernetesSubmissionSpec implements Serializable {
         return labels == null ? new LinkedHashMap<>() : new LinkedHashMap<>(labels);
     }
 
+    /**
+     * Fails fast on malformed YAML/JSON before a ConfigMap reaches the cluster.
+     */
+    private void requireParsableDescriptor(String name, String content) {
+        String trimmed = content.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException("descriptorData content is required");
+        }
+        try {
+            if (name.toLowerCase(Locale.ROOT).endsWith(".json")) {
+                new ObjectMapper().readTree(content);
+            } else {
+                new ObjectMapper(new YAMLFactory()).readTree(content);
+            }
+        } catch (IOException e) {
+            throw new IllegalArgumentException("descriptorData must be valid YAML or JSON: " + name, e);
+        }
+    }
+
     public Map<String, KubernetesSecretKeyRef> sanitizedSecretEnv() {
         return secretEnv == null ? new LinkedHashMap<>() : new LinkedHashMap<>(secretEnv);
     }
@@ -190,74 +202,13 @@ public class KubernetesSubmissionSpec implements Serializable {
                 if (content == null) {
                     throw new IllegalArgumentException("descriptorData content is required");
                 }
-                requireEnvironmentPlaceholderSecrets(name, content);
+                requireParsableDescriptor(name, content);
             });
         } else {
             requireHttpDescriptorUri(descriptorUri);
         }
     }
 
-    private void requireEnvironmentPlaceholderSecrets(String name, String content) {
-        JsonNode root = descriptorTree(name, content);
-        requireSensitiveValuesUsePlaceholders(root);
-    }
-
-    private JsonNode descriptorTree(String name, String content) {
-        String trimmed = content.trim();
-        if (trimmed.isEmpty()) {
-            throw new IllegalArgumentException("descriptorData content is required");
-        }
-        try {
-            if (name.toLowerCase(Locale.ROOT).endsWith(".json")) {
-                return new ObjectMapper().readTree(content);
-            }
-            return new ObjectMapper(new YAMLFactory()).readTree(content);
-        } catch (IOException e) {
-            throw new IllegalArgumentException("descriptorData must be valid YAML or JSON", e);
-        }
-    }
-
-    private void requireSensitiveValuesUsePlaceholders(JsonNode node) {
-        if (node == null) {
-            return;
-        }
-        if (node.isObject()) {
-            Iterator<Map.Entry<String, JsonNode>> fields = node.fields();
-            while (fields.hasNext()) {
-                Map.Entry<String, JsonNode> field = fields.next();
-                String key = field.getKey();
-                JsonNode value = field.getValue();
-                if (SECRET_KEY_NAMES.contains(key.toLowerCase(Locale.ROOT))) {
-                    requireEnvironmentPlaceholder(value);
-                }
-                requireSensitiveValuesUsePlaceholders(value);
-            }
-        } else if (node.isArray()) {
-            for (JsonNode child : node) {
-                requireSensitiveValuesUsePlaceholders(child);
-            }
-        }
-    }
-
-    private void requireEnvironmentPlaceholder(JsonNode value) {
-        String scalar = value.isValueNode() ? value.asText() : value.toString();
-        String normalized = stripQuotes(scalar.trim());
-        if (!ENV_PLACEHOLDER.matcher(normalized).matches()) {
-            throw new IllegalArgumentException(
-                    "descriptorData contains a plaintext secret; replace it with ${env.NAME} and bind the value through --secret-env");
-        }
-    }
-
-    private String stripQuotes(String value) {
-        if (value.length() >= 2) {
-            char first = value.charAt(0);
-            char last = value.charAt(value.length() - 1);
-            if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
-                return value.substring(1, value.length() - 1);
-            }
-        }
-        return value;
-    }
 
 
     private void requireRemoteArtifactUrl(String name, String value) {

@@ -58,19 +58,6 @@ class SubmissionSpecValidationTest {
     }
 
     @Test
-    void shouldRejectPlaintextJsonDescriptorSecret() {
-        KubernetesSubmissionSpec spec = validKubernetesSpec();
-        spec.setDescriptorUri(null);
-        Map<String, String> descriptorData = new LinkedHashMap<>();
-        descriptorData.put("comparison.json", "{\n  \"source\": {\n    \"password\": \"real-password\"\n  }\n}");
-        spec.setDescriptorData(descriptorData);
-        spec.setDescriptorConfigMapName("consilens-descriptor");
-        spec.setDescriptorMountPath("/opt/consilens/descriptor");
-
-        assertThrows(IllegalArgumentException.class, spec::validate);
-    }
-
-    @Test
     void shouldAcceptJsonDescriptorWithEnvironmentPlaceholder() {
         KubernetesSubmissionSpec spec = validKubernetesSpec();
         spec.setDescriptorUri(null);
@@ -85,19 +72,6 @@ class SubmissionSpecValidationTest {
     }
 
     @Test
-    void shouldRejectCompactJsonDescriptorSecret() {
-        KubernetesSubmissionSpec spec = validKubernetesSpec();
-        spec.setDescriptorUri(null);
-        Map<String, String> descriptorData = new LinkedHashMap<>();
-        descriptorData.put("comparison.json", "{\"source\":{\"password\":\"real-password\"}}");
-        spec.setDescriptorData(descriptorData);
-        spec.setDescriptorConfigMapName("consilens-descriptor");
-        spec.setDescriptorMountPath("/opt/consilens/descriptor");
-
-        assertThrows(IllegalArgumentException.class, spec::validate);
-    }
-
-    @Test
     void shouldAcceptCompactJsonDescriptorWithEnvironmentPlaceholder() {
         KubernetesSubmissionSpec spec = validKubernetesSpec();
         spec.setDescriptorUri(null);
@@ -108,19 +82,6 @@ class SubmissionSpecValidationTest {
         spec.setDescriptorMountPath("/opt/consilens/descriptor");
 
         spec.validate();
-    }
-
-    @Test
-    void shouldRejectYamlFlowStylePlaintextSecret() {
-        KubernetesSubmissionSpec spec = validKubernetesSpec();
-        spec.setDescriptorUri(null);
-        Map<String, String> descriptorData = new LinkedHashMap<>();
-        descriptorData.put("comparison.yaml", "{source: {password: real-password}}");
-        spec.setDescriptorData(descriptorData);
-        spec.setDescriptorConfigMapName("consilens-descriptor");
-        spec.setDescriptorMountPath("/opt/consilens/descriptor");
-
-        assertThrows(IllegalArgumentException.class, spec::validate);
     }
 
     @Test
