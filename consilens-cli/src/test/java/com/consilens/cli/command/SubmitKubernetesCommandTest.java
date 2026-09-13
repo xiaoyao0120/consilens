@@ -51,7 +51,6 @@ class SubmitKubernetesCommandTest {
                 "-c", configurationFile.toString(),
                 "--image", "registry.example/consilens:1.0.0",
                 "--descriptor-uri", "https://quality-configs.example/consilens/orders.json",
-                "--coordinator-class", "com.consilens.runtime.KubernetesCoordinator",
                 "--namespace", "data-quality", "--name", "consilens-orders",
                 "--memory", "2048", "--cpu-millis", "750", "--max-attempts", "3",
                 "--service-account", "consilens-runner", "--label", "team=quality",
@@ -133,8 +132,7 @@ class SubmitKubernetesCommandTest {
         int invalidUriExitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "-c", configurationFile.toString(),
                 "--image", "registry.example/consilens:1.0.0",
-                "--descriptor-uri", "s3a://quality-configs/orders.json",
-                "--coordinator-class", "com.consilens.runtime.KubernetesCoordinator");
+                "--descriptor-uri", "s3a://quality-configs/orders.json");
 
         assertEquals(1, invalidUriExitCode);
         assertFalse(factoryCalled.get());
@@ -149,7 +147,6 @@ class SubmitKubernetesCommandTest {
                 "-c", configurationFile.toString(),
                 "--image", "registry.example/consilens:1.0.0",
                 "--descriptor-uri", "https://quality-configs.example/orders.json",
-                "--coordinator-class", "com.consilens.runtime.KubernetesCoordinator",
                 "--max-attempts", "0");
 
         assertEquals(1, invalidAttemptsExitCode);
@@ -170,8 +167,7 @@ class SubmitKubernetesCommandTest {
         int exitCode = commandLine(command, new ByteArrayOutputStream(), error).execute(
                 "-c", configurationFile.toString(),
                 "--image", "registry.example/consilens:1.0.0",
-                "--descriptor-uri", "https://quality-configs.example/orders.json",
-                "--coordinator-class", "com.consilens.runtime.KubernetesCoordinator");
+                "--descriptor-uri", "https://quality-configs.example/orders.json");
 
         assertEquals(1, exitCode);
         assertTrue(error.toString(StandardCharsets.UTF_8).contains("Kubernetes submission failed."));

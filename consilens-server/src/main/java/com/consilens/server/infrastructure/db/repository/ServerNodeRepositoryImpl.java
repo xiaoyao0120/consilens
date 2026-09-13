@@ -41,6 +41,11 @@ public class ServerNodeRepositoryImpl implements ServerNodeRepository {
     }
 
     @Override
+    public int deleteStaleNodesBefore(Instant cutoff) {
+        return serverNodeService.deleteStaleBefore(DbTimeSupport.toLocalDateTime(cutoff));
+    }
+
+    @Override
     public ServerNodeRecord save(ServerNodeRecord record) {
         ServerNodeEntity saved = serverNodeService.saveOrUpdateByNodeKey(toEntity(record));
         return toRecord(saved);

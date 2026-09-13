@@ -8,17 +8,16 @@ import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.api.records.ApplicationSubmissionContext;
 import org.apache.hadoop.yarn.api.records.LocalResource;
+import org.apache.hadoop.yarn.api.records.ApplicationReport;
 import org.apache.hadoop.yarn.api.records.LocalResourceType;
 import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
 import org.apache.hadoop.yarn.api.records.URL;
 import org.apache.hadoop.yarn.client.api.YarnClient;
-import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 
 import java.io.IOException;
 import java.net.URI;
 import java.util.Objects;
-import java.util.UUID;
 
 /**
  * Production YARN gateway backed by a real {@link YarnClient}. The client reads
@@ -70,7 +69,7 @@ public class HadoopYarnSubmissionGateway implements YarnSubmissionGateway {
                 throw new IllegalStateException("local artifact must be a file: " + localUri);
             }
             String fileName = source.getName();
-            Path stagingDestination = new Path(directoryUri(stagingBase).resolve(UUID.randomUUID().toString() + "-" + fileName));
+            Path stagingDestination = new Path(directoryUri(stagingBase).resolve(fileName));
             FileSystem remoteFileSystem = stagingDestination.getFileSystem(configuration);
             FileUtil.copy(localFileSystem, source, remoteFileSystem, stagingDestination, false, configuration);
             return stagingDestination.toUri();
@@ -94,17 +93,37 @@ public class HadoopYarnSubmissionGateway implements YarnSubmissionGateway {
     }
 
     @Override
-    public String resourceManagerHostname() {
-        String hostname = configuration.get(YarnConfiguration.RM_HOSTNAME);
-        if (hostname != null && !hostname.trim().isEmpty()) {
-            return hostname.trim();
+    public String defaultStagingBase() {
+        try {
+            return FileSystem.get(configuration).getHomeDirectory() + "/.consilens/staging";
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to resolve the submitting user's HDFS home directory", e);
         }
-        String address = configuration.get(YarnConfiguration.RM_ADDRESS);
-        if (address == null) {
-            return null;
+    }
+
+    @Override
+    public java.util.Optional<String> applicationState(String applicationId) {
+        return report(applicationId, report -> report.getYarnApplicationState().toString());
+    }
+
+    @Override
+    public java.util.Optional<String> applicationFinalStatus(String applicationId) {
+        return report(applicationId, report -> report.getFinalApplicationStatus().toString());
+    }
+
+    @Override
+    public java.util.Optional<String> trackingUrl(String applicationId) {
+        return report(applicationId, ApplicationReport::getTrackingUrl);
+    }
+
+    private java.util.Optional<String> report(String applicationId,
+                                              java.util.function.Function<ApplicationReport, String> extractor) {
+        try {
+            ApplicationReport applicationReport = yarnClient.getApplicationReport(ApplicationId.fromString(applicationId));
+            return java.util.Optional.ofNullable(extractor.apply(applicationReport));
+        } catch (YarnException | IOException | IllegalArgumentException e) {
+            return java.util.Optional.empty();
         }
-        int portSeparator = address.lastIndexOf(':');
-        return portSeparator > 0 ? address.substring(0, portSeparator) : address;
     }
 
     @Override

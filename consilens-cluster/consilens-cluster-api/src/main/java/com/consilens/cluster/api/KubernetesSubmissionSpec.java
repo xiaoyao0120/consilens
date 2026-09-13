@@ -92,7 +92,10 @@ public class KubernetesSubmissionSpec implements Serializable {
             throw new IllegalArgumentException("image must be a non-blank container image reference");
         }
         validateDescriptorSource();
-        if (isBlank(coordinatorMainClass) || !JAVA_CLASS_NAME.matcher(coordinatorMainClass).matches()) {
+        if (isBlank(coordinatorMainClass)) {
+            coordinatorMainClass = YarnSubmissionSpec.DEFAULT_AM_MAIN_CLASS;
+        }
+        if (!JAVA_CLASS_NAME.matcher(coordinatorMainClass).matches()) {
             throw new IllegalArgumentException("coordinatorMainClass must be a valid Java class name");
         }
         if (memoryMiB == null || memoryMiB <= 0) {

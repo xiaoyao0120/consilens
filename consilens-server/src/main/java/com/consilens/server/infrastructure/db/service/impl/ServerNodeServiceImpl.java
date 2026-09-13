@@ -1,5 +1,6 @@
 package com.consilens.server.infrastructure.db.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.consilens.server.infrastructure.db.entity.ServerNodeEntity;
@@ -31,6 +32,12 @@ public class ServerNodeServiceImpl extends ServiceImpl<ServerNodeMapper, ServerN
         return list(new QueryWrapper<ServerNodeEntity>().lambda()
                 .ge(ServerNodeEntity::getHeartbeatTime, cutoff)
                 .orderByAsc(ServerNodeEntity::getNodeKey));
+    }
+
+    @Override
+    public int deleteStaleBefore(LocalDateTime cutoff) {
+        return baseMapper.delete(new LambdaQueryWrapper<ServerNodeEntity>()
+                .lt(ServerNodeEntity::getHeartbeatTime, cutoff));
     }
 
     @Override

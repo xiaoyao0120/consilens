@@ -22,12 +22,36 @@ public interface YarnSubmissionGateway extends AutoCloseable {
     ApplicationId submit(ApplicationSubmissionContext context);
 
     /**
-     * ResourceManager hostname from the submission configuration, passed to the
-     * ApplicationMaster so every RM endpoint can be derived without shipping the
-     * full Hadoop configuration. Returns null when unknown.
+     * Default staging directory derived from the submitting user's HDFS home
+     * ({@code <home>/.consilens/staging}), mirroring how spark-submit stages
+     * under {@code spark.yarn.stagingDir} in the user's home without explicit
+     * configuration. Returns null when unknown.
      */
-    default String resourceManagerHostname() {
+    default String defaultStagingBase() {
         return null;
+    }
+
+    /**
+     * Current state name of the application, e.g. {@code ACCEPTED},
+     * {@code RUNNING}, {@code FINISHED}. Empty when the application is unknown.
+     */
+    default java.util.Optional<String> applicationState(String applicationId) {
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * Final application status, e.g. {@code SUCCEEDED}; empty until the
+     * application reaches a terminal state or when unknown.
+     */
+    default java.util.Optional<String> applicationFinalStatus(String applicationId) {
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * Tracking URL for the running application; empty when unknown.
+     */
+    default java.util.Optional<String> trackingUrl(String applicationId) {
+        return java.util.Optional.empty();
     }
 
     @Override
