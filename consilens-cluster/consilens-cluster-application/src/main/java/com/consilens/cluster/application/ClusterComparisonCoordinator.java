@@ -11,12 +11,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.InputStream;
 import java.io.PrintStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Properties;
 
 /**
  * Process entry point used by a YARN ApplicationMaster or Kubernetes Job. It is
@@ -66,7 +63,7 @@ public class ClusterComparisonCoordinator {
     }
 
     public int run(String[] args) {
-        if (args == null || (args.length != 2 && args.length != 3)) {
+        if (args == null || args.length != 2) {
             error.println("Cluster comparison failed.");
             return 2;
         }
@@ -74,7 +71,7 @@ public class ClusterComparisonCoordinator {
             ComparisonDescriptor descriptor = descriptorOpener.open(args[1]);
             CliConfiguration configuration;
             try (InputStream inputStream = descriptor.open()) {
-                configuration = configurationManager(args).loadConfiguration(inputStream, descriptor.format());
+                configuration = configurationManager.loadConfiguration(inputStream, descriptor.format());
             }
             CompareRequest request = compareRequestFactory.create(configuration);
             DiffResult result = compareRuntime.execute(request);
@@ -93,16 +90,4 @@ public class ClusterComparisonCoordinator {
         return summary;
     }
 
-    private ConfigurationManager configurationManager(String[] args) throws Exception {
-        if (args.length == 2) {
-            return configurationManager;
-        }
-        Properties secretEnvironment = new Properties();
-        try (InputStream inputStream = Files.newInputStream(Path.of(args[2]))) {
-            secretEnvironment.load(inputStream);
-        }
-        Map<String, String> environment = new LinkedHashMap<>(System.getenv());
-        secretEnvironment.forEach((name, value) -> environment.put(String.valueOf(name), String.valueOf(value)));
-        return new ConfigurationManager(environment);
-    }
 }

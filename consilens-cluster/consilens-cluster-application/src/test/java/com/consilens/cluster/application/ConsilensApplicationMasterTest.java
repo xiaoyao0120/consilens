@@ -45,25 +45,6 @@ class ConsilensApplicationMasterTest {
     }
 
     @Test
-    void shouldPassSecretsArgumentThroughToCoordinator() throws Exception {
-        Path descriptor = temporaryDirectory.resolve("submission-descriptor.yaml");
-        Path secrets = temporaryDirectory.resolve("submission-secrets.properties");
-        Files.writeString(descriptor, "source: {}\n");
-        Files.writeString(secrets, "MYSQL_USER=root\n");
-        RecordingAmClient client = new RecordingAmClient();
-        ConsilensApplicationMaster master = new ConsilensApplicationMaster(new String[]{
-                "--coordinator-class", RecordingCoordinator.class.getName(),
-                "--descriptor", descriptor.toString(),
-                "--secrets", secrets.toString(),
-        }, client, new PrintStream(new ByteArrayOutputStream()));
-
-        master.run();
-
-        assertEquals(FinalApplicationStatus.SUCCEEDED, client.finishedStatus);
-        assertEquals(List.of(descriptor.toString(), secrets.toString()), RecordingCoordinator.receivedArguments);
-    }
-
-    @Test
     void shouldRejectUnknownOrIncompleteArguments() {
         RecordingAmClient client = new RecordingAmClient();
 

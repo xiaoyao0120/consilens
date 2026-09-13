@@ -62,23 +62,6 @@ class ClusterComparisonCoordinatorTest {
     }
 
     @Test
-    void shouldResolveDescriptorEnvironmentFromLocalizedSecretProperties() throws Exception {
-        Path descriptor = temporaryDirectory.resolve("comparison.yaml");
-        Path secretProperties = temporaryDirectory.resolve("submission-secrets.properties");
-        Files.writeString(descriptor, configuration("${env.SOURCE_PASSWORD}"));
-        Files.writeString(secretProperties, "SOURCE_PASSWORD=resolved-on-yarn-node\n");
-        AtomicReference<CompareRequest> captured = new AtomicReference<>();
-        ClusterComparisonCoordinator coordinator = coordinator(captured, new ByteArrayOutputStream(),
-                new ByteArrayOutputStream());
-
-        int exitCode = coordinator.run(new String[]{"submission-42", descriptor.toString(), secretProperties.toString()});
-
-        assertEquals(0, exitCode);
-        assertEquals("resolved-on-yarn-node", captured.get().getSource().getConnection().get("password"));
-        assertEquals("resolved-on-yarn-node", captured.get().getTarget().getConnection().get("password"));
-    }
-
-    @Test
     void shouldRejectInvalidArgumentsWithFixedError() {
         ByteArrayOutputStream error = new ByteArrayOutputStream();
         ClusterComparisonCoordinator coordinator = coordinator(new AtomicReference<>(), new ByteArrayOutputStream(), error);

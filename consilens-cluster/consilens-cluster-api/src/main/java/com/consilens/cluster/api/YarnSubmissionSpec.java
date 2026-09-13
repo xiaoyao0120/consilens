@@ -39,8 +39,6 @@ public class YarnSubmissionSpec implements Serializable {
 
     private String descriptorUri;
 
-    private String secretEnvironmentUri;
-
     private String stagingUri;
 
     private String amMainClass;
@@ -74,9 +72,6 @@ public class YarnSubmissionSpec implements Serializable {
         requireArtifactUri("runtimeArchiveUri", runtimeArchiveUri);
         requireArtifactUri("descriptorUri", descriptorUri);
         requireDescriptorFormat(descriptorUri);
-        if (secretEnvironmentUri != null) {
-            requireArtifactUri("secretEnvironmentUri", secretEnvironmentUri);
-        }
         if (stagingUri != null) {
             requireRemoteUri("stagingUri", stagingUri);
         }

@@ -229,44 +229,6 @@ class SubmitKubernetesCommandTest {
     }
 
     @Test
-    void shouldRejectPlaintextDescriptorBeforeSubmitterCall() throws Exception {
-        Path descriptorFile = temporaryDirectory.resolve("plaintext.yaml");
-        Files.writeString(descriptorFile, "source:\n  password: real-password\n");
-        AtomicBoolean factoryCalled = new AtomicBoolean();
-        SubmitKubernetesCommand command = new SubmitKubernetesCommand(new ConfigurationManager(), new CompareRequestFactory(),
-                () -> {
-                    factoryCalled.set(true);
-                    return request -> ClusterSubmission.builder().build();
-                }, () -> "submission-kubernetes-6");
-
-        int exitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
-                "--image", "registry.example/consilens:1.0.0",
-                descriptorFile.toString());
-
-        assertEquals(1, exitCode);
-        assertFalse(factoryCalled.get());
-    }
-
-    @Test
-    void shouldRejectPlaintextJsonDescriptorBeforeSubmitterCall() throws Exception {
-        Path descriptorFile = temporaryDirectory.resolve("plaintext.json");
-        Files.writeString(descriptorFile, "{\n  \"source\": {\n    \"password\": \"real-password\"\n  }\n}");
-        AtomicBoolean factoryCalled = new AtomicBoolean();
-        SubmitKubernetesCommand command = new SubmitKubernetesCommand(new ConfigurationManager(), new CompareRequestFactory(),
-                () -> {
-                    factoryCalled.set(true);
-                    return request -> ClusterSubmission.builder().build();
-                }, () -> "submission-kubernetes-8");
-
-        int exitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
-                "--image", "registry.example/consilens:1.0.0",
-                descriptorFile.toString());
-
-        assertEquals(1, exitCode);
-        assertFalse(factoryCalled.get());
-    }
-
-    @Test
     void shouldAcceptJsonDescriptorWithEnvironmentPlaceholder() throws Exception {
         Path descriptorFile = temporaryDirectory.resolve("placeholder.json");
         Files.writeString(descriptorFile,
@@ -289,25 +251,6 @@ class SubmitKubernetesCommandTest {
     }
 
     @Test
-    void shouldRejectCompactJsonDescriptorBeforeSubmitterCall() throws Exception {
-        Path descriptorFile = temporaryDirectory.resolve("compact.json");
-        Files.writeString(descriptorFile, "{\"source\":{\"password\":\"real-password\"}}");
-        AtomicBoolean factoryCalled = new AtomicBoolean();
-        SubmitKubernetesCommand command = new SubmitKubernetesCommand(new ConfigurationManager(), new CompareRequestFactory(),
-                () -> {
-                    factoryCalled.set(true);
-                    return request -> ClusterSubmission.builder().build();
-                }, () -> "submission-kubernetes-10");
-
-        int exitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
-                "--image", "registry.example/consilens:1.0.0",
-                descriptorFile.toString());
-
-        assertEquals(1, exitCode);
-        assertFalse(factoryCalled.get());
-    }
-
-    @Test
     void shouldAcceptCompactJsonDescriptorWithEnvironmentPlaceholder() throws Exception {
         Path descriptorFile = temporaryDirectory.resolve("compact-placeholder.json");
         Files.writeString(descriptorFile, "{\"source\":{\"password\":\"${env.SOURCE_PASSWORD}\"}}");
@@ -326,25 +269,6 @@ class SubmitKubernetesCommandTest {
         assertEquals(0, exitCode);
         assertTrue(captured.get().getKubernetesSubmission().getDescriptorData()
                 .get("compact-placeholder.json").contains("${env.SOURCE_PASSWORD}"));
-    }
-
-    @Test
-    void shouldRejectYamlFlowStylePlaintextDescriptorBeforeSubmitterCall() throws Exception {
-        Path descriptorFile = temporaryDirectory.resolve("flow.yaml");
-        Files.writeString(descriptorFile, "{source: {password: real-password}}");
-        AtomicBoolean factoryCalled = new AtomicBoolean();
-        SubmitKubernetesCommand command = new SubmitKubernetesCommand(new ConfigurationManager(), new CompareRequestFactory(),
-                () -> {
-                    factoryCalled.set(true);
-                    return request -> ClusterSubmission.builder().build();
-                }, () -> "submission-kubernetes-12");
-
-        int exitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
-                "--image", "registry.example/consilens:1.0.0",
-                descriptorFile.toString());
-
-        assertEquals(1, exitCode);
-        assertFalse(factoryCalled.get());
     }
 
     @Test

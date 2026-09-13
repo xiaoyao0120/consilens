@@ -217,10 +217,8 @@ class SubmitYarnCommandTest {
     void shouldAcceptPositionalDescriptorAndConfStagingLikeSparkSubmit() throws Exception {
         Path runtime = temporaryDirectory.resolve("consilens-runtime.zip");
         Path descriptor = temporaryDirectory.resolve("compare.yaml");
-        Path secrets = temporaryDirectory.resolve("secrets.properties");
         Files.write(runtime, new byte[]{1, 2, 3});
         Files.writeString(descriptor, configuration("${env.SOURCE_PASSWORD}"));
-        Files.writeString(secrets, "SOURCE_PASSWORD=value\n");
         AtomicReference<ClusterSubmitRequest> captured = new AtomicReference<>();
 
         int exitCode = commandLine(command(captured, () -> ClusterSubmission.builder()
@@ -230,13 +228,12 @@ class SubmitYarnCommandTest {
                 .build()), new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
                 "--runtime-archive", runtime.toString(),
                 "--conf", "consilens.yarn.stagingDir=hdfs://namenode/apps/staging/consilens",
-                descriptor.toString(), secrets.toString());
+                descriptor.toString());
 
         assertEquals(0, exitCode);
         YarnSubmissionSpec spec = captured.get().getYarnSubmission();
         assertEquals(runtime.toString(), spec.getRuntimeArchiveUri());
         assertEquals(descriptor.toString(), spec.getDescriptorUri());
-        assertEquals(secrets.toString(), spec.getSecretEnvironmentUri());
         assertEquals("hdfs://namenode/apps/staging/consilens", spec.getStagingUri());
         // defaults: --am-memory 1g, --am-vcores 1
         assertEquals(1024, spec.getAmMemoryMb());

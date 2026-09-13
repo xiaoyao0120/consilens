@@ -50,7 +50,6 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
     private static final String RUNTIME_ARCHIVE_DESTINATION = "consilens-runtime";
     private static final String RUNTIME_JAR_DESTINATION = "consilens-runtime.jar";
     private static final String DESCRIPTOR_DESTINATION_PREFIX = "submission-descriptor";
-    private static final String SECRET_ENVIRONMENT_DESTINATION = "submission-secrets.properties";
     private static final String HADOOP_CONF_DESTINATION_PREFIX = "hadoop-conf/";
     private static final String DEFAULT_QUEUE = "default";
     private static final long COMPLETION_POLL_SECONDS = 3;
@@ -163,10 +162,6 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
         String descriptorDestination = descriptorDestination(spec);
         localResources.put(descriptorDestination, gateway.createLocalResource(
                 URI.create(spec.getDescriptorUri()), LocalResourceType.FILE));
-        if (spec.getSecretEnvironmentUri() != null) {
-            localResources.put(SECRET_ENVIRONMENT_DESTINATION, gateway.createLocalResource(
-                    URI.create(spec.getSecretEnvironmentUri()), LocalResourceType.FILE));
-        }
         localizeReferences(localResources, spec.getFiles());
         localizeReferences(localResources, spec.getJars());
         localizeHadoopConfiguration(localResources);
@@ -218,7 +213,6 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
                 + runtimeClasspath(spec) + "\" " + AM_MAIN_CLASS
                 + " --coordinator-class " + spec.getAmMainClass()
                 + " --descriptor " + descriptorDestination
-                + secretEnvironmentArgument(spec)
                 + stagingDirArgument(applicationStagingDir);
     }
 
@@ -258,8 +252,7 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
 
     private boolean hasLocalArtifacts(YarnSubmissionSpec spec) {
         if (isLocalReference(spec.getRuntimeArchiveUri())
-                || isLocalReference(spec.getDescriptorUri())
-                || isLocalReference(spec.getSecretEnvironmentUri())) {
+                || isLocalReference(spec.getDescriptorUri())) {
             return true;
         }
         return anyLocalReference(spec.getFiles()) || anyLocalReference(spec.getJars());
@@ -351,10 +344,6 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
         return DESCRIPTOR_DESTINATION_PREFIX + ".json";
     }
 
-    private String secretEnvironmentArgument(YarnSubmissionSpec spec) {
-        return spec.getSecretEnvironmentUri() == null ? "" : " --secrets " + SECRET_ENVIRONMENT_DESTINATION;
-    }
-
     private String queueOrDefault(String queue) {
         return queue == null || queue.trim().isEmpty() ? DEFAULT_QUEUE : queue;
     }
@@ -386,7 +375,6 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
             YarnSubmissionSpec staged = YarnSubmissionSpec.builder()
                     .runtimeArchiveUri(stageIfLocal(spec.getRuntimeArchiveUri(), applicationStagingDir, gateway))
                     .descriptorUri(stageIfLocal(spec.getDescriptorUri(), applicationStagingDir, gateway))
-                    .secretEnvironmentUri(stageIfPresent(spec.getSecretEnvironmentUri(), applicationStagingDir, gateway))
                     .stagingUri(spec.getStagingUri())
                     .amMainClass(spec.getAmMainClass())
                     .applicationName(spec.getApplicationName())
@@ -419,10 +407,6 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
                 staged.add(alias == null ? resolved : resolved + "#" + alias);
             }
             return staged;
-        }
-
-        private static String stageIfPresent(String value, String applicationStagingDir, YarnSubmissionGateway gateway) {
-            return value == null ? null : stageIfLocal(value, applicationStagingDir, gateway);
         }
 
         private static String stageIfLocal(String value, String applicationStagingDir, YarnSubmissionGateway gateway) {

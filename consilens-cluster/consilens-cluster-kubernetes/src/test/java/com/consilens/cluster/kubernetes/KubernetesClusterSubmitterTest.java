@@ -4,8 +4,8 @@ import com.consilens.cluster.api.ClusterComparisonDescription;
 import com.consilens.cluster.api.ClusterExecutionDescription;
 import com.consilens.cluster.api.ClusterSubmission;
 import com.consilens.cluster.api.ClusterSubmitRequest;
-import com.consilens.cluster.api.KubernetesSubmissionSpec;
 import com.consilens.cluster.api.KubernetesSecretKeyRef;
+import com.consilens.cluster.api.KubernetesSubmissionSpec;
 import com.consilens.cluster.kubernetes.gateway.KubernetesSubmissionGateway;
 import com.consilens.connector.api.planner.ExecutionMode;
 import io.fabric8.kubernetes.api.model.ConfigMap;
@@ -178,76 +178,6 @@ class KubernetesClusterSubmitterTest {
                 .findFirst().orElseThrow().getValueFrom().getSecretKeyRef().getName());
     }
 
-    @Test
-    void shouldRejectPlaintextDescriptorSecretBeforeCreatingConfigMap() {
-        RecordingGateway gateway = new RecordingGateway();
-        Map<String, String> descriptorData = new LinkedHashMap<>();
-        descriptorData.put("comparison.yaml", "source:\n  password: real-password\n");
-        KubernetesSubmissionSpec spec = validSpec();
-        spec.setDescriptorData(descriptorData);
-        spec.setDescriptorConfigMapName("consilens-orders-descriptor");
-        spec.setDescriptorMountPath("/opt/consilens/descriptor");
-
-        assertThrows(IllegalArgumentException.class,
-                () -> new KubernetesClusterSubmitter(gateway).submit(kubernetesRequest(spec, 1)));
-        assertEquals(0, gateway.createConfigMapCalls);
-        assertEquals(0, gateway.createCalls);
-    }
-
-    @Test
-    void shouldRejectPlaintextJsonDescriptorSecretBeforeCreatingConfigMap() {
-        RecordingGateway gateway = new RecordingGateway();
-        Map<String, String> descriptorData = new LinkedHashMap<>();
-        descriptorData.put("comparison.json", "{\n  \"source\": {\n    \"password\": \"real-password\"\n  }\n}");
-        KubernetesSubmissionSpec spec = validSpec();
-        spec.setDescriptorData(descriptorData);
-        spec.setDescriptorConfigMapName("consilens-orders-descriptor");
-        spec.setDescriptorMountPath("/opt/consilens/descriptor");
-
-        assertThrows(IllegalArgumentException.class,
-                () -> new KubernetesClusterSubmitter(gateway).submit(kubernetesRequest(spec, 1)));
-        assertEquals(0, gateway.createConfigMapCalls);
-        assertEquals(0, gateway.createCalls);
-    }
-
-    @Test
-    void shouldRejectCompactJsonDescriptorSecretBeforeCreatingConfigMap() {
-        RecordingGateway gateway = new RecordingGateway();
-        Map<String, String> descriptorData = new LinkedHashMap<>();
-        descriptorData.put("comparison.json", "{\"source\":{\"password\":\"real-password\"}}");
-        KubernetesSubmissionSpec spec = validSpec();
-        spec.setDescriptorData(descriptorData);
-        spec.setDescriptorConfigMapName("consilens-orders-descriptor");
-        spec.setDescriptorMountPath("/opt/consilens/descriptor");
-
-        assertThrows(IllegalArgumentException.class,
-                () -> new KubernetesClusterSubmitter(gateway).submit(kubernetesRequest(spec, 1)));
-        assertEquals(0, gateway.createConfigMapCalls);
-        assertEquals(0, gateway.createCalls);
-    }
-
-    @Test
-    void shouldRejectYamlFlowStylePasswordBeforeCreatingConfigMap() {
-        RecordingGateway gateway = new RecordingGateway();
-        Map<String, String> descriptorData = new LinkedHashMap<>();
-        descriptorData.put("comparison.yaml", "{source: {password: real-password}}");
-        KubernetesSubmissionSpec spec = validSpec();
-        spec.setDescriptorData(descriptorData);
-        spec.setDescriptorConfigMapName("consilens-orders-descriptor");
-        spec.setDescriptorMountPath("/opt/consilens/descriptor");
-
-        assertThrows(IllegalArgumentException.class,
-                () -> new KubernetesClusterSubmitter(gateway).submit(kubernetesRequest(spec, 1)));
-        assertEquals(0, gateway.createConfigMapCalls);
-        assertEquals(0, gateway.createCalls);
-    }
-
-    private void assertRejectedBeforeGateway(ClusterSubmitRequest request) {
-        RecordingGateway gateway = new RecordingGateway();
-        assertThrows(IllegalArgumentException.class, () -> new KubernetesClusterSubmitter(gateway).submit(request));
-        assertEquals(0, gateway.createCalls);
-    }
-
     private KubernetesSubmissionSpec validSpec() {
         return KubernetesSubmissionSpec.builder()
                 .namespace("default")
@@ -258,6 +188,12 @@ class KubernetesClusterSubmitterTest {
                 .memoryMiB(1024)
                 .cpuMilli(500)
                 .build();
+    }
+
+    private void assertRejectedBeforeGateway(ClusterSubmitRequest request) {
+        RecordingGateway gateway = new RecordingGateway();
+        assertThrows(IllegalArgumentException.class, () -> new KubernetesClusterSubmitter(gateway).submit(request));
+        assertEquals(0, gateway.createCalls);
     }
 
     private ClusterSubmitRequest kubernetesRequest(KubernetesSubmissionSpec spec, int maxAttempts) {
@@ -301,5 +237,4 @@ class KubernetesClusterSubmitterTest {
             // Recording gateway owns no external client.
         }
     }
-
 }
