@@ -117,6 +117,23 @@ public class TaskDefinitionServiceImpl implements TaskDefinitionService {
         return toDto(definitionRepository.save(record));
     }
 
+    /** 定义配置中的执行平台参数 → RunRequest.Options（platform/properties 保存于定义 config）。 */
+    @SuppressWarnings("unchecked")
+    private void applyPlatformOptions(RunRequest runRequest, TaskDefinitionRecord record) {
+        if (runRequest.getOptions() == null) {
+            runRequest.setOptions(new RunRequest.Options());
+        }
+        Map<String, Object> config = fromConfigJson(record.getConfig());
+        Object platform = config.get("platform");
+        if (platform == null || "local".equals(String.valueOf(platform))) {
+            return;
+        }
+        runRequest.getOptions().setPlatform(String.valueOf(platform));
+        if (runRequest.getOptions().getProperties() == null && config.get("properties") instanceof Map) {
+            runRequest.getOptions().setProperties((Map<String, Object>) config.get("properties"));
+        }
+    }
+
     @Override
     public void delete(Long id) {
         definitionRepository.deleteById(id);
@@ -138,6 +155,7 @@ public class TaskDefinitionServiceImpl implements TaskDefinitionService {
         if (request != null) {
             runRequest.setOptions(request.getOptions());
         }
+        applyPlatformOptions(runRequest, record);
         TaskAcceptedResponse accepted = submissionService.submit(runRequest, traceId);
         definitionRepository.updateLastRunAt(id, java.time.Instant.now());
         return accepted;

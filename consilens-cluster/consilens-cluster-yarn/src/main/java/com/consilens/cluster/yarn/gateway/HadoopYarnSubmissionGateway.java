@@ -127,6 +127,15 @@ public class HadoopYarnSubmissionGateway implements YarnSubmissionGateway {
     }
 
     @Override
+    public void kill(String applicationId) {
+        try {
+            yarnClient.killApplication(ApplicationId.fromString(applicationId));
+        } catch (YarnException | IOException | IllegalArgumentException e) {
+            // Kill is best effort: the application may already be terminal.
+        }
+    }
+
+    @Override
     public void close() {
         try {
             yarnClient.close();

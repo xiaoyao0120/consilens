@@ -38,6 +38,13 @@ public class ServerCompareConfig {
     @Builder.Default
     private Map<String, Object> executionOptions = new LinkedHashMap<>();
 
+    /** 执行平台（local / yarn / kubernetes），任务定义运行时转换为 RunRequest.Options。 */
+    private String platform;
+
+    /** 与 platform 对应的运行参数，保存在任务定义配置中。 */
+    @Builder.Default
+    private Map<String, Object> properties = new LinkedHashMap<>();
+
     @Builder.Default
     private ResultConfig result = new ResultConfig();
 }
