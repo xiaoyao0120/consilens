@@ -112,6 +112,13 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
     }
 
     @Override
+    public void kill(ClusterSubmission submission) {
+        if (submission != null && submission.getClusterApplicationId() != null) {
+            gateway.kill(submission.getClusterApplicationId());
+        }
+    }
+
+    @Override
     public void close() {
         gateway.close();
     }

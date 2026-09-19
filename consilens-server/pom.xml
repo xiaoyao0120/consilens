@@ -63,6 +63,22 @@
 
         <dependency>
             <groupId>com.consilens</groupId>
+            <artifactId>consilens-cluster-api</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.consilens</groupId>
+            <artifactId>consilens-cluster-yarn</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.consilens</groupId>
+            <artifactId>consilens-cluster-kubernetes</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.consilens</groupId>
             <artifactId>consilens-agent-api</artifactId>
         </dependency>
 

@@ -6,6 +6,7 @@ import com.consilens.core.compare.CompareRuntime;
 import com.consilens.server.api.dto.RunRequest;
 import com.consilens.server.api.dto.ArtifactRefDto;
 import com.consilens.server.application.artifact.ArtifactService;
+import com.consilens.cluster.api.ClusterApplicationResult;
 import com.consilens.server.application.capability.config.ServerCompareConfig;
 import com.consilens.server.application.capability.config.ServerCompareConfigService;
 import com.consilens.server.application.connection.DatasourceConnectionPolicy;
@@ -36,15 +37,14 @@ import org.springframework.stereotype.Component;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
-import java.util.LinkedHashMap;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 @Component
 public class RunTaskHandler implements CapabilityHandler<RunRequest> {
@@ -59,6 +59,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
     private final DialectSupport dialectSupport;
     private final ConsilensServerProperties properties;
     private final ObjectMapper objectMapper;
+    private final ClusterSubmitSupport clusterSubmitSupport;
 
     public RunTaskHandler(ArtifactService artifactService,
                           ServerCompareConfigService configService,
@@ -67,7 +68,8 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
                           SecretProtector secretProtector,
                           DialectSupport dialectSupport,
                           ConsilensServerProperties properties,
-                          ObjectMapper objectMapper) {
+                          ObjectMapper objectMapper,
+                          ClusterSubmitSupport clusterSubmitSupport) {
         this.artifactService = artifactService;
         this.configService = configService;
         this.taskRepository = taskRepository;
@@ -76,6 +78,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         this.dialectSupport = dialectSupport;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.clusterSubmitSupport = clusterSubmitSupport;
     }
 
     /**
@@ -189,6 +192,9 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
                 return writeSuccess(context, request, startedAt, true,
                         configService.validateContent(config), null);
             }
+            if (clusterSubmitSupport.isClusterPlatform(options(request))) {
+                return executeOnCluster(context, request, config, startedAt);
+            }
             CompareOutcome outcome = executeComparison(context, config, options(request));
             assertNotCancellationRequested(context);
             return writeSuccess(context, request, startedAt, false, runResult(outcome.diffResult), outcome);
@@ -201,6 +207,34 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
             ArtifactRefDto artifact = writeFailure(context, request, startedAt, "RUN_EXECUTION_ERROR", exception.getMessage());
             throw new CapabilityExecutionException("RUN_EXECUTION_ERROR", exception.getMessage(), artifact.getId(), true, exception);
         }
+    }
+
+    /** 集群提交执行：descriptor 渲染 + 提交/等待/取消，摘要入执行详情 */
+    private TaskExecutionResult executeOnCluster(TaskExecutionContext context,
+                                                 RunRequest request,
+                                                 ServerCompareConfig config,
+                                                 Instant startedAt) throws Exception {
+        ClusterApplicationResult result = clusterSubmitSupport.submitAndAwait(context, request, config,
+                () -> taskRepository.findById(context.getTaskId())
+                        .map(task -> task.getStatus() == TaskStatus.CANCEL_REQUESTED)
+                        .orElse(false));
+        boolean succeeded = result.succeeded();
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("clusterApplicationId", result.getApplicationId());
+        details.put("finalStatus", result.getFinalStatus());
+        if (result.getTrackingUrl() != null) {
+            details.put("trackingUrl", result.getTrackingUrl());
+        }
+        if (result.getDiagnostics() != null) {
+            details.put("diagnostics", result.getDiagnostics());
+        }
+        if (succeeded) {
+            return writeSuccess(context, request, startedAt, false, details, null);
+        }
+        ArtifactRefDto artifact = writeFailure(context, request, startedAt,
+                "CLUSTER_EXECUTION_FAILED", "cluster application finished with " + result.getFinalStatus());
+        throw new CapabilityExecutionException("CLUSTER_EXECUTION_FAILED",
+                "cluster application finished with " + result.getFinalStatus(), artifact.getId(), false, null);
     }
 
     /** 执行结果 + 差异 sink 写入状态（行数/截断） */

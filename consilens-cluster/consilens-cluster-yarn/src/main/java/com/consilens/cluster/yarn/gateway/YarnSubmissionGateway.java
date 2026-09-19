@@ -54,6 +54,12 @@ public interface YarnSubmissionGateway extends AutoCloseable {
         return java.util.Optional.empty();
     }
 
+    /**
+     * Requests termination of the application; idempotent.
+     */
+    default void kill(String applicationId) {
+    }
+
     @Override
     void close();
 }

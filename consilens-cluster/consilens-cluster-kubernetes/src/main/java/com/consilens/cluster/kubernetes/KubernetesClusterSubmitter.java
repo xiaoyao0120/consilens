@@ -105,6 +105,17 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
     }
 
     @Override
+    public void kill(ClusterSubmission submission) {
+        if (submission == null || submission.getClusterApplicationId() == null) {
+            return;
+        }
+        String[] namespaceAndJob = submission.getClusterApplicationId().split("/", 2);
+        if (namespaceAndJob.length == 2) {
+            gateway.deleteJob(namespaceAndJob[0], namespaceAndJob[1]);
+        }
+    }
+
+    @Override
     public void close() {
         gateway.close();
     }

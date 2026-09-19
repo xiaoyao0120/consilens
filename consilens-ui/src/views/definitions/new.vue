@@ -337,6 +337,32 @@ function autoMatchKeys() {
 }
 
 // ===== Step 3: 高级选项 =====
+const platformForm = reactive({
+  platform: "local",
+  yarn: {
+    archive: "",
+    queue: "",
+    amMemory: "1g",
+    amVCores: 1,
+    stagingDir: "",
+    files: "",
+    jars: "",
+    tags: "",
+    maxAppAttempts: null,
+  },
+  kubernetes: {
+    image: "",
+    namespace: "default",
+    jobName: "",
+    memory: "1g",
+    cpu: "0.5",
+    serviceAccount: "",
+    imagePullSecrets: "",
+    envsText: "",
+    secretEnvText: "",
+  },
+});
+
 const runForm = reactive({
   serialNo: generateSerialNo(),
   timeoutMs: 300000,
@@ -456,6 +482,9 @@ async function loadForEdit() {
     advForm.validateUniqueKeys = exec.validateUniqueKeys ?? true;
     advForm.maxDifferences = exec.maxDifferences ?? null;
     advForm.enableProfiling = exec.enableProfiling ?? false;
+    platformForm.platform = config.platform || "local";
+    const savedProperties = config.properties || config.cluster?.[platformForm.platform] || {};
+    restorePlatformProperties(savedProperties);
     defForm.name = definition.name;
     defForm.description = definition.description || "";
     // 编辑默认回到第一步，便于逐项确认与修改
@@ -507,6 +536,10 @@ function buildConfig() {
       },
     },
   };
+  if (platformForm.platform !== "local") {
+    config.platform = platformForm.platform;
+    config.properties = platformProperties();
+  }
   const hints = buildHints();
   if (hints.keyMappings) config.comparison.keyMappings = hints.keyMappings;
   if (hints.ignoreColumns) config.comparison.ignoreColumns = hints.ignoreColumns;
@@ -520,7 +553,104 @@ function buildConfig() {
   return config;
 }
 
-const configDisplay = computed(() => JSON.stringify(buildConfig(), null, 2));
+function platformProperties() {
+  if (platformForm.platform === "yarn") {
+    if (!platformForm.yarn.archive.trim()) {
+      throw new Error("请填写 YARN Runtime Archive");
+    }
+    return omitEmpty({ ...platformForm.yarn });
+  }
+  if (!platformForm.kubernetes.image.trim()) {
+    throw new Error("请填写 Kubernetes 镜像");
+  }
+  return omitEmpty({
+    image: platformForm.kubernetes.image,
+    namespace: platformForm.kubernetes.namespace,
+    jobName: platformForm.kubernetes.jobName,
+    memory: platformForm.kubernetes.memory,
+    cpu: platformForm.kubernetes.cpu,
+    serviceAccount: platformForm.kubernetes.serviceAccount,
+    imagePullSecrets: platformForm.kubernetes.imagePullSecrets,
+    envs: parseKeyValueLines(platformForm.kubernetes.envsText, "环境变量"),
+    secretEnv: parseSecretEnvLines(platformForm.kubernetes.secretEnvText),
+  });
+}
+
+function omitEmpty(values) {
+  return Object.fromEntries(Object.entries(values).filter(([, value]) => value !== null
+    && value !== undefined && String(value).trim() !== ""));
+}
+
+function parseKeyValueLines(text, label) {
+  if (!text.trim()) return undefined;
+  const result = {};
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const separator = trimmed.indexOf("=");
+    if (separator <= 0) {
+      throw new Error(`${label}格式应为 KEY=VALUE`);
+    }
+    result[trimmed.slice(0, separator).trim()] = trimmed.slice(separator + 1).trim();
+  }
+  return result;
+}
+
+function parseSecretEnvLines(text) {
+  const references = parseKeyValueLines(text, "Secret 环境变量");
+  if (!references) return undefined;
+  const result = {};
+  Object.entries(references).forEach(([name, value]) => {
+    const separator = value.indexOf("/");
+    if (separator <= 0 || separator === value.length - 1) {
+      throw new Error("Secret 环境变量格式应为 ENV_NAME=secretName/secretKey");
+    }
+    result[name] = {
+      secretName: value.slice(0, separator).trim(),
+      secretKey: value.slice(separator + 1).trim(),
+    };
+  });
+  return result;
+}
+
+function restorePlatformProperties(properties) {
+  const yarn = properties || {};
+  if (platformForm.platform === "yarn") {
+    Object.assign(platformForm.yarn, {
+      archive: yarn.archive || "",
+      queue: yarn.queue || "",
+      amMemory: yarn.amMemory || "1g",
+      amVCores: yarn.amVCores ?? 1,
+      stagingDir: yarn.stagingDir || "",
+      files: yarn.files || "",
+      jars: yarn.jars || "",
+      tags: yarn.tags || "",
+      maxAppAttempts: yarn.maxAppAttempts ?? null,
+    });
+    return;
+  }
+  const kubernetes = properties || {};
+  Object.assign(platformForm.kubernetes, {
+    image: kubernetes.image || "",
+    namespace: kubernetes.namespace || "default",
+    jobName: kubernetes.jobName || "",
+    memory: kubernetes.memory || "1g",
+    cpu: kubernetes.cpu || "0.5",
+    serviceAccount: kubernetes.serviceAccount || "",
+    imagePullSecrets: kubernetes.imagePullSecrets || "",
+    envsText: Object.entries(kubernetes.envs || {}).map(([name, value]) => `${name}=${value}`).join("\n"),
+    secretEnvText: Object.entries(kubernetes.secretEnv || {})
+      .map(([name, value]) => `${name}=${value.secretName}/${value.secretKey}`).join("\n"),
+  });
+}
+
+const configDisplay = computed(() => {
+  try {
+    return JSON.stringify(buildConfig(), null, 2);
+  } catch (error) {
+    return `配置错误：${error.message}`;
+  }
+});
 
 async function handleSaveDefinition() {
   if (!defForm.name.trim()) {
@@ -533,10 +663,11 @@ async function handleSaveDefinition() {
   }
   submitting.value = true;
   try {
+    const config = buildConfig();
     const payload = {
       name: defForm.name.trim(),
       description: defForm.description.trim() || undefined,
-      config: buildConfig(),
+      config,
     };
     const definition = editId.value
       ? await updateTaskDefinition(editId.value, payload)
@@ -870,6 +1001,95 @@ if (editId.value) {
             <span class="unit-hint">毫秒</span>
           </div>
         </div>
+        <div class="field">
+          <label class="field-label">执行平台</label>
+          <n-radio-group v-model:value="platformForm.platform" size="small">
+            <n-radio-button value="local">Local（Server 内）</n-radio-button>
+            <n-radio-button value="yarn">YARN</n-radio-button>
+            <n-radio-button value="kubernetes">Kubernetes</n-radio-button>
+          </n-radio-group>
+        </div>
+        <template v-if="platformForm.platform === 'yarn'">
+          <div class="field">
+            <label class="field-label">Runtime Archive（HDFS）<span class="required">*</span></label>
+            <n-input v-model:value="platformForm.yarn.archive" placeholder="hdfs:///apps/consilens/runtime.zip" />
+          </div>
+          <div class="adv-grid">
+            <div class="field">
+              <label class="field-label">队列</label>
+              <n-input v-model:value="platformForm.yarn.queue" placeholder="default" />
+            </div>
+            <div class="field">
+              <label class="field-label">AM 内存</label>
+              <n-input v-model:value="platformForm.yarn.amMemory" placeholder="1g" />
+            </div>
+            <div class="field">
+              <label class="field-label">AM vCores</label>
+              <n-input-number v-model:value="platformForm.yarn.amVCores" :min="1" :precision="0" class="flex-1" />
+            </div>
+            <div class="field">
+              <label class="field-label">最大重试次数</label>
+              <n-input-number v-model:value="platformForm.yarn.maxAppAttempts" :min="1" :precision="0" class="flex-1" placeholder="默认 1" />
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-label">Staging 目录</label>
+            <n-input v-model:value="platformForm.yarn.stagingDir" placeholder="hdfs:///user/consilens/.staging" />
+          </div>
+          <div class="field">
+            <label class="field-label">附加文件</label>
+            <n-input v-model:value="platformForm.yarn.files" placeholder="多个文件以英文逗号分隔" />
+          </div>
+          <div class="field">
+            <label class="field-label">附加 JAR</label>
+            <n-input v-model:value="platformForm.yarn.jars" placeholder="多个 JAR 以英文逗号分隔" />
+          </div>
+          <div class="field">
+            <label class="field-label">应用标签</label>
+            <n-input v-model:value="platformForm.yarn.tags" placeholder="多个标签以英文逗号分隔" />
+          </div>
+        </template>
+        <template v-if="platformForm.platform === 'kubernetes'">
+          <div class="field">
+            <label class="field-label">运行镜像<span class="required">*</span></label>
+            <n-input v-model:value="platformForm.kubernetes.image" placeholder="registry.example/consilens-runtime:0.3.0" />
+          </div>
+          <div class="adv-grid">
+            <div class="field">
+              <label class="field-label">Namespace</label>
+              <n-input v-model:value="platformForm.kubernetes.namespace" />
+            </div>
+            <div class="field">
+              <label class="field-label">Job 名称</label>
+              <n-input v-model:value="platformForm.kubernetes.jobName" placeholder="留空自动生成" />
+            </div>
+            <div class="field">
+              <label class="field-label">内存</label>
+              <n-input v-model:value="platformForm.kubernetes.memory" placeholder="1g" />
+            </div>
+            <div class="field">
+              <label class="field-label">CPU 核数</label>
+              <n-input v-model:value="platformForm.kubernetes.cpu" placeholder="0.5" />
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-label">Service Account</label>
+            <n-input v-model:value="platformForm.kubernetes.serviceAccount" placeholder="可选" />
+          </div>
+          <div class="field">
+            <label class="field-label">镜像拉取 Secret</label>
+            <n-input v-model:value="platformForm.kubernetes.imagePullSecrets" placeholder="多个 Secret 以英文逗号分隔" />
+          </div>
+          <div class="field">
+            <label class="field-label">环境变量</label>
+            <n-input v-model:value="platformForm.kubernetes.envsText" type="textarea" :autosize="{ minRows: 2, maxRows: 6 }" placeholder="每行一个，例如：TZ=Asia/Shanghai" />
+          </div>
+          <div class="field">
+            <label class="field-label">数据库密码 Secret</label>
+            <n-input v-model:value="platformForm.kubernetes.secretEnvText" type="textarea" :autosize="{ minRows: 2, maxRows: 6 }" placeholder="SOURCE_PASSWORD=compare-db/source-password&#10;TARGET_PASSWORD=compare-db/target-password" />
+            <div class="field-desc">存在数据库密码时必须填写 SOURCE_PASSWORD 与 TARGET_PASSWORD；每行格式为 ENV_NAME=secretName/secretKey。</div>
+          </div>
+        </template>
         <div class="field switch-field">
           <div class="switch-text">
             <span class="field-label">试运行</span>

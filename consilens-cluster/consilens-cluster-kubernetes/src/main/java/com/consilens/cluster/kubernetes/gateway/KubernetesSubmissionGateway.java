@@ -21,6 +21,12 @@ public interface KubernetesSubmissionGateway extends AutoCloseable {
         return java.util.Optional.empty();
     }
 
+    /**
+     * Deletes the Job (cascading to pods); idempotent.
+     */
+    default void deleteJob(String namespace, String jobName) {
+    }
+
     @Override
     void close();
 }

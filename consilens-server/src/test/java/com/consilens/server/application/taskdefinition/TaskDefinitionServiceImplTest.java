@@ -192,6 +192,34 @@ class DefaultTaskDefinitionServiceTest {
     }
 
     @Test
+    void shouldApplyPlatformAndPropertiesSavedWithDefinition() {
+        TaskDefinitionRecord clusterDefinition = TaskDefinitionRecord.builder()
+                .id(DEF_ID)
+                .definitionKey("taskdef_1")
+                .name("orders-check")
+                .taskType("RUN")
+                .config("{\"source\":{\"type\":\"mysql\",\"table\":\"orders\"},"
+                        + "\"target\":{\"type\":\"mysql\",\"table\":\"orders\"},"
+                        + "\"keys\":[\"id\"],\"platform\":\"yarn\","
+                        + "\"properties\":{\"archive\":\"hdfs:///apps/consilens/runtime.zip\","
+                        + "\"queue\":\"analytics\"}}")
+                .enabled(true)
+                .build();
+        when(definitionRepository.findById(DEF_ID)).thenReturn(Optional.of(clusterDefinition));
+        when(submissionService.submit(any(), any())).thenReturn(
+                TaskAcceptedResponse.builder().taskId("inst_1").status("PENDING").build());
+
+        service.run(DEF_ID, new TaskDefinitionRunRequest(), "trace-x");
+
+        ArgumentCaptor<RunRequest> captor = ArgumentCaptor.forClass(RunRequest.class);
+        verify(submissionService).submit(captor.capture(), eq("trace-x"));
+        assertEquals("yarn", captor.getValue().getOptions().getPlatform());
+        assertEquals("hdfs:///apps/consilens/runtime.zip",
+                captor.getValue().getOptions().getProperties().get("archive"));
+        assertEquals("analytics", captor.getValue().getOptions().getProperties().get("queue"));
+    }
+
+    @Test
     void shouldTruncateGeneratedSerialNoForLongNames() {
         TaskDefinitionRecord record = TaskDefinitionRecord.builder()
                 .id(DEF_ID)

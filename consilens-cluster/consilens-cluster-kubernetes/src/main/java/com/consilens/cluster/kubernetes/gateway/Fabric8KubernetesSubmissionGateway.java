@@ -56,6 +56,11 @@ public class Fabric8KubernetesSubmissionGateway implements KubernetesSubmissionG
     }
 
     @Override
+    public void deleteJob(String namespace, String jobName) {
+        client.batch().v1().jobs().inNamespace(namespace).withName(jobName).delete();
+    }
+
+    @Override
     public void close() {
         client.close();
     }

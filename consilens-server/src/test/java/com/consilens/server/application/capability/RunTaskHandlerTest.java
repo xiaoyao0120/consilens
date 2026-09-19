@@ -51,7 +51,8 @@ class RunTaskHandlerTest {
                 SecretProtectorTestKeys.protector(),
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
-                new com.fasterxml.jackson.databind.ObjectMapper());
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
 
         com.consilens.server.application.capability.config.ServerCompareConfig config =
                 configService.fromContent(java.util.Map.of(
@@ -71,7 +72,8 @@ class RunTaskHandlerTest {
                         SecretProtectorTestKeys.protector(),
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
-                new com.fasterxml.jackson.databind.ObjectMapper());
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
         DiffRow row = DiffRow.modified(List.of(1),
                 List.of("sensitive-source"),
                 List.of("sensitive-target"),
@@ -100,7 +102,8 @@ class RunTaskHandlerTest {
                 SecretProtectorTestKeys.protector(),
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
-                new com.fasterxml.jackson.databind.ObjectMapper());
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
 
         com.consilens.server.domain.model.DataSourceRecord ds = com.consilens.server.domain.model.DataSourceRecord.builder()
                 .id(6L).name("ds-6").type("oracle")
@@ -142,7 +145,8 @@ class RunTaskHandlerTest {
                 SecretProtectorTestKeys.protector(),
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
-                new com.fasterxml.jackson.databind.ObjectMapper());
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
 
         com.consilens.server.domain.model.DataSourceRecord ds = com.consilens.server.domain.model.DataSourceRecord.builder()
                 .id(5L).name("ds-5").type("mysql")
@@ -184,7 +188,8 @@ class RunTaskHandlerTest {
                 SecretProtectorTestKeys.protector(),
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
-                new com.fasterxml.jackson.databind.ObjectMapper());
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
         when(dataSourceRepository.findById(5L)).thenReturn(java.util.Optional.of(
                 com.consilens.server.domain.model.DataSourceRecord.builder()
                         .id(5L).type("mysql")
@@ -221,7 +226,8 @@ class RunTaskHandlerTest {
                 crypto,
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
-                new com.fasterxml.jackson.databind.ObjectMapper());
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
 
         com.consilens.server.application.capability.config.ServerCompareConfig config =
                 configService.fromContent(java.util.Map.of(
@@ -245,7 +251,8 @@ class RunTaskHandlerTest {
                         SecretProtectorTestKeys.protector(),
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
-                new com.fasterxml.jackson.databind.ObjectMapper());
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
         List<DiffRow> rows = new ArrayList<>();
         for (int i = 0; i < 2500; i++) {
             rows.add(DiffRow.added(List.of(i), List.of("v" + i), List.of("id", "value")));
@@ -288,7 +295,8 @@ class RunTaskHandlerTest {
                         SecretProtectorTestKeys.protector(),
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
-                new com.fasterxml.jackson.databind.ObjectMapper()) {
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator())) {
             @Override
             protected CompareRuntime createCompareRuntime() {
                 return compareRequest -> result;
@@ -367,7 +375,8 @@ class RunTaskHandlerTest {
                         SecretProtectorTestKeys.protector(),
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
-                new com.fasterxml.jackson.databind.ObjectMapper()) {
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator())) {
             @Override
             protected CompareRuntime createCompareRuntime() {
                 return compareRequest -> result;

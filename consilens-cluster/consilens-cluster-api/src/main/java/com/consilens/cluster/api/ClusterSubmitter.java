@@ -19,4 +19,12 @@ public interface ClusterSubmitter {
     default ClusterApplicationResult awaitCompletion(ClusterSubmission submission, Duration timeout) {
         return null;
     }
+
+    /**
+     * Requests termination of the submitted application (YARN kill / Kubernetes
+     * Job deletion). Implementations must be idempotent; a no-op default keeps
+     * submitters without kill support safe to call.
+     */
+    default void kill(ClusterSubmission submission) {
+    }
 }
