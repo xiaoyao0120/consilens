@@ -35,6 +35,26 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
         this.dataTypeHandler = dataTypeHandler;
     }
 
+
+    @Override
+    protected String joinSettingsClause() {
+        // ClickHouse 默认 join_use_nulls=0：外连接未匹配侧填列默认值而非 NULL，
+        // presence 归因（IS NULL）会全部失效 → 逐条设置开启。
+        return " SETTINGS join_use_nulls = 1";
+    }
+
+    /** ClickHouse 字符串化排序（键可能是 Nullable）。 */
+    @Override
+    protected String orderByExpression(String column) {
+        return "CAST(" + capabilityProvider.quote(column) + " AS Nullable(String))";
+    }
+
+    /** join 计划比较列的类型归一化处理器（与 checksum 路径同口径）。 */
+    @Override
+    protected com.consilens.connector.api.DataTypeHandler dataTypeHandler() {
+        return this.dataTypeHandler;
+    }
+
     @Override
     public String getLimitClause(long offset, long limit) {
         // ClickHouse syntax: LIMIT offset, limit (MySQL-style)
@@ -108,7 +128,7 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
             // Order by pk_key to ensure deterministic ordering. The huge LIMIT keeps
             // the ORDER BY effective (ClickHouse may otherwise optimize it away) while
             // never truncating a checksum for tables with more than ten million rows.
-            sql.append(" ORDER BY pk_key LIMIT 18446744073709551615");
+            sql.append(" ORDER BY pk_key, row_checksum LIMIT 18446744073709551615");
             sql.append(") AS ordered");
             sql.append(") AS data");
         }

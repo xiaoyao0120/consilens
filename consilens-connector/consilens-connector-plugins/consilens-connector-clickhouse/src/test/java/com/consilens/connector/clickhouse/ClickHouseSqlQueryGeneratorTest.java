@@ -65,7 +65,8 @@ class ClickHouseSqlQueryGeneratorTest {
         assertTrue(sql.contains("MD5"));
         assertTrue(sql.contains("arrayStringConcat"));
         assertTrue(sql.contains("groupArray"));
-        assertTrue(sql.contains("ORDER BY pk_key LIMIT 18446744073709551615"));
+        // 排序键取 (键, 行校验和) 双列：仅按键排序时同键多行的聚合顺序不确定
+        assertTrue(sql.contains("ORDER BY pk_key, row_checksum LIMIT 18446744073709551615"), sql);
         assertFalse(sql.contains("LIMIT 10000000"));
     }
 
@@ -77,10 +78,10 @@ class ClickHouseSqlQueryGeneratorTest {
         types.put("amount", DataType.BIGINT);
 
         String sql = generator.getChecksumSQL("public", "orders", columns, Arrays.asList("id"), types, null);
-        // NULL integers must collapse to '0' inside concat(), matching MySQL's
-        // COALESCE(..., '0') normalization; otherwise row checksums diverge.
-        assertTrue(sql.contains("COALESCE(toString("));
-        assertTrue(sql.contains("), '0')"));
+        // NULL 整数在 concat() 内折叠为空串，与其它方言的 COALESCE(..., '') 归一化一致；
+        // 否则行校验和会不一致
+        assertTrue(sql.contains("COALESCE(trim(toString("));
+        assertTrue(sql.contains("), '')"));
     }
 
     @Test
@@ -91,8 +92,8 @@ class ClickHouseSqlQueryGeneratorTest {
         types.put("amount", DataType.BIGINT);
 
         String sql = generator.getRowHashSQL("public", "orders", Arrays.asList("id"), columns, types, null);
-        assertTrue(sql.contains("COALESCE(toString("));
-        assertTrue(sql.contains("), '0')"));
+        assertTrue(sql.contains("COALESCE(trim(toString("));
+        assertTrue(sql.contains("), '')"));
     }
 
     @Test

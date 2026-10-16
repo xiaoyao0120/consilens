@@ -27,14 +27,18 @@ class DorisDataTypeHandlerTest {
     @Test
     void testNormalizeColumn_Int() {
         String result = handler.normalizeColumn("age", DataType.INTEGER);
-        assertEquals("COALESCE(TRIM(CAST(`age` AS CHAR)), '0')", result);
+        // NULL 哨兵统一为空串（与其它方言一致）
+        assertEquals("COALESCE(TRIM(CAST(`age` AS CHAR)), '')", result);
     }
 
     @Test
     void testNormalizeColumn_Timestamp() {
         String result = handler.normalizeColumn("created_at", DataType.TIMESTAMP);
+        // 以固定锚点求偏移，再整体平移：命名时区不依赖 mysql.time_zone 表
         assertEquals(
-                "COALESCE(DATE_FORMAT(CONVERT_TZ(`created_at`, @@session.time_zone, '+00:00'), '%Y-%m-%d %H:%i:%s'), '')",
+                "COALESCE(DATE_FORMAT(DATE_ADD(`created_at`, INTERVAL -TIMESTAMPDIFF(SECOND, "
+                        + "CONVERT_TZ('2020-06-01 12:00:00', @@session.time_zone, '+00:00'), "
+                        + "'2020-06-01 12:00:00') SECOND), '%Y-%m-%d %H:%i:%s'), '')",
                 result);
     }
 
@@ -49,14 +53,10 @@ class DorisDataTypeHandlerTest {
     @Test
     void testNormalizeDecimalCarriesRoundingIntoIntegerPart() {
         String result = handler.normalizeColumn("amount", DataType.DECIMAL);
-        // The whole rounded value is cast to a fixed-scale DECIMAL, so rounding
-        // carry (e.g. -1.99999 with precision 4 becomes -2.0000, not -1.10000)
-        // propagates into the integer part. ROUND must apply directly to the DECIMAL
-        // column: a DOUBLE detour would lose precision for large DECIMAL(38, N) values
-        // and diverge from MySQL FORMAT(ROUND(col, N), N).
-        assertTrue(result.contains("ROUND(`amount`, 4)"));
-        assertTrue(result.contains("AS DECIMAL(38, 4)"));
-        assertTrue(result.contains("'0.0000'"));
+        // 整段断言一次钉死：ROUND 直接作用在 DECIMAL 列上（不进 DOUBLE），
+        // 再转成固定 scale 的 DECIMAL 保留尾零；NULL 哨兵为空串（不再是 '0.0000'）
+        assertEquals("COALESCE(TRIM(CAST(CAST(ROUND(`amount`, 4) AS DECIMAL(38, 4)) AS CHAR)),'')",
+                result);
         assertFalse(result.contains("Math.pow"));
         assertFalse(result.contains("FLOOR(ABS"));
         assertFalse(result.contains("AS DOUBLE"));

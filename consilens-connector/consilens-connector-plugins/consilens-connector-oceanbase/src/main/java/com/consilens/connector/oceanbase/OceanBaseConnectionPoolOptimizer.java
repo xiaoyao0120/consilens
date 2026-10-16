@@ -52,7 +52,7 @@ public class OceanBaseConnectionPoolOptimizer implements ConnectionPoolOptimizer
         props.setProperty("maintainTimeStats", "false");
 
         // Character encoding
-        props.setProperty("serverTimezone", "UTC");
+        // Keep datetimes as literal wall-clock (see MySQLConnectionPoolOptimizer note).
         props.setProperty("useUnicode", "true");
         props.setProperty("characterEncoding", "UTF-8");
 

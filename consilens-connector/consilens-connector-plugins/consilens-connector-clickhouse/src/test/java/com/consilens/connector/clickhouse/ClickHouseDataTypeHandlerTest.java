@@ -24,9 +24,9 @@ class ClickHouseDataTypeHandlerTest {
     @Test
     void testNormalizeColumn_Int() {
         String result = handler.normalizeColumn("amount", DataType.INTEGER);
-        // Integer columns are returned as-is for WHERE compatibility; the query
-        // generator applies COALESCE(toString(...), '0') inside checksum concat().
-        assertEquals("`amount`", result);
+        // 与本地路径同口径：字符串化 + TRIM + NULL → ''（不再返回原始列，
+        // 否则本地比对时 NULL 原样带出，与其它方言不一致）
+        assertEquals("COALESCE(trim(toString(`amount`)), '')", result);
     }
 
     @Test
@@ -38,9 +38,11 @@ class ClickHouseDataTypeHandlerTest {
     @Test
     void testNormalizeColumn_DecimalKeepsTrailingZeros() {
         String result = handler.normalizeColumn("amount", DataType.DECIMAL);
-        assertTrue(result.contains("toString(trunc("));
-        assertTrue(result.contains("lpad("));
-        assertTrue(result.contains("'0.0000'"));
+        // 符号 + 整数部分 + 定长小数部分（lpad 补零）
+        assertTrue(result.contains("abs(trunc("), result);
+        assertTrue(result.contains("lpad("), result);
+        // NULL 哨兵为空串（不再是 '0.0000'）
+        assertTrue(result.contains("'')"), result);
     }
 
     @Test

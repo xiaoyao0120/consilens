@@ -38,6 +38,17 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
         super(capabilityProvider, normalizationConfig);
     }
 
+    /**
+     * 科学计数渲染：转发到 {@link BaseDataTypeHandler#mysqlFamilyScientificFloatExpression(String)}
+     * 的共享实现——mysql 族各方言必须逐字同形，不能各自拷贝。
+     */
+    @Override
+    protected String scientificFloatExpression(String quotedCol) {
+        return mysqlFamilyScientificFloatExpression(quotedCol);
+    }
+
+
+
     @Override
     public TypeDescriptor convertToTypeDescriptor(String originType) {
         if (originType == null || originType.isBlank()) {
@@ -115,7 +126,9 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
                         .build();
             }
             case "BIT":
-                return TypeDescriptor.builder(com.consilens.common.enums.DataType.BINARY_TYPE)
+                // BIT(1) 语义是布尔：按 BINARY 归一化会渲染 HEX，与其它方言的布尔/整数
+                // 归一化（NULL → '0'）不一致，跨源比对全 NULL 行会误报。
+                return TypeDescriptor.builder(com.consilens.common.enums.DataType.BOOLEAN_TYPE)
                         .originType(originType)
                         .length(extractLength(upperType) != null ? extractLength(upperType) : 1)
                         .build();
@@ -154,7 +167,10 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
                         .build();
             case "ENUM":
             case "SET":
-                return TypeDescriptor.builder(com.consilens.common.enums.DataType.ENUM_TYPE)
+                // ENUM/SET 的取值是标签字符串，必须按字符串归一化：落到默认分支会渲染成
+                // COALESCE(CAST(col AS CHAR), '0')，与其他方言的 VARCHAR（NULL → ''）不一致，
+                // 跨源比对时 NULL 行会误报（实测 dq_cmp_alltype pk=2 的 c_enum）。
+                return TypeDescriptor.builder(com.consilens.common.enums.DataType.STRING_TYPE)
                         .originType(originType)
                         .build();
             case "BINARY":
@@ -341,7 +357,7 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeInteger(String quotedCol) {
-        return "COALESCE(TRIM(CAST(" + quotedCol + " AS CHAR)), '0')";
+        return "COALESCE(TRIM(CAST(" + quotedCol + " AS CHAR)), '')";
     }
 
     /**
@@ -350,7 +366,7 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeString(String quotedCol) {
-        return "COALESCE(TRIM(" + quotedCol + "), '')";
+        return "COALESCE(TRIM(" + quotedCol + "), " + stringNullReplacement() + ")";
     }
 
     /**
@@ -365,17 +381,16 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
 
         if (precision == 0) {
             if (rounding) {
-                return "COALESCE(TRIM(CAST(ROUND(" + quotedCol + ", 0) AS CHAR)), '0')";
+                return "COALESCE(TRIM(CAST(ROUND(" + quotedCol + ", 0) AS CHAR)), '')";
             } else {
-                return "COALESCE(TRIM(CAST(TRUNCATE(" + quotedCol + ", 0) AS CHAR)), '0')";
+                return "COALESCE(TRIM(CAST(TRUNCATE(" + quotedCol + ", 0) AS CHAR)), '')";
             }
         }
 
-        String defaultValue = "0." + "0".repeat(precision);
         if (rounding) {
-            return "COALESCE(REPLACE(FORMAT(" + quotedCol + ", " + precision + "), ',', ''), '" + defaultValue + "')";
+            return "COALESCE(REPLACE(FORMAT(" + quotedCol + ", " + precision + "), ',', ''), '')";
         } else {
-            return "COALESCE(REPLACE(FORMAT(TRUNCATE(" + quotedCol + ", " + precision + "), " + precision + "), ',', ''), '" + defaultValue + "')";
+            return "COALESCE(REPLACE(FORMAT(TRUNCATE(" + quotedCol + ", " + precision + "), " + precision + "), ',', ''), '')";
         }
     }
 
@@ -391,17 +406,16 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
 
         if (precision == 0) {
             if (rounding) {
-                return "COALESCE(TRIM(CAST(ROUND(CAST(" + quotedCol + " AS DOUBLE), 0) AS CHAR)), '0')";
+                return "COALESCE(TRIM(CAST(ROUND(CAST(" + quotedCol + " AS DOUBLE), 0) AS CHAR)), '')";
             } else {
-                return "COALESCE(TRIM(CAST(TRUNCATE(CAST(" + quotedCol + " AS DOUBLE), 0) AS CHAR)), '0')";
+                return "COALESCE(TRIM(CAST(TRUNCATE(CAST(" + quotedCol + " AS DOUBLE), 0) AS CHAR)), '')";
             }
         }
 
-        String defaultValue = "0." + "0".repeat(precision);
         if (rounding) {
-            return "COALESCE(REPLACE(FORMAT(CAST(" + quotedCol + " AS DOUBLE), " + precision + "), ',', ''), '" + defaultValue + "')";
+            return "COALESCE(REPLACE(FORMAT(CAST(" + quotedCol + " AS DOUBLE), " + precision + "), ',', ''), '')";
         } else {
-            return "COALESCE(REPLACE(FORMAT(TRUNCATE(CAST(" + quotedCol + " AS DOUBLE), " + precision + "), " + precision + "), ',', ''), '" + defaultValue + "')";
+            return "COALESCE(REPLACE(FORMAT(TRUNCATE(CAST(" + quotedCol + " AS DOUBLE), " + precision + "), " + precision + "), ',', ''), '')";
         }
     }
 
@@ -437,8 +451,7 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
     protected String normalizeDateTime(String quotedCol) {
         String targetTimezone = resolveOceanBaseTimezone("datetime", "+00:00");
         String format = resolveOceanBaseTemporalFormat("datetime", "%Y-%m-%d %H:%i:%s", "%Y-%m-%d");
-        return "COALESCE(DATE_FORMAT(CONVERT_TZ(" + quotedCol + ", @@session.time_zone, '"
-                + targetTimezone + "'), '" + format + "'), '')";
+        return "COALESCE(DATE_FORMAT(" + tzShiftByAnchor(quotedCol, targetTimezone) + ", \'" + format + "'), '')";
     }
 
     /**
@@ -449,8 +462,7 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
     protected String normalizeTimestamp(String quotedCol) {
         String targetTimezone = resolveOceanBaseTimezone("timestamp", "+00:00");
         String format = resolveOceanBaseTemporalFormat("timestamp", "%Y-%m-%d %H:%i:%s", "%Y-%m-%d");
-        return "COALESCE(DATE_FORMAT(CONVERT_TZ(" + quotedCol + ", @@session.time_zone, '"
-                + targetTimezone + "'), '" + format + "'), '')";
+        return "COALESCE(DATE_FORMAT(" + tzShiftByAnchor(quotedCol, targetTimezone) + ", \'" + format + "'), '')";
     }
 
     /**
@@ -460,8 +472,7 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
     protected String normalizeTimestampWithTimezone(String quotedCol) {
         String targetTimezone = resolveOceanBaseTimezone("timestamp_with_timezone", "+00:00");
         String format = resolveOceanBaseTemporalFormat("timestamp_with_timezone", "%Y-%m-%d %H:%i:%s", "%Y-%m-%d");
-        return "COALESCE(DATE_FORMAT(CONVERT_TZ(" + quotedCol + ", @@session.time_zone, '"
-                + targetTimezone + "'), '" + format + "'), '')";
+        return "COALESCE(DATE_FORMAT(" + tzShiftByAnchor(quotedCol, targetTimezone) + ", \'" + format + "'), '')";
     }
 
     /**
@@ -470,7 +481,7 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeBoolean(String quotedCol) {
-        return "CASE WHEN " + quotedCol + " = 1 THEN '1' ELSE '0' END";
+        return "CASE WHEN " + quotedCol + " IS NULL THEN '' WHEN " + quotedCol + " = 1 THEN '1' ELSE '0' END";
     }
 
     /**
@@ -494,7 +505,7 @@ public class OceanBaseDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeDefault(String quotedCol) {
-        return "COALESCE(TRIM(CAST(" + quotedCol + " AS CHAR)), '0')";
+        return "COALESCE(TRIM(CAST(" + quotedCol + " AS CHAR)), '')";
     }
 
     private String resolveOceanBaseTimezone(String dataTypeName, String defaultTimezone) {

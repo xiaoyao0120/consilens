@@ -26,6 +26,20 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
         this.dataTypeHandler = dataTypeHandler;
     }
 
+
+    @Override
+    public boolean supportsKeyMultiplicityFilter() {
+        // Trino 报 "Given correlated subquery is not supported"：开放档 join 遇重复键时
+        // 退化为整表本地多重集配对（不 N×M，结果与 checksum/streaming 一致）。
+        return false;
+    }
+
+    /** join 计划比较列的类型归一化处理器（与 checksum 路径同口径）。 */
+    @Override
+    protected com.consilens.connector.api.DataTypeHandler dataTypeHandler() {
+        return this.dataTypeHandler;
+    }
+
     @Override
     public String getLimitClause(long offset, long limit) {
         if (offset <= 0) {
@@ -47,7 +61,7 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
             sql.append("'' as checksum ");
         } else {
             // Two-step approach matching MySQL: per-row MD5 + aggregate MD5
-            sql.append("COALESCE(lower(to_hex(md5(to_utf8(array_join(array_agg(row_checksum ORDER BY pk_key), '|'))))), '') as checksum ");
+            sql.append("COALESCE(lower(to_hex(md5(to_utf8(array_join(array_agg(row_checksum ORDER BY pk_key, row_checksum), '|'))))), '') as checksum ");
             sql.append("FROM (SELECT ");
 
             // Build primary key for stable ordering

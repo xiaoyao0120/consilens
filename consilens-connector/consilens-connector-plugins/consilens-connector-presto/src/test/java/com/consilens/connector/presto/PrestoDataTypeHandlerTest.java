@@ -21,7 +21,8 @@ class PrestoDataTypeHandlerTest {
     @Test
     void testNormalizeColumnNumeric() {
         String result = handler.normalizeColumn("amount", DataType.INTEGER);
-        assertEquals("COALESCE(TRIM(CAST(\"amount\" AS VARCHAR)), '0')", result);
+        // NULL 哨兵统一为空串（与其它方言一致）
+        assertEquals("COALESCE(TRIM(CAST(\"amount\" AS VARCHAR)), '')", result);
     }
 
     @Test
@@ -35,7 +36,8 @@ class PrestoDataTypeHandlerTest {
     void testNormalizeDecimalKeepsTrailingZeros() {
         String result = handler.normalizeColumn("amount", DataType.DECIMAL);
         assertTrue(result.contains("AS DECIMAL(38, 4)"));
-        assertTrue(result.contains("'0.0000'"));
+        // NULL 哨兵为空串（不再是 '0.0000'）
+        assertTrue(result.contains("'')"), result);
     }
 
     @Test
@@ -46,9 +48,12 @@ class PrestoDataTypeHandlerTest {
     }
 
     @Test
-    void testNormalizeDoubleKeepsTrailingZeros() {
+    void testNormalizeDoubleUsesFloatFamilyRendering() {
         String result = handler.normalizeColumn("ratio", DataType.DOUBLE);
-        assertTrue(result.contains("AS DECIMAL(38, 4)"));
+        // DOUBLE 与 FLOAT 同族：常规区间定点渲染 + 超区间（|v|>1e10 / 0<|v|<1e-10）科学计数，
+        // 与本地路径 ValueNormalizer.normalizeFloatingPoint 同口径
+        assertTrue(result.contains("CASE WHEN"), result);
+        assertTrue(result.contains("AS DECIMAL(38, 6)"), result);
     }
 
     @Test

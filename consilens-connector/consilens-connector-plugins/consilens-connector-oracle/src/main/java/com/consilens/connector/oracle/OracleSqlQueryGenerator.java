@@ -26,6 +26,30 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
         this.dataTypeHandler = dataTypeHandler;
     }
 
+
+    /**
+     * Oracle 的 CAST 不接受无长度 VARCHAR，字符串化排序用 TO_CHAR；
+     * 并显式 NULLS FIRST——Oracle 默认 NULLS LAST，而归并侧把 NULL 归一成 ''（排在最前），
+     * 顺序不一致会让含 NULL 键的行被判成互不匹配（实测 edge 的 (NULL,s1) 行多报 SM+TM）。
+     * 对侧（MySQL 族）默认即 NULLS FIRST，口径一致。
+     */
+    @Override
+    protected String orderByExpression(String column) {
+        return "TO_CHAR(" + capabilityProvider.quote(column) + ") NULLS FIRST";
+    }
+
+    /** join 计划比较列的类型归一化处理器（与 checksum 路径同口径）。 */
+    @Override
+    protected com.consilens.connector.api.DataTypeHandler dataTypeHandler() {
+        return this.dataTypeHandler;
+    }
+
+    /** 归一化结果为字符串时，须做字节级比较以规避库内排序规则（如 utf8mb4_0900_ai_ci）。 */
+    @Override
+    protected String binarySafeExpression(String expression) {
+        return "STANDARD_HASH(" + expression + ", 'MD5')";
+    }
+
     @Override
     public String getLimitClause(long offset, long limit) {
         if (offset <= 0) {
@@ -74,7 +98,7 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
         if (columns.isEmpty()) {
             sql.append("'' as checksum ");
         } else {
-            sql.append("LOWER(RAWTOHEX(STANDARD_HASH(COALESCE(LISTAGG(row_checksum, '|') WITHIN GROUP (ORDER BY pk_key), ''), 'MD5'))) as checksum ");
+            sql.append("LOWER(RAWTOHEX(STANDARD_HASH(COALESCE(LISTAGG(row_checksum, '|') WITHIN GROUP (ORDER BY pk_key, row_checksum), ''), 'MD5'))) as checksum ");
             sql.append("FROM (SELECT ");
 
             // Build primary key for stable ordering
@@ -129,7 +153,7 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
         } else {
             // Use SUM aggregate to combine per-row hash values
             // This avoids ORA-00937 when used with COUNT(*)
-            sql.append("LPAD(TO_CHAR(SUM(");
+            sql.append("TO_CHAR(SUM(");
 
             for (int i = 0; i < columns.size(); i++) {
                 if (i > 0) {
@@ -155,7 +179,11 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
                 sql.append(hashExpr);
             }
 
-            sql.append("), 'XXXXXXXXXXXXXXXX'), 16, '0') as checksum ");
+            // SUM of unsigned 64-bit hash terms overflows 16 hex digits: LPAD(x, 16)
+            // then TRUNCATES leading digits, so different data can collide to the same
+            // checksum (false negatives). Render the full decimal sum instead — every
+            // value yields a distinct string and the engine only compares strings.
+            sql.append(")) as checksum ");
         }
 
         sql.append("FROM ");
@@ -196,10 +224,15 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
      * To match MySQL byte for byte, each changed column contributes a leading
      * separator ({@code , "col"}) and LTRIM strips it before wrapping in brackets:
      * {@code '[' || ', ' || LTRIM(concat, ', ') || ', ' || ']'}.
+     *
+     * <p>覆盖带类型的重载（join 明细只有这一条调用路径）：不带类型的重载在基类里委托到这里，
+     * 两个入口因此拿到同一形状。比较用 {@link #buildNullSafeNotEquals} 的二进制安全口径，
+     * 与 checksum 路径一致，故列类型只影响归一化、不参与这里的比较。
      */
     @Override
     protected String buildDiffColumnsExpression(String alias1, String alias2,
-            List<String> compareColumns1, List<String> compareColumns2) {
+            List<String> compareColumns1, List<String> compareColumns2,
+            Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2) {
         if (compareColumns1 == null || compareColumns1.isEmpty()) {
             return "'[]'";
         }

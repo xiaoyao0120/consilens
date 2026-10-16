@@ -41,6 +41,16 @@ public class PrestoDatabaseDialect extends AbstractDatabaseDialect {
         return "io.prestosql.jdbc.PrestoDriver";
     }
 
+    /**
+     * 无参 prepareStatement 会走服务端 PREPARE + EXECUTE；实测该路径下执行/取数挂起
+     * （服务端 PREPARE 已完成，客户端每 1~2 分钟重新提交一次，任务整体超时）。
+     * 因此无参查询改用普通 Statement（见 AbstractDatabaseAdapter#query）。
+     */
+    @Override
+    public boolean supportsServerSidePrepare() {
+        return false;
+    }
+
     @Override
     public int getDefaultPort() {
         return 8080;

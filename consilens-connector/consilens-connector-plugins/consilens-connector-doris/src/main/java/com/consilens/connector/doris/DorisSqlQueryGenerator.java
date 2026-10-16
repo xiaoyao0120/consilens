@@ -35,6 +35,32 @@ public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
         this.dataTypeHandler = dataTypeHandler;
     }
 
+
+    @Override
+    public boolean supportsKeyMultiplicityFilter() {
+        // Doris 报 "Unsupported correlated EXISTS subquery with a HAVING clause"：
+        // 开放档 join 遇重复键时退化为整表本地多重集配对（不 N×M，结果与 checksum 一致）。
+        return false;
+    }
+
+    /** MySQL 族没有 VARCHAR 类型，字符串化排序用 CHAR（与 MySQL 生成器一致）。 */
+    @Override
+    protected String orderByExpression(String column) {
+        return "CAST(" + capabilityProvider.quote(column) + " AS CHAR)";
+    }
+
+    /** join 计划比较列的类型归一化处理器（与 checksum 路径同口径）。 */
+    @Override
+    protected com.consilens.connector.api.DataTypeHandler dataTypeHandler() {
+        return this.dataTypeHandler;
+    }
+
+    /** 归一化结果为字符串时，须做字节级比较以规避库内排序规则（如 utf8mb4_0900_ai_ci）。 */
+    @Override
+    protected String binarySafeExpression(String expression) {
+        return "HEX(" + expression + ")";
+    }
+
     @Override
     protected String buildNullSafeNotEquals(String left, String right) {
         return "NOT (" + left + " <=> " + right + ")";
@@ -100,7 +126,7 @@ public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
             }
 
             // Order by pk_key to ensure deterministic checksum
-            sql.append(" ORDER BY pk_key");
+            sql.append(" ORDER BY pk_key, row_checksum");
             sql.append(") AS ordered_data) AS data");
         }
 

@@ -65,7 +65,24 @@ public class TableSchema {
      */
     public DataType getColumnType(String columnName) {
         ColumnInfo columnInfo = columns.get(columnName);
-        return columnInfo != null ? columnInfo.getType() : DataType.UNKNOWN;
+        if (columnInfo != null) {
+            return columnInfo.getType();
+        }
+        // Case-insensitive fallback: metadata and segment code may disagree on
+        // identifier case (Oracle/DM report upper-case, engines use the config
+        // case); a missed lookup would silently degrade every column to UNKNOWN
+        // normalization.
+        if (columnName != null) {
+            columnInfo = columns.get(columnName.toUpperCase(java.util.Locale.ROOT));
+            if (columnInfo != null) {
+                return columnInfo.getType();
+            }
+            columnInfo = columns.get(columnName.toLowerCase(java.util.Locale.ROOT));
+            if (columnInfo != null) {
+                return columnInfo.getType();
+            }
+        }
+        return DataType.UNKNOWN;
     }
 
     /**

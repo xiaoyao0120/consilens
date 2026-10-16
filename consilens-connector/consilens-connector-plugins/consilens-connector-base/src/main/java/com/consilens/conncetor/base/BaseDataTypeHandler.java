@@ -234,8 +234,17 @@ public class BaseDataTypeHandler implements DataTypeHandler {
         // Log normalization at DEBUG level
         log.debug("BaseDataTypeHandler.normalizeColumn: column='{}', dataType={}", columnName, dataType);
 
+        return normalizeExpression(quotedCol, dataType);
+    }
+
+    /**
+     * 归一化分派（入参必须是已可用的列表达式，不再做引用包装）。
+     */
+    @Override
+    public String normalizeExpression(String quotedCol, DataType dataType) {
+
         if (dataType == null || dataType == DataType.UNKNOWN) {
-            log.warn("Unsupported data type normalization for column '{}', falling back to default normalization", columnName);
+            log.warn("Unsupported data type normalization for column '{}', falling back to default normalization", quotedCol);
             return normalizeDefault(quotedCol);
         }
         
@@ -243,6 +252,8 @@ public class BaseDataTypeHandler implements DataTypeHandler {
             case VARCHAR:
             case CHAR:
             case TEXT:
+            case CLOB:
+            case LONGVARCHAR:
                 log.debug("  -> Using normalizeString");
                 return normalizeString(quotedCol);
 
@@ -255,11 +266,13 @@ public class BaseDataTypeHandler implements DataTypeHandler {
 
             case FLOAT:
             case REAL:
-                log.debug("  -> Using normalizeFloat");
-                return normalizeFloat(quotedCol);
+            case DOUBLE:
+                // DOUBLE 与 FLOAT 同属浮点族，且必须与本地路径 ValueNormalizer 同口径：
+                // 常规区间定点 6 位小数，超出 %e 区间（|v| > 1e10 或 0 < |v| < 1e-10）用科学计数。
+                log.debug("  -> Using normalizeFloatValue");
+                return normalizeFloatValue(quotedCol);
 
             case DECIMAL:
-            case DOUBLE:
                 log.debug("  -> Using normalizeDecimal");
                 return normalizeDecimal(quotedCol);
 
@@ -304,19 +317,77 @@ public class BaseDataTypeHandler implements DataTypeHandler {
                 log.debug("  -> Using normalizeJson");
                 return normalizeJson(quotedCol);
 
+            case UUID:
+                log.debug("  -> Using normalizeUuid");
+                return normalizeUuid(quotedCol);
+
             default:
                 log.warn("Unsupported data type normalization for column '{}': {}, falling back to default normalization",
-                        columnName, dataType);
+                        quotedCol, dataType);
                 return normalizeDefault(quotedCol);
         }
     }
 
     /**
-     * Normalize string types (VARCHAR, CHAR, TEXT).
-     * Default: TRIM and convert NULL to empty string.
+     * UUID 归一化：统一小写（RFC 4122 的规范渲染）。
+     *
+     * <p>各方言对同一 UUID 值的渲染大小写不同（SQL Server 的 {@code UNIQUEIDENTIFIER} →
+     * 大写，MySQL/PG/CH 的文本形态 → 小写），不做统一会在跨源比对时把每一行都判为不同。
+     */
+    protected String normalizeUuid(String quotedCol) {
+        return "COALESCE(LOWER(TRIM(CAST(" + quotedCol + " AS VARCHAR))), '')";
+    }
+
+    /**
+     * Normalize string types (VARCHAR, CHAR, TEXT, CLOB, LONGVARCHAR).
+     * Default: TRIM and convert NULL to the configured null sentinel.
+     *
+     * <p>When {@code normalization.<side>.string.nullValue} is configured, NULL is
+     * rendered with that sentinel instead of {@code ''}, which makes NULL
+     * distinguishable from an empty string. Callers that want NULL and {@code ''}
+     * to stay indistinguishable (the historical behaviour) simply omit the
+     * {@code nullValue} parameter.
      */
     protected String normalizeString(String quotedCol) {
-        return "COALESCE(TRIM(" + quotedCol + "), '')";
+        return "COALESCE(TRIM(" + quotedCol + "), " + stringNullReplacement() + ")";
+    }
+
+    /**
+     * SQL literal used as the NULL replacement for string types.
+     *
+     * <p>Returns {@code ''} unless {@code normalization.<side>.string.nullValue} is
+     * configured, in which case it returns that literal (single quotes escaped).
+     * Kept in a shared helper so every dialect override renders the sentinel
+     * identically.
+     */
+    protected String stringNullReplacement() {
+        String nullValue = getNullValue("string");
+        return nullValue != null ? "'" + escapeSqlLiteral(nullValue) + "'" : "''";
+    }
+
+    /**
+     * Reads the configured {@code nullValue} for the given normalized type name
+     * (e.g. {@code "string"}, {@code "boolean"}).
+     *
+     * @return the configured sentinel, or {@code null} when unset
+     */
+    protected String getNullValue(String dataTypeName) {
+        return getRuleValue(dataTypeName, "getNullValue", String.class);
+    }
+
+    /**
+     * Folds negative zero into positive zero at the SQL level.
+     *
+     * <p>Renderings differ across engines: some discard the sign when a value
+     * rounds to zero ({@code -0.0} → {@code '0.0000'}), others keep it
+     * ({@code '-0.0000'}). Wrapping the numeric expression in
+     * {@code CASE WHEN x = 0 THEN 0 ELSE x END} makes {@code -0.0} and {@code 0.0}
+     * normalize to the same string on every dialect, while leaving NULL
+     * untouched (the comparison is unknown for NULL, so the ELSE branch is
+     * taken and the surrounding COALESCE still applies).
+     */
+    protected String foldNegativeZero(String quotedCol) {
+        return "(CASE WHEN " + quotedCol + " = 0 THEN 0 ELSE " + quotedCol + " END)";
     }
 
     /**
@@ -324,7 +395,7 @@ public class BaseDataTypeHandler implements DataTypeHandler {
      * Default: Convert to string, NULL becomes '0'.
      */
     protected String normalizeInteger(String quotedCol) {
-        return "COALESCE(CAST(" + quotedCol + " AS VARCHAR), '0')";
+        return "COALESCE(CAST(" + quotedCol + " AS VARCHAR), '')";
     }
 
     /**
@@ -334,7 +405,7 @@ public class BaseDataTypeHandler implements DataTypeHandler {
      */
     protected String normalizeDecimal(String quotedCol) {
         // Generic fallback - databases should override this
-        return "COALESCE(CAST(" + quotedCol + " AS VARCHAR), '0.0000')";
+        return "COALESCE(CAST(" + foldNegativeZero(quotedCol) + " AS VARCHAR), '')";
     }
 
     /**
@@ -345,6 +416,74 @@ public class BaseDataTypeHandler implements DataTypeHandler {
      * Note: FLOAT is a single-precision type that may have precision issues.
      * Converting to DOUBLE first helps maintain consistency.
      */
+    /**
+     * 浮点归一化入口：按设计 §2.5 的窗口选择定点/科学计数两种渲染。
+     *
+     * <p>本地路径 {@link ValueNormalizer#normalizeFloatingPoint} 对 {@code |v| > 1e10} 或
+     * {@code 0 < |v| < 1e-10} 使用 {@code String.format("%.6e", v)}；SQL 侧必须给出**同形**
+     * 字符串，否则同一份数据在 checksum 段校验与本地逐行比较之间会出现口径差异
+     * （实测：1e-300 与 2e-300 在定点 6 位下都被渲染成 {@code 0.000000}，差异被抹平）。
+     *
+     * @param quotedCol 已可用的列表达式（可能带表别名）
+     */
+    protected String normalizeFloatValue(String quotedCol) {
+        String fixed = normalizeFloat(quotedCol);
+        String scientific = scientificFloatExpression(quotedCol);
+        if (scientific == null) {
+            return fixed;
+        }
+        String extreme = "(" + quotedCol + " IS NOT NULL AND (ABS(" + quotedCol + ") > 1e10"
+                + " OR (ABS(" + quotedCol + ") < 1e-10 AND " + quotedCol + " <> 0)))";
+        return "CASE WHEN " + extreme + " THEN " + scientific + " ELSE " + fixed + " END";
+    }
+
+    /**
+     * 科学计数渲染表达式，必须与 Java {@code String.format("%.6e", v)} 完全同形
+     * （如 {@code 1.000000e+300}、{@code 2.500000e-300}，指数至少 2 位、带符号、小写 e）。
+     *
+     * <p>返回 {@code null} 表示该方言暂未提供等价渲染，此时退化为定点口径（保持既有行为）。
+     */
+    protected String scientificFloatExpression(String quotedCol) {
+        return null;
+    }
+
+    /**
+     * MySQL 族（mysql/doris/starrocks/tidb/oceanbase）共用的科学计数渲染构造：尾数 + 指数。
+     *
+     * <p>与 Java {@code String.format("%.6e", v)} 同形：尾数用 {@code v / 10^floor(log10|v|)}，
+     * 指数为正时用除法、为负时改用 {@code v * 10^|exp|} 乘法（部分方言 {@code POW(10,-300)}
+     * 会下溢为 0）。尾数经 {@code DECIMAL(20,6)} 四舍五入，进位（≥10）时指数进一。
+     *
+     * <p>已验证（mysql/starrocks 实测逐字一致）：{@code 1e300→1.000000e+300}、
+     * {@code 1e-300→1.000000e-300}、{@code 9.9999995e10→1.000000e+11}（进位）、
+     * {@code 1.0000005e-11→1.000001e-11}（第 7 位四舍五入）。本方法是该族方言
+     * {@link #scientificFloatExpression(String)} 的唯一实现，五个方言 handler 仅做转发。
+     */
+    protected static String mysqlFamilyScientificFloatExpression(String quotedCol) {
+        String e0 = "FLOOR(LOG10(ABS(" + quotedCol + ")))";
+        String mant = scaleByPower("ABS(" + quotedCol + ")", e0, "POW");
+        String carry = "CASE WHEN ROUND(" + mant + ", 6) >= 10 THEN 1 ELSE 0 END";
+        String exp = e0 + " + " + carry;
+        String packed = "CASE WHEN " + carry + " = 1 THEN "
+                + scaleByPower("ABS(" + quotedCol + ")", e0 + " + 1", "POW") + " ELSE " + mant + " END";
+        return "CONCAT("
+                + "IF(" + quotedCol + " < 0, '-', ''), "
+                + "CAST(" + packed + " AS DECIMAL(20,6)), 'e', "
+                + "IF((" + exp + ") < 0, '-', '+'), "
+                + "IF(ABS(" + exp + ") < 10, CONCAT('0', ABS(" + exp + ")), "
+                + "CAST(ABS(" + exp + ") AS CHAR)))";
+    }
+
+    /**
+     * {@code value / 10^exponent}；指数为负时改为乘法，规避极小幂下溢。
+     *
+     * @param powerFunction 方言的幂函数名：MySQL 族为 {@code POW}，Presto/Trino 用 {@code POWER}
+     */
+    protected static String scaleByPower(String value, String exponent, String powerFunction) {
+        return "CASE WHEN (" + exponent + ") >= 0 THEN " + value + "/" + powerFunction + "(10, " + exponent + ") "
+                + "ELSE " + value + "*" + powerFunction + "(10, -(" + exponent + ")) END";
+    }
+
     protected String normalizeFloat(String quotedCol) {
         // Generic fallback - cast to DOUBLE then format
         // Subclasses should override this with database-specific logic
@@ -356,7 +495,7 @@ public class BaseDataTypeHandler implements DataTypeHandler {
      * Default: Convert to '0' or '1'.
      */
     protected String normalizeBoolean(String quotedCol) {
-        return "CASE WHEN " + quotedCol + " = TRUE THEN '1' ELSE '0' END";
+        return "CASE WHEN " + quotedCol + " IS NULL THEN '' WHEN " + quotedCol + " = TRUE THEN '1' ELSE '0' END";
     }
 
     /**
@@ -814,6 +953,23 @@ public class BaseDataTypeHandler implements DataTypeHandler {
                 return fallback;
             }
         }
+    }
+
+    /**
+     * 会话时区到目标时区的平移表达式（MySQL 兼容方言：MySQL/TiDB/Doris/StarRocks/OceanBase）。
+     *
+     * CONVERT_TZ 内部按 32 位 TIMESTAMP 求值：UTC 落点早于 1970-01-01 00:00:01 或晚于
+     * 2038-01-19 03:14:07 时会静默返回原值（不报错、不转换），导致 pre-1970 / post-2038
+     * 的 DATETIME 与其他方言（如 PostgreSQL 的 AT TIME ZONE 链）渲染不一致。这里改用
+     * 范围内锚点先求出会话时区相对目标时区的固定偏移秒数，再以 INTERVAL 算术平移任意
+     * DATETIME 值（64 位安全，保留小数秒）；锚点转换失败（时区表缺失）时整体为 NULL，
+     * 由调用方的 COALESCE 兜底为原始值渲染。
+     */
+    protected static String tzShiftByAnchor(String quotedCol, String targetTimezone) {
+        String anchor = "2020-06-01 12:00:00";
+        String offsetSeconds = "TIMESTAMPDIFF(SECOND, CONVERT_TZ('" + anchor + "', @@session.time_zone, '"
+                + targetTimezone + "'), '" + anchor + "')";
+        return "DATE_ADD(" + quotedCol + ", INTERVAL -" + offsetSeconds + " SECOND)";
     }
 
 }

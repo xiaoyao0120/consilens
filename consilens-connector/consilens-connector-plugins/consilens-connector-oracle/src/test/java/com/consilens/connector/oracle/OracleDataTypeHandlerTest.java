@@ -21,7 +21,8 @@ class OracleDataTypeHandlerTest {
     @Test
     void testNormalizeColumnNumeric() {
         String result = handler.normalizeColumn("amount", DataType.INTEGER);
-        assertEquals("COALESCE(TRIM(TO_CHAR(\"amount\")), '0')", result);
+        // Oracle 未加引号的标识符折叠为大写；NULL 哨兵统一为空串
+        assertEquals("COALESCE(TRIM(TO_CHAR(\"AMOUNT\")), '')", result);
     }
 
     @Test
@@ -33,7 +34,9 @@ class OracleDataTypeHandlerTest {
 
     @Test
     void testConvertDateTypeForCrossDatabaseComparison() {
-        assertEquals(DataType.TIMESTAMP, handler.convertToDataType("DATE"));
+        // Oracle DATE 按 DATE 语义映射：其它方言的 DATE 列只渲染日期部分，
+        // 映射成 TIMESTAMP 会渲染出永不匹配的完整 UTC 时间
+        assertEquals(DataType.DATE, handler.convertToDataType("DATE"));
         assertEquals(DataType.TIMESTAMP, handler.convertToDataType("TIMESTAMP"));
     }
 

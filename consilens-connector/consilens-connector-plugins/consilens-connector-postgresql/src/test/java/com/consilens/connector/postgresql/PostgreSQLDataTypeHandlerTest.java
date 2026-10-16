@@ -28,7 +28,8 @@ class PostgreSQLDataTypeHandlerTest {
     @Test
     void testNormalizeColumn_Int() {
         String result = handler.normalizeColumn("amount", DataType.INTEGER);
-        assertEquals("COALESCE(TRIM(CAST(\"amount\" AS VARCHAR)), '0')", result);
+        // NULL 哨兵统一为空串（与其它方言一致），而不是 '0'
+        assertEquals("COALESCE(TRIM(CAST(\"amount\" AS VARCHAR)), '')", result);
     }
 
     @Test

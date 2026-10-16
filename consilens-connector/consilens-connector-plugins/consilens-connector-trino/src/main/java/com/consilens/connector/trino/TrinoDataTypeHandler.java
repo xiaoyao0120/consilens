@@ -30,6 +30,13 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
         super(capabilityProvider, normalizationConfig);
     }
 
+    /** 科学计数渲染：Trino format()（Java Formatter，与本地路径同源）。 */
+    @Override
+    protected String scientificFloatExpression(String quotedCol) {
+        return "format('%.6e', " + quotedCol + ")";
+    }
+
+
     @Override
     public TypeDescriptor convertToTypeDescriptor(String originType) {
         if (originType == null || originType.isBlank()) {
@@ -183,7 +190,7 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeString(String quotedCol) {
-        return "COALESCE(TRIM(" + quotedCol + "), '')";
+        return "COALESCE(TRIM(" + quotedCol + "), " + stringNullReplacement() + ")";
     }
 
     /**
@@ -192,7 +199,7 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeInteger(String quotedCol) {
-        return "COALESCE(TRIM(CAST(" + quotedCol + " AS VARCHAR)), '0')";
+        return "COALESCE(TRIM(CAST(" + quotedCol + " AS VARCHAR)), '')";
     }
 
     /**
@@ -210,17 +217,21 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
         // If precision is 0, return integer format without decimal point
         if (precision == 0) {
             String roundFunction = rounding ? "ROUND" : "TRUNCATE";
-            return "COALESCE(TRIM(CAST(" + roundFunction + "(" + quotedCol + ", 0) AS VARCHAR)), '0')";
+            return "COALESCE(TRIM(CAST(" + roundFunction + "(" + quotedCol + ", 0) AS VARCHAR)), '')";
         }
 
-        String defaultValue = "0." + "0".repeat(precision);
 
+        // Trino 的 FORMAT('%.4f', NULL) 返回字符串 'null'（不是 SQL NULL），COALESCE 不会兜底，
+        // 归一化结果会变成字面量 "null"，与其它方言的 NULL → '' 不一致（全 NULL 行误报）。
+        // 必须先判空再格式化。
         if (rounding) {
             // Round: apply ROUND then format
-            return "COALESCE(FORMAT('%." + precision + "f', ROUND(" + quotedCol + ", " + precision + ")), '" + defaultValue + "')";
+            return "CASE WHEN " + quotedCol + " IS NULL THEN ''"
+                    + " ELSE FORMAT('%." + precision + "f', ROUND(" + quotedCol + ", " + precision + ")) END";
         } else {
             // Truncate: apply TRUNCATE then format
-            return "COALESCE(FORMAT('%." + precision + "f', TRUNCATE(" + quotedCol + ", " + precision + ")), '" + defaultValue + "')";
+            return "CASE WHEN " + quotedCol + " IS NULL THEN ''"
+                    + " ELSE FORMAT('%." + precision + "f', TRUNCATE(" + quotedCol + ", " + precision + ")) END";
         }
     }
 
@@ -239,17 +250,21 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
         // If precision is 0, return integer format without decimal point
         if (precision == 0) {
             String roundFunction = rounding ? "ROUND" : "TRUNCATE";
-            return "COALESCE(TRIM(CAST(" + roundFunction + "(CAST(" + quotedCol + " AS DOUBLE), 0) AS VARCHAR)), '0')";
+            return "COALESCE(TRIM(CAST(" + roundFunction + "(CAST(" + quotedCol + " AS DOUBLE), 0) AS VARCHAR)), '')";
         }
 
-        String defaultValue = "0." + "0".repeat(precision);
 
+        // 同 normalizeDecimal：FORMAT 遇 NULL 会产出字面量 'null'，必须先判空。
         if (rounding) {
             // Round: apply ROUND then format
-            return "COALESCE(FORMAT('%." + precision + "f', ROUND(CAST(" + quotedCol + " AS DOUBLE), " + precision + ")), '" + defaultValue + "')";
+            return "CASE WHEN " + quotedCol + " IS NULL THEN ''"
+                    + " ELSE FORMAT('%." + precision + "f', ROUND(CAST(" + quotedCol + " AS DOUBLE), "
+                    + precision + ")) END";
         } else {
             // Truncate: apply TRUNCATE then format
-            return "COALESCE(FORMAT('%." + precision + "f', TRUNCATE(CAST(" + quotedCol + " AS DOUBLE), " + precision + ")), '" + defaultValue + "')";
+            return "CASE WHEN " + quotedCol + " IS NULL THEN ''"
+                    + " ELSE FORMAT('%." + precision + "f', TRUNCATE(CAST(" + quotedCol + " AS DOUBLE), "
+                    + precision + ")) END";
         }
     }
 
@@ -260,31 +275,33 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeDate(String quotedCol) {
-        return quotedCol;
+        // 不能再返回原始列：本地比对路径（normalizeColumn）会把 NULL 原样带出，
+        // 与其它方言 NULL → '' 不一致（全 NULL 行误报 c_date/c_time）。
+        return formatDateForChecksum(quotedCol);
     }
 
     /**
      * Trino-specific time normalization.
-     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
      */
     @Override
     protected String normalizeTime(String quotedCol) {
-        return quotedCol;
+        // Trino 的 FORMAT_DATETIME 不接受 TIME 输入，CAST 渲染即 'HH:mm:ss'；
+        // 委托 checksum 分支，保证 join/local 与 checksum 构造上同形。
+        return formatDateTimeForChecksum(quotedCol, "time");
     }
 
     @Override
     protected String normalizeTimeWithTimezone(String quotedCol) {
-        return quotedCol;
+        return formatDateTimeForChecksum(quotedCol, "time_with_timezone");
     }
 
     /**
      * Trino-specific datetime normalization.
-     * NOTE: Returns original column to avoid type mismatch in WHERE clauses.
-     * Formatting is applied in the query generator's checksum SQL.
      */
     @Override
     protected String normalizeDateTime(String quotedCol) {
-        return quotedCol;
+        return "COALESCE(FORMAT_DATETIME(" + quotedCol + ", '" + resolveTrinoTemporalFormat("datetime",
+                "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd") + "'), '')";
     }
 
     /**
@@ -294,7 +311,12 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeTimestamp(String quotedCol) {
-        return "COALESCE(FORMAT_DATETIME(" + quotedCol + ", 'yyyy-MM-dd HH:mm:ss'), '')";
+        // Must match formatDateTimeForChecksum exactly: FORMAT_DATETIME on a
+        // TIMESTAMP WITH TIME ZONE appends " UTC" to the rendered string, which
+        // desynchronizes the local-compare path (normalizeColumn) from the
+        // checksum path and from other dialects' plain wall-clock output.
+        return "COALESCE(FORMAT_DATETIME(AT_TIMEZONE(" + quotedCol + ", '"
+                + resolveTrinoTimezone("timestamp", "UTC") + "'), 'yyyy-MM-dd HH:mm:ss'), '')";
     }
 
     /**
@@ -303,7 +325,13 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeTimestampWithTimezone(String quotedCol) {
-        return quotedCol;
+        // Returning the raw column makes getString() render "… HH:mm:ss UTC"
+        // (Trino's varchar cast of timestamptz), which the Java-side normalizer
+        // cannot parse and passes through verbatim — desynchronizing the
+        // local-compare path from the checksum path and from other dialects.
+        // Render the canonical UTC wall-clock instead (same as checksum SQL).
+        return "COALESCE(FORMAT_DATETIME(AT_TIMEZONE(" + quotedCol + ", '"
+                + resolveTrinoTimezone("timestamp_with_timezone", "UTC") + "'), 'yyyy-MM-dd HH:mm:ss'), '')";
     }
 
     /**
@@ -323,6 +351,11 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
             return "COALESCE(FORMAT_DATETIME(AT_TIMEZONE(" + quotedCol + ", '"
                     + resolveTrinoTimezone(dataType, "UTC") + "'), '" + resolveTrinoTemporalFormat(dataType,
                     "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd") + "'), '')";
+        }
+        if ("time".equals(dataType) || "time_with_timezone".equals(dataType)) {
+            // TIME columns carry no date part and Trino's FORMAT_DATETIME rejects
+            // TIME inputs; render via CAST (e.g. '12:34:56').
+            return "COALESCE(TRIM(CAST(" + quotedCol + " AS VARCHAR)), '')";
         }
         return "COALESCE(FORMAT_DATETIME(" + quotedCol + ", '" + resolveTrinoTemporalFormat(dataType,
                 "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd") + "'), '')";
@@ -355,7 +388,7 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeBoolean(String quotedCol) {
-        return "CASE WHEN " + quotedCol + " = TRUE THEN '1' ELSE '0' END";
+        return "CASE WHEN " + quotedCol + " IS NULL THEN '' WHEN " + quotedCol + " = TRUE THEN '1' ELSE '0' END";
     }
 
     /**
@@ -367,11 +400,13 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
     }
 
     /**
-     * Trino-specific JSON normalization: convert to VARCHAR.
+     * Trino-specific JSON normalization: json_format is the only valid
+     * json-to-varchar rendering (CAST(json AS VARCHAR) throws
+     * INVALID_CAST_ARGUMENT).
      */
     @Override
     protected String normalizeJson(String quotedCol) {
-        return "COALESCE(CAST(" + quotedCol + " AS VARCHAR), '')";
+        return "COALESCE(json_format(" + quotedCol + "), '')";
     }
 
     /**
@@ -379,7 +414,7 @@ public class TrinoDataTypeHandler extends BaseDataTypeHandler {
      */
     @Override
     protected String normalizeDefault(String quotedCol) {
-        return "COALESCE(TRIM(CAST(" + quotedCol + " AS VARCHAR)), '0')";
+        return "COALESCE(TRIM(CAST(" + quotedCol + " AS VARCHAR)), '')";
     }
 
     @Override

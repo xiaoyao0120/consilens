@@ -40,7 +40,8 @@ class OracleSqlQueryGeneratorTest {
     void testGetCountSQL() {
         String sql = generator.getCountSQL("SYSTEM", "users", null);
         assertTrue(sql.contains("COUNT(*)"));
-        assertTrue(sql.contains("\"SYSTEM\".\"users\""));
+        // 未加引号的标识符按 Oracle 语义折叠为大写
+        assertTrue(sql.contains("\"SYSTEM\".\"USERS\""), sql);
     }
 
     @Test
@@ -60,7 +61,8 @@ class OracleSqlQueryGeneratorTest {
 
         String sql = generator.getChecksumSQL("SYSTEM", "users", columns, Arrays.asList("id"), types, null);
         assertTrue(sql.contains("STANDARD_HASH"));
-        assertTrue(sql.contains("LISTAGG(row_checksum, '|') WITHIN GROUP (ORDER BY pk_key)"));
+        // 聚合顺序以 (键, 行校验和) 双列确定：仅按键排序时同键多行的聚合顺序不确定
+        assertTrue(sql.contains("LISTAGG(row_checksum, '|') WITHIN GROUP (ORDER BY pk_key, row_checksum)"), sql);
         assertFalse(sql.contains("DBMS_CRYPTO"));
     }
 

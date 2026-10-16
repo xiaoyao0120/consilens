@@ -26,6 +26,29 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
         this.dataTypeHandler = dataTypeHandler;
     }
 
+
+    /** join 计划比较列的类型归一化处理器（与 checksum 路径同口径）。 */
+    @Override
+    protected com.consilens.connector.api.DataTypeHandler dataTypeHandler() {
+        return this.dataTypeHandler;
+    }
+
+    /** 归一化结果为字符串时，须做字节级比较以规避库内排序规则（如 utf8mb4_0900_ai_ci）。 */
+    @Override
+    protected String binarySafeExpression(String expression) {
+        return "CONVERT(VARBINARY(MAX), " + utf8Text(expression) + ")";
+    }
+
+    /**
+     * UTF-8 文本化：SQL Server 的 {@code CONVERT(VARBINARY, nvarchar)} 取的是 UTF-16 字节，
+     * {@code HASHBYTES} 对 nvarchar 也按 UTF-16 摘要，与其它方言（MD5 over UTF-8）不一致——
+     * 跨源比对时同一行的摘要必然不同（实测 mysql↔sqlserver 全表 9989 行误报）。
+     * 先按 UTF-8 排序规则转成 varchar 再取字节/摘要，字节序即与 MySQL 的 utf8mb4 一致。
+     */
+    private String utf8Text(String expression) {
+        return "CONVERT(VARCHAR(MAX), " + expression + " COLLATE Latin1_General_100_CI_AS_SC_UTF8)";
+    }
+
     @Override
     public String getLimitClause(long offset, long limit) {
         if (offset <= 0) {
@@ -59,7 +82,8 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
             // Note: STRING_AGG returns VARCHAR(8000) by default which overflows for large tables.
             // Cast row_checksum to VARCHAR(MAX) so the aggregate result is also VARCHAR(MAX).
             sql.append("COALESCE(CONVERT(VARCHAR(MAX), HASHBYTES('MD5', ");
-            sql.append("(SELECT STRING_AGG(CAST(row_checksum AS VARCHAR(MAX)), '|') WITHIN GROUP (ORDER BY pk_key) FROM (SELECT ");
+            // 聚合串只含 32 位 hex 与 '|'（纯 ASCII），UTF-8 与 ASCII 同字节，无需转换
+            sql.append("(SELECT STRING_AGG(CAST(row_checksum AS VARCHAR(MAX)), '|') WITHIN GROUP (ORDER BY pk_key, row_checksum) FROM (SELECT ");
 
             // Build primary key for stable ordering
             // SQL Server CONCAT_WS requires 3+ args (sep + 2+ exprs), so handle single key specially
@@ -80,23 +104,23 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
 
             // Build per-row checksum using HASHBYTES MD5
             // SQL Server CONCAT_WS requires 3+ args, so use CONCAT for single column
+            // 行摘要必须按 UTF-8 字节：否则含非 ASCII 的行摘要与 MySQL 侧不同（全表误报）
+            String concatExpr;
             if (columns.size() == 1) {
-                sql.append("CONVERT(VARCHAR(32), HASHBYTES('MD5', CONCAT('|', ");
                 String col = columns.get(0);
-                DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
-                sql.append(")), 2) as row_checksum");
+                concatExpr = "CONCAT('|', "
+                        + dataTypeHandler.normalizeColumn(col, columnDataTypes.get(col)) + ")";
             } else {
-                sql.append("CONVERT(VARCHAR(32), HASHBYTES('MD5', CONCAT_WS('|', ");
-                for (int i = 0; i < columns.size(); i++) {
-                    if (i > 0)
-                        sql.append(", ");
-                    String col = columns.get(i);
-                    DataType dataType = columnDataTypes.get(col);
-                    sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                StringBuilder concat = new StringBuilder("CONCAT_WS('|'");
+                for (String col : columns) {
+                    concat.append(", ").append(dataTypeHandler.normalizeColumn(col, columnDataTypes.get(col)));
                 }
-                sql.append(")), 2) as row_checksum");
+                concat.append(")");
+                concatExpr = concat.toString();
             }
+            sql.append("CONVERT(VARCHAR(32), HASHBYTES('MD5', ")
+                    .append(utf8Text(concatExpr))
+                    .append("), 2) as row_checksum");
 
             sql.append(" FROM ");
             sql.append(buildRelationRef(schemaName, tableName));
@@ -135,22 +159,26 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
             sql.append(capabilityProvider.quote(primaryKeys.get(i)));
         }
 
-        sql.append(", CONVERT(VARCHAR(32), HASHBYTES('MD5', CONCAT(");
+        StringBuilder rowHashConcat = new StringBuilder("CONCAT(");
 
         // Build canonical expression using CHAR(31) as separator
         for (int i = 0; i < columns.size(); i++) {
             if (i > 0) {
-                sql.append(", CHAR(31), ");
+                rowHashConcat.append(", CHAR(31), ");
             }
             String col = columns.get(i);
             DataType dataType = columnDataTypes.get(col);
             String normalizedCol = dataTypeHandler.normalizeColumn(col, dataType);
 
             // Use ISNULL to convert NULL to CHAR(1) (unified across all databases)
-            sql.append("ISNULL(").append(normalizedCol).append(", CHAR(1))");
+            rowHashConcat.append("ISNULL(").append(normalizedCol).append(", CHAR(1))");
         }
+        rowHashConcat.append(")");
 
-        sql.append(")), 2) as row_hash");
+        // 同 getChecksumSQL：按 UTF-8 字节摘要，保证跨源行哈希可比
+        sql.append(", CONVERT(VARCHAR(32), HASHBYTES('MD5', ")
+                .append(utf8Text(rowHashConcat.toString()))
+                .append("), 2) as row_hash");
 
         sql.append(" FROM ");
         sql.append(buildRelationRef(schemaName, tableName));

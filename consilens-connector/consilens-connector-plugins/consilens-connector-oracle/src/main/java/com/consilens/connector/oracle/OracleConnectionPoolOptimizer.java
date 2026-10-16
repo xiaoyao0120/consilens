@@ -46,6 +46,10 @@ public class OracleConnectionPoolOptimizer implements ConnectionPoolOptimizer {
         log.debug("Generating Oracle default connection pool configuration");
         
         PoolConfiguration config = new PoolConfiguration();
+        // The session timezone must be configured per datasource (e.g. via an explicit
+        // connectionInitSql override on PoolConfiguration): Oracle SQL normalization
+        // interprets the stored wall clock in the *session* timezone, so it has to match
+        // the source data's zone -- an environment fact that must not be hardcoded here.
         config.setMaxPoolSize(15);
         config.setMinIdle(3);
         config.setMaxLifetime(3600000); // 60 minutes

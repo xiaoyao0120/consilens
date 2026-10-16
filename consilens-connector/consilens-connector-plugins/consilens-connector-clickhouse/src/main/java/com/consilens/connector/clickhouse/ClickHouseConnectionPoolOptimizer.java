@@ -36,8 +36,8 @@ public class ClickHouseConnectionPoolOptimizer implements ConnectionPoolOptimize
         log.debug("Generating ClickHouse default connection pool configuration");
 
         PoolConfiguration config = new PoolConfiguration();
-        // 外层连接（FULL OUTER JOIN）未匹配侧必须以 NULL 呈现，presence 归因才能工作
-        config.setConnectionInitSql("SET join_use_nulls = 1");
+        // join_use_nulls 由 ClickHouseSqlQueryGenerator 逐查询 SETTINGS 设置：连接级 init SQL 会被
+        // 用户自带的 PoolConfiguration 覆盖，逐查询设置不会，口径更稳。
         config.setMaxPoolSize(15);
         config.setMinIdle(3);
         config.setMaxLifetime(3600000);

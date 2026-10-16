@@ -32,6 +32,40 @@ public class OracleCapabilityProvider extends BaseCapabilityProvider {
         return "\"";
     }
 
+    /**
+     * Oracle folds unquoted identifiers to upper-case. Only all-lower-case names in
+     * Oracle's unquoted-identifier form ({@code [a-z][a-z0-9_$#]*}) are folded and
+     * quoted upper-case so they resolve exactly like the unquoted name.
+     *
+     * <p>Any other identifier is quoted exactly as given: mixed-case names exist only
+     * when the object was created quoted, and folding them would make those genuinely
+     * case-sensitive (quoted, mixed-case) objects unreachable (e.g. a table created
+     * as "MyTable" is not "MYTABLE").
+     *
+     * <p>Escape hatch for an all-lower-case object that was created quoted
+     * ({@code create table "users"}): configure the name already wrapped in double
+     * quotes ({@code "users"}) and it is quoted exactly, without folding.
+     */
+    @Override
+    public String quote(String identifier) {
+        if (identifier == null || identifier.isEmpty()) {
+            return "";
+        }
+        if (isAlreadyQuoted(identifier)) {
+            return identifier;
+        }
+        if (identifier.matches("[a-z][a-z0-9_$#]*")) {
+            return getOpenQuote() + identifier.toUpperCase(java.util.Locale.ROOT) + getCloseQuote();
+        }
+        return getOpenQuote() + identifier + getCloseQuote();
+    }
+
+    private boolean isAlreadyQuoted(String identifier) {
+        return identifier.length() >= 3
+                && identifier.startsWith(getOpenQuote())
+                && identifier.endsWith(getCloseQuote());
+    }
+
     @Override
     public boolean supportsFeature(DatabaseFeature feature) {
         return ORACLE_FEATURES.contains(feature);

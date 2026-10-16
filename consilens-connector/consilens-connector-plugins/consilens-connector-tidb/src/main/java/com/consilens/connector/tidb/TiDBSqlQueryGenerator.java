@@ -34,6 +34,25 @@ public class TiDBSqlQueryGenerator extends BaseSqlQueryGenerator {
         this.dataTypeHandler = dataTypeHandler;
     }
 
+
+    /** MySQL 族没有 VARCHAR 类型，字符串化排序用 CHAR（与 MySQL 生成器一致）。 */
+    @Override
+    protected String orderByExpression(String column) {
+        return "CAST(" + capabilityProvider.quote(column) + " AS CHAR)";
+    }
+
+    /** join 计划比较列的类型归一化处理器（与 checksum 路径同口径）。 */
+    @Override
+    protected com.consilens.connector.api.DataTypeHandler dataTypeHandler() {
+        return this.dataTypeHandler;
+    }
+
+    /** 归一化结果为字符串时，须做字节级比较以规避库内排序规则（如 utf8mb4_0900_ai_ci）。 */
+    @Override
+    protected String binarySafeExpression(String expression) {
+        return "HEX(" + expression + ")";
+    }
+
     @Override
     protected String buildNullSafeNotEquals(String left, String right) {
         return "NOT (" + left + " <=> " + right + ")";
@@ -103,7 +122,7 @@ public class TiDBSqlQueryGenerator extends BaseSqlQueryGenerator {
             // ORDER BY in subquery requires LIMIT to be enforced by optimizer.
             // The unsigned-bigint cap keeps ORDER BY effective without truncating
             // checksums on tables larger than ten million rows.
-            sql.append(" ORDER BY pk_key LIMIT 18446744073709551615");
+            sql.append(" ORDER BY pk_key, row_checksum LIMIT 18446744073709551615");
             sql.append(") AS ordered");
             sql.append(") AS data");
         }

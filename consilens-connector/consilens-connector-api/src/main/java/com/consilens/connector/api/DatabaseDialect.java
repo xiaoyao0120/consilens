@@ -1,8 +1,11 @@
 package com.consilens.connector.api;
 
+import com.consilens.connector.api.capability.ConnectorCapability;
 import com.consilens.connector.api.write.TableWriteCompiler;
 
+import java.util.EnumSet;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 
 /**
  * Database dialect interface - main entry point for database-specific
@@ -104,6 +107,44 @@ public interface DatabaseDialect {
      */
     default String getJdbcDriverClassName() {
         return null;
+    }
+
+    /**
+     * Whether no-argument queries may go through the driver's server-side
+     * prepare path. Presto's driver routes {@code prepareStatement(sql)} (no
+     * parameters) through a server-side PREPARE + EXECUTE that can hang during
+     * execution/fetch, so it returns {@code false}; the core adapter then
+     * executes parameterless queries through a plain
+     * {@link java.sql.Statement}. Queries with parameters always use a
+     * {@code PreparedStatement}.
+     *
+     * @return true when parameterless queries may be prepared server-side
+     */
+    default boolean supportsServerSidePrepare() {
+        return true;
+    }
+
+    /**
+     * 方言侧对数据集体能力集/属性的调整入口，使 base 的 metadata 组装保持厂商中立。
+     *
+     * <p>默认不做调整。需要在某些方言上摘除能力（例如 SQL 侧摘要或 join 在含 LOB 的表上
+     * 不可用）或补充属性时，由该方言覆盖本方法，base 不再按连接器类型做分支。
+     *
+     * @param capabilities  已按通用规则填好的能力集，可直接增删
+     * @param attributes    将随 metadata 暴露的属性表，可直接增删
+     * @param hasLobColumns 惰性 LOB 探测：仅在方言确实需要时才调用（每次调用触发一次元数据查询）
+     */
+    default void adjustDatasetCapabilities(EnumSet<ConnectorCapability> capabilities,
+                                           Map<String, Object> attributes,
+                                           BooleanSupplier hasLobColumns) {
+    }
+
+    /**
+     * 是否需要探测数据集的物理分区属性（如 Doris 的 {@code PARTITION BY} 列），
+     * 供分区裁剪/分段使用。默认不探测（会额外执行一次 {@code SHOW CREATE TABLE}）。
+     */
+    default boolean discoversPartitionAttributes() {
+        return false;
     }
 
     /**

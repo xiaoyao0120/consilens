@@ -46,6 +46,8 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.sql.Clob;
+import java.sql.Blob;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
@@ -72,7 +74,7 @@ import java.util.function.Function;
 public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSupport {
 
     private static final int DEFAULT_STREAM_FETCH_SIZE = 1000;
-    private static final Pattern DORIS_PARTITION_PATTERN = Pattern.compile("PARTITION\\s+BY\\s+.*?\\(([^\\)]*)\\)",
+    private static final Pattern PARTITION_PATTERN = Pattern.compile("PARTITION\\s+BY\\s+.*?\\(([^\\)]*)\\)",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
     private final String connectorName;
@@ -226,8 +228,8 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
         attributes.put("databaseType", connectorType);
         attributes.put("resourceType", resource != null ? resource.getType() : null);
         attributes.put("connectorName", connectorName);
-        if ("doris".equalsIgnoreCase(connectorType) && !isSqlResource(resource)) {
-            attributes.putAll(discoverDorisPartitionAttributes(resource));
+        if (dialect.discoversPartitionAttributes() && !isSqlResource(resource)) {
+            attributes.putAll(discoverPartitionAttributes(resource));
         }
 
         EnumSet<ConnectorCapability> capabilities = EnumSet.of(
@@ -242,6 +244,16 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
             capabilities.add(ConnectorCapability.SERVER_SIDE_JOIN);
         }
 
+        // 方言侧按需裁剪能力/补充属性（如 Oracle 的 SQL 侧摘要限制），base 不按连接器类型分支
+        dialect.adjustDatasetCapabilities(capabilities, attributes, () -> hasLobColumns(resource));
+
+        // Presto（prestodb/presto:latest = 0.298.1 + presto-jdbc 0.286）无需在此裁剪能力：
+        // 曾经的"join 取数卡死"根因在客户端——无参 SQL 走 prepareStatement 会命中服务端
+        // PREPARE 路径并挂起，已由 AbstractDatabaseAdapter 按 supportsServerSidePrepare()
+        // 改用普通 Statement。checksum 与 join 两条下推均已实测可用（edge/typediff/
+        // scale_100k/edge_dup 全绿，含 10 万行与重复键）。仅 alltype 表受上游 catalog
+        // 限制（INT UNSIGNED → integer(32 位)，值 2147483650 越界）无法经 Presto 读取。
+
         return DatasetMetadata.builder()
                 .logicalName(resource != null ? (resource.getName() != null ? resource.getName() : resource.getPath()) : null)
                 .executionDomainId(buildExecutionDomainId(connectorType, connection))
@@ -253,6 +265,79 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
     private String buildExecutionDomainId(String connectorType, Map<String, Object> connection) {
         Object jdbcUrl = connection != null ? connection.get("url") : null;
         return connectorType + ":" + String.valueOf(jdbcUrl);
+    }
+
+    /**
+     * 给裸类型名补精度/标度：JDBC 元数据的 TYPE_NAME 常不带括号参数（Oracle 全是
+     * {@code NUMBER}、PG 的 {@code numeric}），而类型映射要靠 precision/scale 区分
+     * 整数与定点——不补的话 {@code NUMBER(19)} 会被当成 DECIMAL，本地比对把主键
+     * 归一化成 {@code 1.0000}（对侧 MySQL 是 {@code 1}），整表判为不一致。
+     */
+    private String qualifiedTypeName(String typeName, ResultSet columns) throws SQLException {
+        int precision = columns.getInt("COLUMN_SIZE");
+        int scale = columns.getInt("DECIMAL_DIGITS");
+        return refineTypeName(typeName, precision, scale);
+    }
+
+    /**
+     * 给裸类型名补精度/标度：JDBC 元数据的 TYPE_NAME 常不带括号参数（Oracle 全是
+     * {@code NUMBER}、PG 的 {@code numeric}），而类型映射要靠 precision/scale 区分
+     * 整数与定点——不补的话 {@code NUMBER(38,10)} 会被当成 DOUBLE（%.6f），
+     * 定点列的"第 5 位起是窗口"的口径失效（实测 oracle 的 c_high_precision 第 6 位差异被误报）。
+     */
+    private String refineTypeName(String typeName, int precision, int scale) {
+        if (typeName == null || typeName.contains("(")) {
+            return typeName;
+        }
+        String upper = typeName.trim().toUpperCase(Locale.ROOT);
+        if (!upper.equals("NUMBER") && !upper.equals("NUMERIC") && !upper.equals("DECIMAL")) {
+            return typeName;
+        }
+        if (precision <= 0) {
+            return typeName;
+        }
+        return scale > 0 ? upper + "(" + precision + "," + scale + ")" : upper + "(" + precision + ")";
+    }
+
+    /**
+     * 表是否含 LOB 列（CLOB/BLOB 等 SQL 侧无法归一化的类型）。
+     * 元数据查询失败时按"不含"处理，避免因探测本身让 open 失败。
+     */
+    private boolean hasLobColumns(ResourceLocator resource) {
+        if (resource == null || isSqlResource(resource)) {
+            return false;
+        }
+        try {
+            TablePath path = resolveTablePath(resource);
+            String schema = path.getSchema().orElse(null);
+            String table = path.getTableName();
+            try (Connection connection = getConnection()) {
+                DatabaseMetaData metaData = connection.getMetaData();
+                String catalog = connection.getCatalog();
+                // 目录大小写与元数据存储不一致时（Oracle 存大写、资源名小写）直接匹配不到，
+                // 大小写两种写法都试一次。
+                for (String candidate : new String[] { table, table.toUpperCase(Locale.ROOT),
+                        table.toLowerCase(Locale.ROOT) }) {
+                    try (ResultSet columns = metaData.getColumns(catalog, schema, candidate, null)) {
+                        while (columns.next()) {
+                            String typeName = columns.getString("TYPE_NAME");
+                            if (typeName == null) {
+                                continue;
+                            }
+                            String upper = typeName.toUpperCase(Locale.ROOT);
+                            if (upper.contains("CLOB") || upper.contains("BLOB") || upper.contains("NCLOB")) {
+                                log.info("LOB column detected in {}.{} ({}): SQL-side normalization unavailable, "
+                                        + "falling back to local comparison path", schema, table, upper);
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("LOB column discovery failed for {}: {}", resource.getPath(), e.getMessage());
+        }
+        return false;
     }
 
     private HikariDataSource getOrCreateDataSource() {
@@ -342,39 +427,50 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
 
         TablePath tablePath = resolveTablePath(resource);
         log.debug("Discovering JDBC schema for {}", tablePath.getFullPath());
-        try (Connection jdbcConnection = openConnection();
-             ResultSet columns = metadataColumns(jdbcConnection, tablePath)) {
-            List<FieldDescriptor> fields = new ArrayList<>();
-            while (columns.next()) {
-                String columnName = columns.getString("COLUMN_NAME");
-                String typeName = columns.getString("TYPE_NAME");
-                boolean nullable = DatabaseMetaData.columnNullable == columns.getInt("NULLABLE");
-                int ordinal = columns.getInt("ORDINAL_POSITION");
-                TypeDescriptor typeDescriptor = dialect.getDataTypeHandler().convertToTypeDescriptor(typeName).toBuilder()
-                        .nullable(nullable)
-                        .build();
-                fields.add(FieldDescriptor.builder()
-                        .name(columnName)
-                        .canonicalType(LegacyTypeMapper.toCanonicalType(typeDescriptor))
-                        .typeDescriptor(typeDescriptor)
-                        .nativeType(ConnectorNativeType.builder().name(typeName).declaration(typeName).build())
-                        .nullable(nullable)
-                        .ordinal(ordinal)
-                        .attributes(Map.of("sourceType", typeName))
-                        .build());
+        try (Connection jdbcConnection = openConnection()) {
+            SchemaDescriptor viaMetadata = null;
+            try (ResultSet columns = metadataColumns(jdbcConnection, tablePath)) {
+                List<FieldDescriptor> fields = new ArrayList<>();
+                while (columns.next()) {
+                    String columnName = columns.getString("COLUMN_NAME");
+                    String typeName = columns.getString("TYPE_NAME");
+                    boolean nullable = DatabaseMetaData.columnNullable == columns.getInt("NULLABLE");
+                    int ordinal = columns.getInt("ORDINAL_POSITION");
+                    TypeDescriptor typeDescriptor = dialect.getDataTypeHandler()
+                            .convertToTypeDescriptor(qualifiedTypeName(typeName, columns)).toBuilder()
+                            .nullable(nullable)
+                            .build();
+                    fields.add(FieldDescriptor.builder()
+                            .name(columnName)
+                            .canonicalType(LegacyTypeMapper.toCanonicalType(typeDescriptor))
+                            .typeDescriptor(typeDescriptor)
+                            .nativeType(ConnectorNativeType.builder().name(typeName).declaration(typeName).build())
+                            .nullable(nullable)
+                            .ordinal(ordinal)
+                            .attributes(Map.of("sourceType", typeName))
+                            .build());
+                }
+                if (!fields.isEmpty()) {
+                    Map<String, FieldDescriptor> fieldMap = new LinkedHashMap<>();
+                    for (FieldDescriptor field : fields) {
+                        fieldMap.put(field.getName(), field);
+                    }
+                    viaMetadata = SchemaDescriptor.builder()
+                            .fields(List.copyOf(fields))
+                            .fieldMap(fieldMap)
+                            .build();
+                }
+            } catch (RuntimeException e) {
+                // Some MySQL-protocol engines (e.g. Doris) emit non-numeric metadata
+                // values (COLUMN_SIZE="*") that make the driver's DatabaseMetaData
+                // blow up mid-iteration; fall back to the result-set based discovery.
+                log.info("DatabaseMetaData.getColumns failed for {} ({}), falling back to result-set discovery",
+                        tablePath.getFullPath(), e.getMessage());
             }
-
-            if (fields.isEmpty()) {
+            if (viaMetadata == null) {
                 return discoverSchemaFromResultSet(jdbcConnection, tablePath);
             }
-            Map<String, FieldDescriptor> fieldMap = new LinkedHashMap<>();
-            for (FieldDescriptor field : fields) {
-                fieldMap.put(field.getName(), field);
-            }
-            return SchemaDescriptor.builder()
-                    .fields(List.copyOf(fields))
-                    .fieldMap(fieldMap)
-                    .build();
+            return viaMetadata;
         } catch (SQLException e) {
             throw new ConnectorException("Failed to discover JDBC schema for " + tablePath.getFullPath(), e);
         }
@@ -384,7 +480,31 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
         DatabaseMetaData databaseMetaData = jdbcConnection.getMetaData();
         String catalog = tablePath.getCatalog().orElse(null);
         String schemaName = tablePath.getSchema().orElse(null);
-        return databaseMetaData.getColumns(catalog, schemaName, tablePath.getTableName(), null);
+        String resolved = resolveTableName(databaseMetaData, catalog, schemaName, tablePath.getTableName());
+        return databaseMetaData.getColumns(catalog, schemaName, resolved, null);
+    }
+
+    /**
+     * 解析表的真实大小写名：Oracle 元数据存大写、资源名常为小写，直接用资源名查列会返回空集，
+     * 引擎会退到 ResultSetMetaData 路径（拿不到 DECIMAL_DIGITS，定点列被当成 DOUBLE）。
+     * 用 getTables 按大小写不敏感匹配，取元数据里的真实名字（避免 beforeFirst，前向结果集不支持）。
+     */
+    private String resolveTableName(DatabaseMetaData databaseMetaData, String catalog, String schema,
+                                    String table) {
+        for (String candidate : new String[] { table, table.toUpperCase(Locale.ROOT),
+                table.toLowerCase(Locale.ROOT) }) {
+            try (ResultSet tables = databaseMetaData.getTables(catalog, schema, candidate, null)) {
+                while (tables.next()) {
+                    String name = tables.getString("TABLE_NAME");
+                    if (name != null && name.equalsIgnoreCase(table)) {
+                        return name;
+                    }
+                }
+            } catch (SQLException e) {
+                log.debug("Table name resolution failed for {}: {}", table, e.getMessage());
+            }
+        }
+        return table;
     }
 
     private SchemaDescriptor discoverSchemaFromResultSet(Connection jdbcConnection, TablePath tablePath) throws SQLException {
@@ -414,7 +534,12 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
         for (int index = 1; index <= resultSetMetaData.getColumnCount(); index++) {
             String columnName = resultSetMetaData.getColumnLabel(index);
             String typeName = resultSetMetaData.getColumnTypeName(index);
-            TypeDescriptor typeDescriptor = dialect.getDataTypeHandler().convertToTypeDescriptor(typeName).toBuilder()
+            // Oracle 的 getColumnTypeName 只给裸 "NUMBER"（无精度/标度）：不补参数时
+            // 整数列会被当成 DECIMAL（"54.0000" vs "54"）、定点列会被当成 DOUBLE
+            // （第 5 位起本该是窗口的差异被误报）。用 JDBC 的 precision/scale 补全。
+            String refinedTypeName = refineTypeName(typeName,
+                    resultSetMetaData.getPrecision(index), resultSetMetaData.getScale(index));
+            TypeDescriptor typeDescriptor = dialect.getDataTypeHandler().convertToTypeDescriptor(refinedTypeName).toBuilder()
                     .nullable(resultSetMetaData.isNullable(index) != ResultSetMetaData.columnNoNulls)
                     .build();
             FieldDescriptor field = FieldDescriptor.builder()
@@ -581,19 +706,97 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
         Map<String, FieldDescriptor> fieldMap = schemaDescriptor.getFieldMap() != null
                 ? schemaDescriptor.getFieldMap()
                 : Collections.emptyMap();
+        Map<String, FieldDescriptor> foldedFields = new LinkedHashMap<>();
+        for (Map.Entry<String, FieldDescriptor> entry : fieldMap.entrySet()) {
+            foldedFields.putIfAbsent(entry.getKey().toLowerCase(Locale.ROOT), entry.getValue());
+        }
         for (int index = 0; index < selectColumns.size(); index++) {
             String column = selectColumns.get(index);
-            Object value = resultSet.getObject(index + 1);
+            FieldDescriptor field = fieldMap.get(column);
+            if (field == null) {
+                // Oracle 元数据列名全大写，任务列名小写：大小写敏感查找会落空，
+                // CanonicalValue 的类型会退化成 UNKNOWN（本地归一化随即失真）
+                field = foldedFields.get(column.toLowerCase(Locale.ROOT));
+            }
+            // 日期时间列按字符串取：Oracle 驱动对 TIMESTAMP WITH TIME ZONE 返回
+            // oracle.sql.TIMESTAMPTZ 句柄（无 stringValue()，toString 只有句柄地址），
+            // 两侧句柄必然不同 → 全表误报。getString 给的是可解析的 SQL 文本。
+            Object value = isTemporal(field)
+                    ? resultSet.getString(index + 1)
+                    : toPortableValue(materializeLob(resultSet.getObject(index + 1)));
             if (keyColumns.contains(column)) {
                 keyParts.add(value);
             }
-            FieldDescriptor field = fieldMap.get(column);
             values.put(column, CanonicalValue.builder()
                     .type(resolveCanonicalType(field))
                     .value(value)
                     .build());
         }
         return new JdbcCanonicalRecord(RecordKey.builder().parts(keyParts).build(), values);
+    }
+
+    private boolean isTemporal(FieldDescriptor field) {
+        if (field == null) {
+            return false;
+        }
+        String canonical = field.getTypeDescriptor() != null
+                ? field.getTypeDescriptor().getType() != null ? field.getTypeDescriptor().getType().name() : null
+                : field.getCanonicalType();
+        if (canonical == null) {
+            return false;
+        }
+        String upper = canonical.toUpperCase(Locale.ROOT);
+        return upper.contains("DATE") || upper.contains("TIME");
+    }
+
+    /**
+     * 把驱动专有类型折叠成通用 Java 值：Oracle 的 {@code oracle.sql.TIMESTAMP} 等
+     * 既不能被 Jackson 序列化（差异写入 sink 时抛异常），也不能被 Java 侧归一化器识别。
+     * 只保留标准类型（字符串/数字/布尔/字节/日期时间），其余取其字符串形态。
+     */
+    private Object toPortableValue(Object value) {
+        if (value == null || value instanceof String || value instanceof Number || value instanceof Boolean
+                || value instanceof byte[] || value instanceof java.util.Date
+                || value instanceof java.time.temporal.Temporal) {
+            return value;
+        }
+        // Oracle 驱动的 oracle.sql.* 句柄：取其 stringValue() 的 SQL 形态文本。
+        // toString() 只给句柄地址（oracle.sql.TIMESTAMPTZ@1a2b），两侧句柄必然不同，
+        // 会把所有行判成差异（实测 c_timestamptz 全表误报）。
+        if (value.getClass().getName().startsWith("oracle.sql.")) {
+            try {
+                Object text = value.getClass().getMethod("stringValue").invoke(value);
+                if (text != null) {
+                    return text.toString();
+                }
+            } catch (Exception ignored) {
+                // 反射失败时落到下面的 toString 兜底
+            }
+        }
+        String text = value.toString();
+        log.debug("Converting driver-specific value {} to text: {}", value.getClass().getName(), text);
+        return text;
+    }
+
+    /**
+     * LOB 物化：驱动对 CLOB/BLOB 返回 {@link Clob}/{@link Blob} 句柄，直接 toString
+     * 会得到 "oracle.sql.CLOB@..." 之类的句柄串，本地归一化必然出错。取回实际内容
+     * （CLOB → String，BLOB → byte[]），与其它方言的字符串/二进制值同形。
+     */
+    private Object materializeLob(Object value) throws SQLException {
+        if (value instanceof Clob) {
+            Clob clob = (Clob) value;
+            long length = clob.length();
+            return length > Integer.MAX_VALUE ? clob.getSubString(1, Integer.MAX_VALUE)
+                    : clob.getSubString(1, (int) length);
+        }
+        if (value instanceof Blob) {
+            Blob blob = (Blob) value;
+            long length = blob.length();
+            return length > Integer.MAX_VALUE ? blob.getBytes(1, Integer.MAX_VALUE)
+                    : blob.getBytes(1, (int) length);
+        }
+        return value;
     }
 
     private void applyReadOptions(PreparedStatement statement) throws SQLException {
@@ -636,6 +839,12 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
                 return "user";
             case "driver":
             case "driverclassname":
+            // host/port/database are URL constituents injected by server-side
+            // datasource references; strict drivers (trino/presto, clickhouse-jdbc)
+            // reject them as unknown properties
+            case "host":
+            case "port":
+            case "database":
                 return null;
             default:
                 return key;
@@ -994,7 +1203,7 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
         }
     }
 
-    private Map<String, Object> discoverDorisPartitionAttributes(ResourceLocator resourceLocator) {
+    private Map<String, Object> discoverPartitionAttributes(ResourceLocator resourceLocator) {
         Map<String, Object> attributes = new LinkedHashMap<>();
         if (resourceLocator == null) {
             return attributes;
@@ -1022,7 +1231,7 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
                 if (ddl.toUpperCase(Locale.ROOT).contains("PARTITION BY")) {
                     attributes.put("partitioned", Boolean.TRUE);
                 }
-                Matcher matcher = DORIS_PARTITION_PATTERN.matcher(ddl);
+                Matcher matcher = PARTITION_PATTERN.matcher(ddl);
                 if (matcher.find()) {
                     String[] columns = matcher.group(1).split(",");
                     List<String> keys = new ArrayList<>();

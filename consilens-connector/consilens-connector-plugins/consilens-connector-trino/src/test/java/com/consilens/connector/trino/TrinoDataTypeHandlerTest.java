@@ -21,21 +21,24 @@ class TrinoDataTypeHandlerTest {
     @Test
     void testNormalizeColumnNumeric() {
         String result = handler.normalizeColumn("amount", DataType.INTEGER);
-        assertEquals("COALESCE(TRIM(CAST(\"amount\" AS VARCHAR)), '0')", result);
+        // NULL 哨兵统一为空串（与其它方言一致）
+        assertEquals("COALESCE(TRIM(CAST(\"amount\" AS VARCHAR)), '')", result);
     }
 
     @Test
     void testNormalizeColumn_Date() {
         String result = handler.normalizeColumn("created_at", DataType.DATE);
-        // Date columns are returned as-is for WHERE compatibility; the query
-        // generator applies formatting via formatDateForChecksum.
-        assertEquals("\"created_at\"", result);
+        // DATE 与 checksum 路径同形（CAST + TRIM + NULL → ''）：返回原始列会把 NULL 原样带出，
+        // 与其它方言的 NULL → '' 不一致（全 NULL 行误报）
+        assertEquals("COALESCE(TRIM(CAST(\"created_at\" AS VARCHAR)), '')", result);
     }
 
     @Test
     void testNormalizeColumnTimestamp() {
         String result = handler.normalizeColumn("created_at", DataType.TIMESTAMP);
-        assertEquals("COALESCE(FORMAT_DATETIME(\"created_at\", 'yyyy-MM-dd HH:mm:ss'), '')", result);
+        // 朴素 timestamp 按会话时区（JVM 时区）解释并换算到 UTC（与 mysql/pg 口径一致）
+        assertEquals("COALESCE(FORMAT_DATETIME(AT_TIMEZONE(\"created_at\", 'UTC'), "
+                + "'yyyy-MM-dd HH:mm:ss'), '')", result);
     }
 
     @Test
@@ -50,7 +53,8 @@ class TrinoDataTypeHandlerTest {
         String result = handler.normalizeColumn("amount", DataType.DECIMAL);
         assertTrue(result.contains("FORMAT('%."));
         assertTrue(result.contains("4f'"));
-        assertTrue(result.contains("'0.0000'"));
+        // NULL 哨兵为空串（不再是 '0.0000'）
+        assertTrue(result.contains("THEN ''"), result);
     }
 
     @Test

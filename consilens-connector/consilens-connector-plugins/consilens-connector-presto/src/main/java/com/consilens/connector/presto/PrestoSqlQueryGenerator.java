@@ -26,6 +26,17 @@ public class PrestoSqlQueryGenerator extends BaseSqlQueryGenerator {
         this.dataTypeHandler = dataTypeHandler;
     }
 
+
+    /**
+     * Presto 的 MySQL catalog 会把 INT UNSIGNED 映射成 32 位有符号整数，
+     * 本数据集的 c_uint=2147483650 直接让查询失败（outside of valid range for
+     * type java.lang.Integer）。扫描统一按文本取列，Java 侧仍按 schema 类型归一化。
+     */
+    @Override
+    protected com.consilens.connector.api.DataTypeHandler dataTypeHandler() {
+        return this.dataTypeHandler;
+    }
+
     @Override
     public String getLimitClause(long offset, long limit) {
         if (offset <= 0) {
@@ -47,7 +58,7 @@ public class PrestoSqlQueryGenerator extends BaseSqlQueryGenerator {
             sql.append("'' as checksum ");
         } else {
             // Two-step approach matching MySQL: per-row MD5 + aggregate MD5
-            sql.append("COALESCE(lower(to_hex(md5(to_utf8(array_join(array_agg(row_checksum ORDER BY pk_key), '|'))))), '') as checksum ");
+            sql.append("COALESCE(lower(to_hex(md5(to_utf8(array_join(array_agg(row_checksum ORDER BY pk_key, row_checksum), '|'))))), '') as checksum ");
             sql.append("FROM (SELECT ");
 
             // Build primary key for stable ordering
@@ -57,27 +68,28 @@ public class PrestoSqlQueryGenerator extends BaseSqlQueryGenerator {
                 DataType dataType = columnDataTypes.get(col);
                 sql.append(dataTypeHandler.normalizeColumn(col, dataType)).append(" as pk_key, ");
             } else {
-                sql.append("CONCAT(");
+                // Presto CONCAT 仅两参，多列拼接用 ARRAY_JOIN
+                sql.append("ARRAY_JOIN(ARRAY[");
                 for (int i = 0; i < keyColumns.size(); i++) {
                     if (i > 0)
-                        sql.append(", '|', ");
+                        sql.append(", ");
                     String col = keyColumns.get(i);
                     DataType dataType = columnDataTypes.get(col);
                     sql.append(dataTypeHandler.normalizeColumn(col, dataType));
                 }
-                sql.append(") as pk_key, ");
+                sql.append("], '|') as pk_key, ");
             }
 
-            // Build per-row checksum using MD5
-            sql.append("lower(to_hex(md5(to_utf8(CONCAT(");
+            // Build per-row checksum using MD5 (Presto CONCAT 仅两参 → ARRAY_JOIN)
+            sql.append("lower(to_hex(md5(to_utf8(ARRAY_JOIN(ARRAY[");
             for (int i = 0; i < columns.size(); i++) {
                 if (i > 0)
-                    sql.append(", '|', ");
+                    sql.append(", ");
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
                 sql.append(dataTypeHandler.normalizeColumn(col, dataType));
             }
-            sql.append("))))) as row_checksum");
+            sql.append("], '|'))))) as row_checksum");
         }
 
         sql.append(" FROM ");
@@ -110,18 +122,18 @@ public class PrestoSqlQueryGenerator extends BaseSqlQueryGenerator {
             sql.append(capabilityProvider.quote(primaryKeys.get(i)));
         }
 
-        sql.append(", lower(to_hex(md5(to_utf8(CONCAT(");
+        sql.append(", lower(to_hex(md5(to_utf8(ARRAY_JOIN(ARRAY[");
 
         for (int i = 0; i < columns.size(); i++) {
             if (i > 0) {
-                sql.append(", '|', ");
+                sql.append(", ");
             }
             String col = columns.get(i);
             DataType dataType = columnDataTypes.get(col);
             sql.append(dataTypeHandler.normalizeColumn(col, dataType));
         }
 
-        sql.append("))))) AS row_hash");
+        sql.append("], '|'))))) AS row_hash");
 
         sql.append(" FROM ");
         sql.append(buildRelationRef(schemaName, tableName));

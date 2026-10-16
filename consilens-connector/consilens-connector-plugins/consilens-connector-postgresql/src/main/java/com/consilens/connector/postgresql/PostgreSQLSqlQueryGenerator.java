@@ -35,6 +35,19 @@ public class PostgreSQLSqlQueryGenerator extends BaseSqlQueryGenerator {
         this.dataTypeHandler = dataTypeHandler;
     }
 
+
+    /** join 计划比较列的类型归一化处理器（与 checksum 路径同口径）。 */
+    @Override
+    protected com.consilens.connector.api.DataTypeHandler dataTypeHandler() {
+        return this.dataTypeHandler;
+    }
+
+    /** 归一化结果为字符串时，须做字节级比较以规避库内排序规则（如 utf8mb4_0900_ai_ci）。 */
+    @Override
+    protected String binarySafeExpression(String expression) {
+        return "convert_to(" + expression + ", 'UTF8')";
+    }
+
     @Override
     protected String buildNullSafeNotEquals(String left, String right) {
         return left + " IS DISTINCT FROM " + right;
@@ -90,7 +103,7 @@ public class PostgreSQLSqlQueryGenerator extends BaseSqlQueryGenerator {
         } else {
             // BUGFIX: Use only primary key columns for ordering to ensure stable sort
             // This prevents false checksum mismatches when data columns differ
-            sql.append("COALESCE(MD5(STRING_AGG(row_checksum, '|' ORDER BY pk_key)), '') as checksum ");
+            sql.append("COALESCE(MD5(STRING_AGG(row_checksum, '|' ORDER BY pk_key, row_checksum)), '') as checksum ");
             sql.append("FROM (");
             sql.append("SELECT ");
 

@@ -40,7 +40,8 @@ class BaseDataTypeHandlerTest {
 
     @Test
     void shouldNormalizeBitAsBoolean() {
-        assertEquals("CASE WHEN \"flag\" = TRUE THEN '1' ELSE '0' END",
+        // NULL 哨兵统一为空串（与各方言一致），而不是 '0'
+        assertEquals("CASE WHEN \"flag\" IS NULL THEN '' WHEN \"flag\" = TRUE THEN '1' ELSE '0' END",
                 handler.normalizeColumn("flag", DataType.BIT));
     }
 

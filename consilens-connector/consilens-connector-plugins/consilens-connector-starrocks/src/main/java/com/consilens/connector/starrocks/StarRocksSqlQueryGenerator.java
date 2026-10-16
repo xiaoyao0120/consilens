@@ -36,6 +36,25 @@ public class StarRocksSqlQueryGenerator extends BaseSqlQueryGenerator {
         this.dataTypeHandler = dataTypeHandler;
     }
 
+
+    /** MySQL 族没有 VARCHAR 类型，字符串化排序用 CHAR（与 MySQL 生成器一致）。 */
+    @Override
+    protected String orderByExpression(String column) {
+        return "CAST(" + capabilityProvider.quote(column) + " AS CHAR)";
+    }
+
+    /** join 计划比较列的类型归一化处理器（与 checksum 路径同口径）。 */
+    @Override
+    protected com.consilens.connector.api.DataTypeHandler dataTypeHandler() {
+        return this.dataTypeHandler;
+    }
+
+    /** 归一化结果为字符串时，须做字节级比较以规避库内排序规则（如 utf8mb4_0900_ai_ci）。 */
+    @Override
+    protected String binarySafeExpression(String expression) {
+        return "HEX(" + expression + ")";
+    }
+
     @Override
     protected String buildNullSafeNotEquals(String left, String right) {
         return "NOT (" + left + " <=> " + right + ")";
@@ -82,7 +101,7 @@ public class StarRocksSqlQueryGenerator extends BaseSqlQueryGenerator {
             sql.append("'' as checksum ");
         } else {
             // Two-step approach matching MySQL: per-row MD5 + aggregate MD5
-            sql.append("COALESCE(MD5(GROUP_CONCAT(row_checksum ORDER BY pk_key SEPARATOR '|')), '') as checksum ");
+            sql.append("COALESCE(MD5(GROUP_CONCAT(row_checksum ORDER BY pk_key, row_checksum SEPARATOR '|')), '') as checksum ");
             sql.append("FROM (SELECT ");
 
             // Build primary key for stable ordering

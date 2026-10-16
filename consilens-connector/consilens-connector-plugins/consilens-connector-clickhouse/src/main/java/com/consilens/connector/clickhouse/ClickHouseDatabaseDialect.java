@@ -37,6 +37,7 @@ public class ClickHouseDatabaseDialect extends AbstractDatabaseDialect {
     private final ClickHouseSqlQueryGenerator sqlQueryGenerator;
     private final ClickHouseMetadataQueryGenerator metadataQueryGenerator;
     private final ClickHouseDataTypeHandler dataTypeHandler;
+    private final ClickHouseConnectionPoolOptimizer connectionPoolOptimizer = new ClickHouseConnectionPoolOptimizer();
 
     /**
      * Constructs a new ClickHouse database dialect.
@@ -80,6 +81,11 @@ public class ClickHouseDatabaseDialect extends AbstractDatabaseDialect {
         int port = params.get("port") != null ? ((Number) params.get("port")).intValue() : getDefaultPort();
         String database = params.get("database") != null ? String.valueOf(params.get("database")) : "";
         return "jdbc:clickhouse://" + host + ":" + port + "/" + database;
+    }
+
+    @Override
+    public ConnectionPoolOptimizer getConnectionPoolOptimizer() {
+        return connectionPoolOptimizer;
     }
 
     @Override
