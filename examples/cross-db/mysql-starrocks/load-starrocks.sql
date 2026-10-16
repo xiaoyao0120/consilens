@@ -37,20 +37,20 @@ DROP TABLE IF EXISTS consilens_demo.consilens_performance_demo_table;
 
 CREATE TABLE consilens_demo.consilens_performance_demo_table (
     record_id VARCHAR(16) NOT NULL, col_tinyint TINYINT, col_smallint SMALLINT,
-    col_mediumint MEDIUMINT, col_int INT, col_bigint BIGINT,
-    col_unsigned_int INT UNSIGNED, col_float FLOAT, col_double DOUBLE,
-    col_decimal DECIMAL(18,4), col_numeric NUMERIC(18,4), col_char CHAR(10),
+    col_mediumint INT, col_int INT, col_bigint BIGINT,
+    col_unsigned_int BIGINT, col_float FLOAT, col_double DOUBLE,
+    col_decimal DECIMAL(18,4), col_numeric DECIMAL(18,4), col_char CHAR(10),
     col_varchar_50 VARCHAR(50), col_varchar_100 VARCHAR(100), col_varchar_255 VARCHAR(255),
     col_text VARCHAR(65533), col_mediumtext VARCHAR(65533), col_binary VARBINARY(8),
     col_varbinary VARBINARY(16), col_blob VARBINARY(65533), col_date DATE,
     col_datetime DATETIME, col_timestamp DATETIME, col_time VARCHAR(10),
-    col_boolean BOOLEAN, col_tinyint_bool TINYINT(1),
+    col_boolean BOOLEAN, col_tinyint_bool TINYINT,
     col_enum VARCHAR(20), col_set VARCHAR(20),
     col_json JSON, user_name VARCHAR(64), email VARCHAR(128), phone VARCHAR(32),
     address VARCHAR(255), city VARCHAR(64), country VARCHAR(64), postal_code VARCHAR(20),
     amount DECIMAL(18,4), balance DECIMAL(18,4), credit_limit DECIMAL(18,4),
     status VARCHAR(20), category VARCHAR(30), priority SMALLINT, score DOUBLE,
-    created_at DATETIME, updated_at DATETIME, deleted TINYINT NOT NULL DEFAULT 0,
+    created_at DATETIME, updated_at DATETIME, deleted TINYINT NOT NULL,
     dt DATE NOT NULL
 ) DUPLICATE KEY(record_id)
 DISTRIBUTED BY HASH(record_id) BUCKETS 4;
@@ -77,10 +77,10 @@ SELECT
     CONCAT('+861380',LPAD(n,6,'0')), CONCAT('No.',n,' Consilens Road'),
     CASE MOD(n,4) WHEN 0 THEN 'Shanghai' WHEN 1 THEN 'Beijing' WHEN 2 THEN 'Shenzhen' ELSE 'Hangzhou' END,
     'CN', LPAD(MOD(n,1000000),6,'0'),
-    ROUND(10+MOD(n,5000)/10,4),
+    IF(n=1, 99999.9999, ROUND(10+MOD(n,5000)/10,4)),
     ROUND(1000+MOD(n,8000)/10,4),
     ROUND(5000+MOD(n,3000)/10,4),
-    CASE MOD(n,4) WHEN 0 THEN 'active' WHEN 1 THEN 'inactive' WHEN 2 THEN 'pending' ELSE 'blocked' END,
+    CASE WHEN n=2 THEN 'modified_status' ELSE CASE MOD(n,4) WHEN 0 THEN 'active' WHEN 1 THEN 'inactive' WHEN 2 THEN 'pending' ELSE 'blocked' END END,
     CASE MOD(n,5) WHEN 0 THEN 'retail' WHEN 1 THEN 'finance' WHEN 2 THEN 'logistics' WHEN 3 THEN 'manufacturing' ELSE 'public' END,
     MOD(n,5)+1, MOD(n,100)+0.5,
     DATE_ADD('2026-05-01 00:00:00',INTERVAL MOD(n,10000) SECOND),
@@ -89,14 +89,13 @@ SELECT
 FROM consilens_seq
 WHERE n != 5;  -- TARGET_MISSING: row REC0000000005 intentionally absent
 
--- MISMATCH: modify specific records
-UPDATE consilens_demo.consilens_performance_demo_table SET amount = 99999.9999 WHERE record_id = 'REC0000000001';
-UPDATE consilens_demo.consilens_performance_demo_table SET status = 'modified_status' WHERE record_id = 'REC0000000002';
+-- MISMATCH: REC0000000001 amount / REC0000000002 status are modified inline in the
+-- INSERT SELECT above (DUPLICATE KEY tables do not support UPDATE).
 
 -- SOURCE_MISSING: extra record in target
 INSERT INTO consilens_demo.consilens_performance_demo_table
-(record_id, col_tinyint, col_int, col_decimal, amount, status, updated_at, dt)
-VALUES ('REC_EXTRA_001', 1, 100, 100.1234, 5000.0000, 'extra', NOW(), '2026-05-01');
+(record_id, col_tinyint, col_int, col_decimal, amount, status, updated_at, dt, deleted)
+VALUES ('REC_EXTRA_001', 1, 100, 100.1234, 5000.0000, 'extra', NOW(), '2026-05-01', 0);
 
 -- =========================================================
 -- mydb.users
@@ -110,14 +109,14 @@ CREATE TABLE mydb.users (
 DISTRIBUTED BY HASH(id) BUCKETS 4;
 
 INSERT INTO mydb.users
-SELECT n, CONCAT('user_',LPAD(n,5,'0')), CONCAT('user_',LPAD(n,5,'0'),'@example.com'),
+SELECT n, CONCAT('user_',LPAD(n,5,'0')),
+    CASE WHEN n=1 THEN 'modified@example.com' ELSE CONCAT('user_',LPAD(n,5,'0'),'@example.com') END,
     CONCAT('+861380',LPAD(n,6,'0')),
     CASE MOD(n,3) WHEN 0 THEN 'active' WHEN 1 THEN 'inactive' ELSE 'pending' END,
     DATE_ADD('2026-01-01 00:00:00',INTERVAL MOD(n,10000) SECOND)
 FROM consilens_seq;
 
--- MISMATCH: 修改 id=1 的 email
-UPDATE mydb.users SET email = 'modified@example.com' WHERE id = 1;
+-- MISMATCH: id=1 的 email 在 INSERT SELECT 中内联修改（SR 不支持 UPDATE）
 
 -- =========================================================
 -- mydb.orders
@@ -138,10 +137,10 @@ SELECT n, 100000+MOD(n,500), ROUND(20+MOD(n,10000)/20,4),
 FROM consilens_seq;
 
 CREATE TABLE mydb.orders_backup LIKE mydb.orders;
-INSERT INTO mydb.orders_backup SELECT * FROM mydb.orders;
+INSERT INTO mydb.orders_backup
+SELECT order_id, customer_id, IF(order_id=1, 99999.9999, amount), status, created_at FROM mydb.orders;
 
--- MISMATCH: orders_backup 修改某订单 amount
-UPDATE mydb.orders_backup SET amount = 99999.9999 WHERE order_id = 1;
+-- MISMATCH: orders_backup 的 order_id=1 amount 在 INSERT 中内联修改（SR 不支持 UPDATE）
 
 -- TARGET_MISSING: source 端 orders 插入额外订单（target 端 orders_backup 缺失）
 INSERT INTO mydb.orders (order_id, customer_id, amount, status, created_at)

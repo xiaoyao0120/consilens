@@ -39,6 +39,9 @@ strategy:
   batchSize: 500
   localCompare:
     mode: row-hash
+  # 开放档（默认）：重复键中值相等的行互相抵消，其余按序配对；
+  # 改为 true 时比对前先做唯一键探针，命中重复键直接失败（严格档）
+  validateUniqueKeys: false
 
 result:
   sinks:

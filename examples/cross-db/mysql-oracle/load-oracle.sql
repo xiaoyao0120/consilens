@@ -47,14 +47,14 @@ CREATE TABLE consilens_performance_demo_table (
     col_varchar_50 VARCHAR2(50), col_varchar_100 VARCHAR2(100), col_varchar_255 VARCHAR2(255),
     col_text CLOB, col_mediumtext CLOB, col_binary RAW(8),
     col_varbinary RAW(16), col_blob BLOB, col_date DATE,
-    col_datetime DATE, col_timestamp TIMESTAMP, col_time VARCHAR2(10),
+    col_datetime TIMESTAMP, col_timestamp TIMESTAMP, col_time VARCHAR2(10),
     col_boolean NUMBER(1), col_tinyint_bool NUMBER(1),
     col_enum VARCHAR2(20), col_set VARCHAR2(20),
     col_json CLOB, user_name VARCHAR2(64), email VARCHAR2(128), phone VARCHAR2(32),
     address VARCHAR2(255), city VARCHAR2(64), country VARCHAR2(64), postal_code VARCHAR2(20),
     amount NUMBER(18,4), balance NUMBER(18,4), credit_limit NUMBER(18,4),
     status VARCHAR2(20), category VARCHAR2(30), priority NUMBER(5), score BINARY_DOUBLE,
-    created_at DATE, updated_at TIMESTAMP, deleted NUMBER(1) DEFAULT 0 NOT NULL,
+    created_at TIMESTAMP, updated_at TIMESTAMP, deleted NUMBER(1) DEFAULT 0 NOT NULL,
     dt DATE NOT NULL,
     CONSTRAINT pk_perf_demo PRIMARY KEY (record_id)
 );
@@ -93,7 +93,8 @@ SELECT
 FROM (
     SELECT LEVEL AS n FROM DUAL CONNECT BY LEVEL <= 10000
 ) seq
-WHERE n != 5;  -- TARGET_MISSING: row REC0000000005 intentionally absent
+WHERE n != 5;
+-- TARGET_MISSING: row REC0000000005 intentionally absent
 
 COMMIT;
 

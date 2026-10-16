@@ -65,7 +65,7 @@ SELECT
     CONCAT('C',LPAD(n,9,'0')), CONCAT('v50_',LPAD(n,5,'0')),
     CONCAT('v100_',LPAD(n,5,'0'),'_stable'), CONCAT('v255_',LPAD(n,5,'0'),'_stable_payload'),
     CONCAT('text-',LPAD(n,5,'0')), CONCAT('mediumtext-',LPAD(n,5,'0'),'-',REPEAT('x',MOD(n,32))),
-    LOWER(LPAD(HEX(n),16,'0')), LOWER(LPAD(HEX(n*17),32,'0')), LOWER(LPAD(HEX(n*31),32,'0')),
+    UPPER(LPAD(HEX(n),16,'0')), UPPER(LPAD(HEX(n*17),32,'0')), UPPER(LPAD(HEX(n*31),32,'0')),
     DATE_ADD('2026-05-01',INTERVAL MOD(n,7) DAY),
     DATE_ADD('2026-05-01 00:00:00',INTERVAL MOD(n,10000) SECOND),
     DATE_ADD('2026-05-01 00:00:00',INTERVAL MOD(n,10000) SECOND),
@@ -95,8 +95,8 @@ UPDATE consilens_demo.consilens_performance_demo_table SET status = 'modified_st
 
 -- SOURCE_MISSING: extra record in target
 INSERT INTO consilens_demo.consilens_performance_demo_table
-(record_id, col_tinyint, col_int, col_decimal, amount, status, updated_at, dt)
-VALUES ('REC_EXTRA_001', 1, 100, 100.1234, 5000.0000, 'extra', NOW(), '2026-05-01');
+(record_id, col_tinyint, col_int, col_decimal, amount, status, updated_at, dt, deleted)
+VALUES ('REC_EXTRA_001', 1, 100, 100.1234, 5000.0000, 'extra', NOW(), '2026-05-01', 0);
 
 -- =========================================================
 -- mydb.users

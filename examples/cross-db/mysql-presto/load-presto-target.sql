@@ -44,7 +44,7 @@ DROP TABLE IF EXISTS consilens_demo_target.consilens_performance_demo_table;
 CREATE TABLE consilens_demo_target.consilens_performance_demo_table (
     record_id VARCHAR(16) NOT NULL, col_tinyint TINYINT, col_smallint SMALLINT,
     col_mediumint MEDIUMINT, col_int INT, col_bigint BIGINT,
-    col_unsigned_int INT UNSIGNED, col_float FLOAT, col_double DOUBLE,
+    col_unsigned_int BIGINT, col_float FLOAT, col_double DOUBLE,
     col_decimal DECIMAL(18,4), col_numeric NUMERIC(18,4), col_char CHAR(10),
     col_varchar_50 VARCHAR(50), col_varchar_100 VARCHAR(100), col_varchar_255 VARCHAR(255),
     col_text TEXT, col_mediumtext MEDIUMTEXT, col_binary BINARY(8),
@@ -52,7 +52,7 @@ CREATE TABLE consilens_demo_target.consilens_performance_demo_table (
     col_datetime DATETIME, col_timestamp TIMESTAMP NULL, col_time TIME,
     col_boolean BOOLEAN, col_tinyint_bool TINYINT(1),
     col_enum ENUM('new','processing','done','failed'), col_set SET('a','b','c'),
-    col_json JSON, user_name VARCHAR(64), email VARCHAR(128), phone VARCHAR(32),
+    col_json TEXT, user_name VARCHAR(64), email VARCHAR(128), phone VARCHAR(32),
     address VARCHAR(255), city VARCHAR(64), country VARCHAR(64), postal_code VARCHAR(20),
     amount DECIMAL(18,4), balance DECIMAL(18,4), credit_limit DECIMAL(18,4),
     status VARCHAR(20), category VARCHAR(30), priority SMALLINT, score DOUBLE,

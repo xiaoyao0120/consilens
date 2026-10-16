@@ -9,10 +9,10 @@ CREATE TABLE mydb.orders (
   created_at DateTime
 ) ENGINE = MergeTree() ORDER BY order_id;
 INSERT INTO mydb.orders
-SELECT toUInt32(n), toUInt32(100000 + modulo(n,500)),
-  toDecimal64(10 + modulo(n,5000)/10, 4),
-  multiIf(modulo(n,4)=0,'active',modulo(n,4)=1,'inactive',modulo(n,4)=2,'pending','blocked'),
-  toDateTime('2026-05-01 00:00:00') + modulo(n,10000)
+SELECT toUInt32(number), toUInt32(100000 + modulo(number,500)),
+  toDecimal64(10 + modulo(number,5000)/10, 4),
+  multiIf(modulo(number,4)=0,'active',modulo(number,4)=1,'inactive',modulo(number,4)=2,'pending','blocked'),
+  toDateTime('2026-05-01 00:00:00') + modulo(number,10000)
 FROM numbers(1, 10000);
 CREATE TABLE mydb.orders_backup AS mydb.orders;
 INSERT INTO mydb.orders_backup SELECT * FROM mydb.orders;
