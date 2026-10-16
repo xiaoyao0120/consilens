@@ -44,6 +44,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 @Component
@@ -297,22 +298,47 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
     }
 
     protected DiffLifecycle buildLifecycle(ServerCompareConfig config) {
-        ResultConfig resultConfig = config.getResult();
-        if (resultConfig == null || resultConfig.getSinks() == null || resultConfig.getSinks().isEmpty()) {
-            // 默认写入：差异明细经 jsonl sink 落盘（供分页读取，不截断）；统计数据由 writeSuccess 入库
-            SinkConfig defaultSink = SinkConfig.builder()
+        ResultConfig resultConfig = ResultConfig.builder()
+                // 沿用用户的 failOnSinkError 配置；用户未配置时保持既有默认（true）
+                .failOnSinkError(config.getResult() == null || config.getResult().isFailOnSinkError())
+                .sinks(composeSinks(config))
+                .build();
+        return new DefaultDiffLifecycle(resultConfig);
+    }
+
+    /**
+     * 用户配置的 sink + 必然存在的差异明细落盘 sink。实例详情的差异明细分页读取的是
+     * 默认路径的那个 jsonl 文件（不截断），因此无论用户配了什么展示型 sink，
+     * 都必须保证有一个指向默认路径的 diff-record sink。
+     */
+    List<SinkConfig> composeSinks(ServerCompareConfig config) {
+        List<SinkConfig> sinks = new ArrayList<>();
+        if (config.getResult() != null && config.getResult().getSinks() != null) {
+            sinks.addAll(config.getResult().getSinks());
+        }
+        if (sinks.isEmpty()) {
+            // 用户未配置 sink：保留 console 结果输出
+            sinks.add(SinkConfig.builder()
+                    .format("console")
+                    .type("result")
+                    .enabled(true)
+                    .build());
+        }
+        // 用户自配的 console 等展示 sink 不影响差异明细落盘；用户自配的 jsonl sink
+        // 只有指向同一默认路径才算替代——否则报告会退化成 1000 行内联样本。
+        boolean hasDefaultDiffRecord = sinks.stream()
+                .anyMatch(sink -> "jsonl".equals(sink.getFormat()) && sink.isEnabled()
+                        && defaultDiffPath().equals(sinkPath(sink)));
+        if (!hasDefaultDiffRecord) {
+            sinks.add(SinkConfig.builder()
                     .format("jsonl")
                     .type("diff-record")
                     .enabled(true)
                     .properties(toJson(Map.of(
                             "path", defaultDiffPath())))
-                    .build();
-            resultConfig = ResultConfig.builder()
-                    .failOnSinkError(true)
-                    .sinks(List.of(defaultSink))
-                    .build();
+                    .build());
         }
-        return new DefaultDiffLifecycle(resultConfig);
+        return sinks;
     }
 
     private String toJson(Object value) {
@@ -325,6 +351,23 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
 
     private String defaultDiffPath() {
         return properties.getArtifact().getLocalBaseDir() + "/run-result-${taskId}.jsonl";
+    }
+
+    /**
+     * 读 sink 配置里的 {@code path}（properties 是 JSON 字符串）；解析失败或未配置时返回 null，
+     * 表示"不指向默认明细文件"。
+     */
+    private String sinkPath(SinkConfig sink) {
+        if (sink == null || sink.getProperties() == null || sink.getProperties().isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode node = objectMapper.readTree(sink.getProperties());
+            JsonNode path = node.get("path");
+            return path != null && path.isTextual() ? path.textValue() : null;
+        } catch (Exception exception) {
+            return null;
+        }
     }
 
     private String resolvedDiffUri(String runId) {
@@ -468,6 +511,12 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("operation", row.getOperation().name());
         result.put("primaryKey", row.getPrimaryKey());
+        // Persist source/target values and column names so the diff-report
+        // samples can render 旧值/新值 instead of only the primary key.
+        result.put("sourceValues", row.getSourceValues().orElse(null));
+        result.put("targetValues", row.getTargetValues().orElse(null));
+        // 单一 columnNames 键：值数组两侧同序（键列 + 比对列），UI 按下标标注字段名
+        result.put("columnNames", row.getColumnNames1() != null ? row.getColumnNames1() : row.getColumnNames2());
         result.put("metadata", row.getMetadata());
         return result;
     }

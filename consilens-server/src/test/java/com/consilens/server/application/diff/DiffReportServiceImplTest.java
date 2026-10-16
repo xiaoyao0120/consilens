@@ -29,7 +29,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class DefaultDiffReportServiceTest {
+class DiffReportServiceImplTest {
 
     private static final String TASK_KEY = "task-1";
     private static final long TASK_ID = 42L;

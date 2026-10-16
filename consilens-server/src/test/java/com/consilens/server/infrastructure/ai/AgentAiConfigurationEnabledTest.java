@@ -43,9 +43,25 @@ class AgentAiConfigurationEnabledTest {
         assertNotNull(runtime.loop());
         assertNotNull(runtime.modelClient());
         AgentToolRegistry registry = runtime.registry();
-        assertEquals(11, registry.all().size());
+        // 工具集增删都会让本测试失败：数量与各类工具的代表成员一起钉住，
+        // 避免只改数字就把能力悄悄改没了。
+        assertEquals(14, registry.all().size());
+        // 数据源发现/探查
         assertTrue(registry.find("list_datasource_types").isPresent());
         assertTrue(registry.find("get_datasource_form_schema").isPresent());
         assertTrue(registry.find("find_datasource").isPresent());
+        assertTrue(registry.find("list_datasources").isPresent());
+        assertTrue(registry.find("search_tables").isPresent());
+        assertTrue(registry.find("get_table_schema").isPresent());
+        assertTrue(registry.find("stage_datasource_draft").isPresent());
+        assertTrue(registry.find("probe_datasource").isPresent());
+        assertTrue(registry.find("inspect_draft_metadata").isPresent());
+        // 对比定义与落库计划
+        assertTrue(registry.find("stage_compare_definition").isPresent());
+        assertTrue(registry.find("prepare_provisioning_plan").isPresent());
+        assertTrue(registry.find("commit_provisioning_plan").isPresent());
+        // 运行与查询
+        assertTrue(registry.find("run_task_definition").isPresent());
+        assertTrue(registry.find("get_task_status").isPresent());
     }
 }

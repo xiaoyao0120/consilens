@@ -66,7 +66,8 @@ import static org.mockito.Mockito.when;
         "consilens.server.security.enabled=false",
         "consilens.server.database.allow-embedded=true",
         "spring.sql.init.mode=always",
-        "consilens.datasource.encryption-key="
+        // 测试自备密钥：仓库配置里不再放密钥材料（凭据只走环境变量/部署注入）
+        "consilens.server.datasource.encryption-key="
                 + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 })
 class AgentDatasourceJobClosedLoopIntegrationTest {

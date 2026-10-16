@@ -2,6 +2,7 @@ package com.consilens.server.application.capability;
 
 import com.consilens.cluster.api.ClusterApplicationResult;
 import com.consilens.cluster.api.ClusterSubmission;
+import com.consilens.cluster.api.ClusterSubmitRequest;
 import com.consilens.cluster.api.ClusterSubmitter;
 import com.consilens.cluster.api.KubernetesSecretKeyRef;
 import com.consilens.cluster.api.KubernetesSubmissionSpec;
@@ -11,6 +12,8 @@ import com.consilens.server.application.capability.config.ServerCompareConfig;
 import com.consilens.server.domain.model.TaskExecutionContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
@@ -30,6 +33,8 @@ import java.util.Map;
  */
 @Component
 public class ClusterSubmitSupport {
+
+    private static final Logger log = LoggerFactory.getLogger(ClusterSubmitSupport.class);
 
     private static final long COMPLETION_POLL_SECONDS = 3;
 
@@ -62,7 +67,17 @@ public class ClusterSubmitSupport {
                 descriptorFile = writeDescriptor(descriptor);
             }
             submitter = submitterLocator.locate(platform);
-            submission = submitter.submit(buildSubmitRequest(request, descriptorFile, descriptor, platform));
+            // 先构建提交请求，让清扫使用与提交一致的 submissionId / namespace / jobName
+            ClusterSubmitRequest submitRequest = buildSubmitRequest(request, descriptorFile, descriptor, platform);
+            // 恢复重试场景：清扫同 submissionId 的残留集群应用（全新提交时为 no-op）
+            try {
+                submitter.killStale(submitRequest);
+            } catch (RuntimeException e) {
+                // 清扫失败不阻塞新提交；记录原因便于排查
+                log.warn("stale cluster application sweep failed for submission {}; continuing with new submission",
+                        submitRequest.getSubmissionId(), e);
+            }
+            submission = submitter.submit(submitRequest);
             ClusterApplicationResult result = awaitTerminal(context, request, submitter, submission, cancelChecker);
             reachedTerminalState = true;
             return result;
@@ -147,6 +162,7 @@ public class ClusterSubmitSupport {
                     .stagingUri((String) params.get("stagingDir"))
                     .applicationName(contextSubmissionId(request))
                     .queue((String) params.get("queue"))
+                    .amJavaHome((String) params.get("amJavaHome"))
                     .amMemoryMb(parseMemory(orDefault(params, "amMemory", "1g")))
                     .amVCores(intOrDefault(params, "amVCores", 1))
                     .tags(splitCsv((String) params.get("tags")))

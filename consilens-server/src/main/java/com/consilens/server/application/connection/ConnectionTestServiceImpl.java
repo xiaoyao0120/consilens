@@ -80,8 +80,9 @@ public class ConnectionTestServiceImpl implements ConnectionTestService {
         if (password != null) {
             properties.setProperty("password", password);
         }
-        properties.setProperty("connectTimeout", String.valueOf(CONNECT_TIMEOUT_SECONDS * 1000));
-        properties.setProperty("loginTimeout", String.valueOf(CONNECT_TIMEOUT_SECONDS));
+        // timeout is enforced via DriverManager.setLoginTimeout below; passing
+        // connectTimeout/loginTimeout properties breaks strict drivers (e.g.
+        // clickhouse-jdbc rejects unknown config keys)
         return properties;
     }
 

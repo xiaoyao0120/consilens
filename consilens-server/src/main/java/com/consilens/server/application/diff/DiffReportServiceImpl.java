@@ -171,7 +171,8 @@ public class DiffReportServiceImpl implements DiffReportService {
         Map<String, Long> counts = new LinkedHashMap<>();
         long mismatchRows = 0;
         for (JsonNode node : differences) {
-            if (!OPERATION_MISMATCH.equals(node.path("operation").asText())) {
+            // differences jsonl 里 operation 为小写（mismatch），忽略大小写比较
+            if (!OPERATION_MISMATCH.equalsIgnoreCase(node.path("operation").asText())) {
                 continue;
             }
             mismatchRows++;

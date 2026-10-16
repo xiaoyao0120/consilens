@@ -34,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class RunTaskHandlerTest {
@@ -65,8 +66,13 @@ class RunTaskHandlerTest {
                 () -> handler.injectConnections(config));
     }
 
+    /**
+     * 差异行的取值随 artifact 落盘：diff-report 的 samples 从同一行读 sourceValues/targetValues
+     * 渲染旧值/新值（DiffReportServiceImpl），缺少这两键时 UI 只能显示主键。
+     * artifact 为服务端本地文件，取值经 /v1 报告接口暴露的粒度不变。
+     */
     @Test
-    void shouldNotExposeRawDiffValuesByDefault() {
+    void shouldPersistDiffRowValuesForReportSamples() {
         RunTaskHandler handler = new RunTaskHandler(null, null, null,
                         mock(com.consilens.server.domain.repository.DataSourceRepository.class),
                         SecretProtectorTestKeys.protector(),
@@ -75,15 +81,17 @@ class RunTaskHandlerTest {
                 new com.fasterxml.jackson.databind.ObjectMapper(),
                 new ClusterSubmitSupport(new ClusterSubmitterLocator()));
         DiffRow row = DiffRow.modified(List.of(1),
-                List.of("sensitive-source"),
-                List.of("sensitive-target"),
+                List.of("source-value"),
+                List.of("target-value"),
                 List.of("name"),
                 List.of("name"));
 
         Map<String, Object> result = handler.diffRow(row);
 
-        assertThat(result).containsKeys("operation", "primaryKey", "metadata");
-        assertThat(result).doesNotContainKeys("sourceValues", "targetValues");
+        assertThat(result).containsKeys("operation", "primaryKey", "metadata", "columnNames",
+                "sourceValues", "targetValues");
+        assertThat(result.get("sourceValues")).isEqualTo(List.of("source-value"));
+        assertThat(result.get("targetValues")).isEqualTo(List.of("target-value"));
     }
 
     @Test
@@ -382,6 +390,66 @@ class RunTaskHandlerTest {
                 return compareRequest -> result;
             }
         };
+    }
+
+    /**
+     * 差异明细落盘必须指向默认路径：用户自配的 jsonl sink 即使格式匹配也只是另写一份文件，
+     * 不能顶替报告读取的那个默认文件（否则报告退化成 1000 行内联样本）。
+     */
+    @Test
+    void shouldAppendDefaultDiffRecordSinkWhenUserJsonlSinkTargetsElsewhere() {
+        RunTaskHandler handler = new RunTaskHandler(null, null, null,
+                        mock(com.consilens.server.domain.repository.DataSourceRepository.class),
+                        SecretProtectorTestKeys.protector(),
+                        new com.consilens.server.application.datasource.DialectSupport(),
+                        new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+        SinkConfig userJsonl = new SinkConfig();
+        userJsonl.setFormat("jsonl");
+        userJsonl.setType("diff-record");
+        userJsonl.setProperties("{\"path\":\"./custom/diff-record.jsonl\"}");
+        ServerCompareConfig config = ServerCompareConfig.builder()
+                .result(ResultConfig.builder().sinks(List.of(userJsonl)).build())
+                .build();
+
+        List<SinkConfig> sinks = handler.composeSinks(config);
+
+        assertEquals(2, sinks.stream().filter(sink -> "jsonl".equals(sink.getFormat())).count());
+        assertThat(sinks).anySatisfy(sink -> {
+            try {
+                assertThat(new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readTree(sink.getProperties()).get("path").asText())
+                        .isEqualTo("./.consilens-server/artifacts/run-result-${taskId}.jsonl");
+            } catch (Exception exception) {
+                throw new AssertionError("cannot parse sink properties", exception);
+            }
+        });
+    }
+
+    /**
+     * 用户自配的 jsonl sink 指向默认路径时只写一份，避免同一文件被两个 sink 同时打开。
+     */
+    @Test
+    void shouldNotDuplicateDefaultDiffRecordSinkWhenUserTargetsSamePath() {
+        RunTaskHandler handler = new RunTaskHandler(null, null, null,
+                        mock(com.consilens.server.domain.repository.DataSourceRepository.class),
+                        SecretProtectorTestKeys.protector(),
+                        new com.consilens.server.application.datasource.DialectSupport(),
+                        new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+        SinkConfig userJsonl = new SinkConfig();
+        userJsonl.setFormat("jsonl");
+        userJsonl.setType("diff-record");
+        userJsonl.setProperties("{\"path\":\"./.consilens-server/artifacts/run-result-${taskId}.jsonl\"}");
+        ServerCompareConfig config = ServerCompareConfig.builder()
+                .result(ResultConfig.builder().sinks(List.of(userJsonl)).build())
+                .build();
+
+        List<SinkConfig> sinks = handler.composeSinks(config);
+
+        assertEquals(1, sinks.stream().filter(sink -> "jsonl".equals(sink.getFormat())).count());
     }
 
     private ResultConfig invalidSinkConfig(boolean failOnSinkError) {
