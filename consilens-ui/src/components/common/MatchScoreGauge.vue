@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from "vue";
-import { DIFF_SCORE_STATUS_MAP } from "@/common/statusMapping";
+import { DIFF_SCORE_STATUS_MAP, statusTypeColor } from "@/common/statusMapping";
 
 const props = defineProps({
   // 0..100；null 表示无数据
@@ -13,13 +13,7 @@ const R = 56;
 const CIRCUMFERENCE = 2 * Math.PI * R;
 
 const meta = computed(() => DIFF_SCORE_STATUS_MAP[props.status] || DIFF_SCORE_STATUS_MAP.NONE);
-const color = computed(() => {
-  const type = meta.value.type;
-  if (type === "success") return "#18a058";
-  if (type === "warning") return "#f0a020";
-  if (type === "error") return "#d03050";
-  return "#909399";
-});
+const color = computed(() => statusTypeColor(meta.value.type));
 
 const dashOffset = computed(() => {
   const value = Math.max(0, Math.min(100, props.score ?? 0));
@@ -31,9 +25,9 @@ const display = computed(() => {
   return Number(props.score).toFixed(1);
 });
 
-// 字号随 size 等比缩放（基准：148 → 30px 分数 / 12px 标签）
+// 字号随 size 等比缩放（基准：148 → 30px 分数 / 12px 标签），标签保底 11px 保证可读
 const scoreFontSize = computed(() => `${Math.round(props.size * 0.2)}px`);
-const labelFontSize = computed(() => `${Math.round(props.size * 0.082)}px`);
+const labelFontSize = computed(() => `${Math.max(11, Math.round(props.size * 0.09))}px`);
 </script>
 
 <template>

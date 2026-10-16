@@ -1,4 +1,5 @@
 <script setup>
+import { onBeforeUnmount } from "vue";
 import { useRouter } from "vue-router";
 import { useLoadingBar } from "naive-ui";
 
@@ -6,14 +7,21 @@ import { useLoadingBar } from "naive-ui";
 const router = useRouter();
 const bar = useLoadingBar();
 
-router.beforeEach(() => {
+// 保留反注册函数：HMR / 组件重挂载时移除旧守卫，避免重复注册
+const removeBeforeEach = router.beforeEach(() => {
   bar.start();
 });
-router.afterEach(() => {
+const removeAfterEach = router.afterEach(() => {
   bar.finish();
 });
-router.onError(() => {
+const removeOnError = router.onError(() => {
   bar.error();
+});
+
+onBeforeUnmount(() => {
+  removeBeforeEach();
+  removeAfterEach();
+  removeOnError();
 });
 </script>
 

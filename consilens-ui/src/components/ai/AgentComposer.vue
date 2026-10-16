@@ -15,6 +15,15 @@ const emit = defineEmits(["send", "stop"]);
 const text = ref("");
 // 中文输入法（IME）组合期间按 Enter 是确认候选词，不是发送
 const isComposing = ref(false);
+const inputRef = ref(null);
+
+// 供父组件（如时间线建议开场白）填入文本并聚焦
+function setText(value) {
+  text.value = value || "";
+  inputRef.value?.focus();
+}
+
+defineExpose({ setText });
 
 function handleSend() {
   const content = text.value.trim();
@@ -37,6 +46,7 @@ function handleKeydown(event) {
 <template>
   <div class="agent-composer">
     <n-input
+      ref="inputRef"
       v-model:value="text"
       type="textarea"
       :autosize="{ minRows: 2, maxRows: 6 }"

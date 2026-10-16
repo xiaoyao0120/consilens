@@ -36,12 +36,13 @@ export function parsePrimaryKey(primaryKey) {
   return String(primaryKey);
 }
 
+// 时长统一格式：数值 + 紧凑单位（无空格），如 300ms / 12.3s / 5m 12s
 export function formatDuration(start, end) {
   if (!start || !end) return "-";
   const ms = dayjs(end).diff(dayjs(start));
-  if (ms < 1000) return `${ms} ms`;
-  if (ms < 60 * 1000) return `${(ms / 1000).toFixed(1)} s`;
-  return `${Math.floor(ms / 60000)} m ${Math.round((ms % 60000) / 1000)} s`;
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60 * 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
 }
 
 export function formatLatency(ms) {

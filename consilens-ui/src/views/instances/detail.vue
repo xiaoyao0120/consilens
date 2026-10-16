@@ -2,7 +2,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useMessage } from "naive-ui";
-import { NButton, NIcon, NPopconfirm, NSpin } from "naive-ui";
+import { NButton, NIcon, NPopconfirm, NSpin, NSwitch } from "naive-ui";
 import { ArrowBackOutline, RefreshOutline, TimeOutline, ServerOutline, PlayCircleOutline, PulseOutline } from "@vicons/ionicons5";
 import { getTaskInstance, retryTask, cancelTask, getArtifactContent, getDiffReport, listArtifactDifferences } from "@/api/modules";
 import { formatTime, formatDuration, formatNumber, formatRatio } from "@/utils/format";
@@ -12,6 +12,7 @@ import MatchScoreGauge from "@/components/common/MatchScoreGauge.vue";
 import ValueDiffTable from "@/components/common/ValueDiffTable.vue";
 import ColumnDiffTable from "@/components/common/ColumnDiffTable.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
+import CopyableId from "@/components/common/CopyableId.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -21,6 +22,9 @@ const taskId = route.params.taskId;
 const loading = ref(true);
 const task = ref(null);
 let pollTimer = null;
+
+// 运行中横幅的「已运行」计时：跟随轮询节拍刷新
+const nowTick = ref(Date.now());
 
 const FINAL_STATUSES = ["SUCCEEDED", "FAILED", "CANCELLED", "RETRYABLE"];
 const TABS = ["overview", "diff", "columns"];
@@ -46,7 +50,10 @@ async function loadTask(showLoading = false) {
 
 function startPolling() {
   stopPolling();
-  pollTimer = setInterval(() => loadTask(), 2000);
+  pollTimer = setInterval(() => {
+    loadTask();
+    nowTick.value = Date.now();
+  }, 2000);
 }
 
 function stopPolling() {
@@ -70,6 +77,13 @@ async function handleCancel() {
 
 const status = computed(() => task.value?.status || "");
 const nextActions = computed(() => task.value?.availableNextActions || []);
+
+// 运行中任务的已运行时长（从开始时间起算，缺省用提交时间）
+const runningElapsed = computed(() => {
+  const start = task.value?.startTime || task.value?.submitTime;
+  if (!start) return "";
+  return formatDuration(start, nowTick.value);
+});
 
 // ===== Tab 切换与深链 =====
 function handleTabChange(tab) {
@@ -133,6 +147,8 @@ const FILTER_OPS = [
   { value: "target_missing", label: "目标缺失" },
 ];
 const diffOps = ref(["mismatch", "source_missing", "target_missing"]);
+// 差异明细列显示开关：默认只看差异列
+const showAllColumns = ref(false);
 
 async function loadDiffPage(page = 1) {
   const runResult = (task.value?.artifacts || []).find((item) => item.artifactType === "RUN_RESULT");
@@ -152,7 +168,9 @@ async function loadDiffPage(page = 1) {
     const result = await listArtifactDifferences(runResult.artifactId, {
       offset: (page - 1) * diffPage.pageSize,
       limit: diffPage.pageSize,
-      operation: diffOps.value.length === 3 ? undefined : diffOps.value.join(","),
+      // 始终显式传差异类型：旧 artifact 的差异文件可能混有历史抽样行
+      // （被截断在 1000 上限外会挤掉真实差异行），不能依赖无过滤请求。
+      operation: diffOps.value.join(","),
     });
     diffPage.items = result.items || [];
     diffPage.total = result.total ?? diffPage.items.length;
@@ -273,9 +291,9 @@ onBeforeUnmount(stopPolling);
             </n-button>
             <div>
               <div class="title-row">
-                <span class="task-id mono">{{ task.taskId }}</span>
+                <copyable-id class="task-id" :value="task.taskId" :length="26" />
                 <StateTag :status="status" />
-                <span v-if="task.serialNo" class="serial-no mono">{{ task.serialNo }}</span>
+                <copyable-id v-if="task.serialNo" class="serial-no" :value="task.serialNo" :length="24" />
               </div>
               <div class="meta-row">
                 <span class="meta-item">
@@ -336,7 +354,9 @@ onBeforeUnmount(stopPolling);
         <!-- 运行中横幅 -->
         <div v-if="status === 'RUNNING' || status === 'PENDING' || status === 'CLAIMED'" class="running-banner">
           <n-icon size="16" color="var(--primary)"><RefreshOutline /></n-icon>
-          <span>任务正在{{ status === 'PENDING' ? '等待调度' : '执行中' }}，页面每 2 秒自动刷新</span>
+          <span>
+            任务正在{{ status === 'PENDING' ? '等待调度' : '执行中' }}，页面每 2 秒自动刷新<template v-if="runningElapsed"> · 已运行 {{ runningElapsed }}</template>
+          </span>
         </div>
 
         <!-- 指标区（执行结果摘要） -->
@@ -405,17 +425,22 @@ onBeforeUnmount(stopPolling);
                     <span class="legend-sep" />
                     <span class="legend-item"><i class="swatch swatch-old" />旧值</span>
                     <span class="legend-item"><i class="swatch swatch-new" />新值</span>
+                    <span class="legend-sep" />
+                    <span class="legend-item column-switch">
+                      <n-switch v-model:value="showAllColumns" size="small" />
+                      <span class="switch-label">{{ showAllColumns ? "显示全部列" : "只看差异列" }}</span>
+                    </span>
                     <span v-if="diffOps.length === FILTER_OPS.length" class="legend-all">全部类型</span>
                   </div>
                   <div class="diff-table-area">
-                    <ValueDiffTable v-if="diffPage.items.length" :samples="diffPage.items" />
+                    <ValueDiffTable v-if="diffPage.items.length" :samples="diffPage.items" :show-all-columns="showAllColumns" />
                     <EmptyState
                       v-if="diffPage.loaded && !diffPage.items.length"
                       title="未发现差异记录"
                       description="本次比对两表数据完全一致"
                     />
                   </div>
-                  <div v-if="diffPage.loaded && diffPage.items.length" class="diff-footer">
+                  <div v-if="diffPage.loaded && diffPage.items.length" class="diff-pager">
                     <n-pagination
                       :page="diffPage.page"
                       :page-size="diffPage.pageSize"
@@ -467,18 +492,25 @@ onBeforeUnmount(stopPolling);
 </template>
 
 <style scoped lang="scss">
+// 详情页内容随卡片自然生长，允许整页滚动
+.page-container {
+  overflow: auto;
+
+  > * {
+    flex-shrink: 0;
+  }
+}
+
 // ===== 头部 =====
 .detail-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 18px 20px;
-  margin-bottom: 16px;
+  padding: 16px 20px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: var(--card-shadow);
+  border-radius: var(--radius-card);
 }
 
 .header-left {
@@ -500,21 +532,20 @@ onBeforeUnmount(stopPolling);
 }
 
 .task-id {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
-  color: var(--text);
+  line-height: 24px;
 }
 
 .serial-no {
   font-size: 12px;
-  color: var(--text-muted);
 }
 
 .meta-row {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-top: 6px;
+  margin-top: 2px;
   flex-wrap: wrap;
 }
 
@@ -548,11 +579,10 @@ onBeforeUnmount(stopPolling);
   align-items: center;
   gap: 8px;
   padding: 10px 16px;
-  margin-bottom: 16px;
+  margin-top: 12px;
   font-size: 13px;
   color: var(--primary);
-  background: rgba(37, 99, 235, 0.06);
-  border: 1px solid rgba(37, 99, 235, 0.2);
+  background: var(--primary-bg);
   border-radius: 8px;
 }
 
@@ -561,32 +591,31 @@ onBeforeUnmount(stopPolling);
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   gap: 10px;
-  margin-bottom: 16px;
+  margin-top: 12px;
 }
 
 .metric-card {
   min-width: 0;
-  padding: 8px 12px;
+  padding: 10px 12px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: var(--card-shadow);
-  min-width: 0;
+  border-radius: var(--radius-card);
 }
 
 .metric-label {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   color: var(--text-secondary);
   margin-bottom: 4px;
 }
 
 .metric-value {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.2;
   color: var(--text);
-  font-variant-numeric: tabular-nums;
 
   &.danger {
     color: var(--danger);
@@ -595,7 +624,7 @@ onBeforeUnmount(stopPolling);
 
 .metric-extra {
   margin-top: 2px;
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--text-muted);
 }
 
@@ -653,6 +682,8 @@ onBeforeUnmount(stopPolling);
 
 // ===== Tab 面板 =====
 .detail-tabs {
+  margin-top: 12px;
+
   :deep(.n-tabs-nav) {
     padding: 0 4px;
   }
@@ -673,6 +704,11 @@ onBeforeUnmount(stopPolling);
   display: flex;
   flex-direction: column;
   height: 100%;
+  // 限高：表格内滚，分页控件始终留在视口内（否则整页被长表撑开，
+  // 分页落到首屏之外，看起来像"没有翻页控件"）。
+  // 375px ≈ 页头 + 统计卡 + tab 的高度，随视口自适应。
+  max-height: calc(100vh - 375px);
+  min-height: 280px;
 }
 
 // 勾选筛选栏：独立元素，固定不随表格刷新
@@ -696,13 +732,24 @@ onBeforeUnmount(stopPolling);
       .n-checkbox__label {
         font-size: 12px;
       }
+
+  .column-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+
+    .switch-label {
+      font-size: 12px;
+      color: var(--n-text-color, #666);
+    }
+  }
     }
   }
 
   .legend-sep {
     width: 1px;
     height: 12px;
-    background: var(--border, #e4e4e7);
+    background: var(--border);
   }
 
   .swatch {
@@ -718,7 +765,7 @@ onBeforeUnmount(stopPolling);
   .legend-all {
     margin-left: auto;
     font-size: 12px;
-    color: var(--text-muted, #a1a1aa);
+    color: var(--text-muted);
   }
 }
 
@@ -729,15 +776,13 @@ onBeforeUnmount(stopPolling);
   overflow: hidden;
 }
 
-.diff-footer {
+.diff-pager {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   gap: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border, #e4e4e7);
-  margin-top: 10px;
+  padding: 4px 0 6px;
 }
 
 .diff-total {

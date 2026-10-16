@@ -58,7 +58,7 @@ function copyText(text) {
 }
 
 .kv-value {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text);
   word-break: break-all;
   display: flex;

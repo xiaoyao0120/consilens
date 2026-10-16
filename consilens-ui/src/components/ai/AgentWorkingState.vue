@@ -87,12 +87,12 @@ const isEmpty = computed(() => !Object.keys(props.workingState || {}).length);
 <template>
   <div class="working-state">
     <template v-if="isEmpty">
-      <n-empty description="暂无工作状态" size="small" />
+      <n-empty description="发起对话后，Agent 的执行进度与比对草稿将在这里实时展示" size="small" />
     </template>
     <template v-else>
       <div class="aws-stage">
         <span class="aws-stage-label">当前阶段</span>
-        <n-tag size="small" :bordered="false" type="info" round>{{ stageLabel(sections.stage) }}</n-tag>
+        <n-tag size="small" :bordered="false" type="info">{{ stageLabel(sections.stage) }}</n-tag>
       </div>
       <div class="aws-body">
         <template v-for="[key, value] in sections.rest" :key="key">

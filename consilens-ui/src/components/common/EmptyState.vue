@@ -1,8 +1,4 @@
 <script setup>
-import { h } from "vue";
-import { NIcon } from "naive-ui";
-import { CloudOfflineOutline } from "@vicons/ionicons5";
-
 defineProps({
   title: { type: String, default: "暂无数据" },
   description: { type: String, default: "" },
@@ -14,12 +10,10 @@ defineEmits(["action"]);
 
 <template>
   <div class="empty-state">
-    <n-icon :size="48" color="var(--text-muted)">
-      <CloudOfflineOutline />
-    </n-icon>
+    <div class="empty-glyph">◍</div>
     <div class="empty-title">{{ title }}</div>
-    <div v-if="description" class="empty-desc text-secondary">{{ description }}</div>
-    <n-button v-if="action" type="primary" class="mt-16" @click="$emit('action')">
+    <div v-if="description" class="empty-desc">{{ description }}</div>
+    <n-button v-if="action" size="small" class="mt-8" @click="$emit('action')">
       {{ action }}
     </n-button>
   </div>
@@ -31,19 +25,24 @@ defineEmits(["action"]);
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 48px 0;
+  padding: 48px 16px;
+  gap: 6px;
+}
+
+.empty-glyph {
+  font-size: 26px;
+  line-height: 1;
+  color: var(--border-strong);
 }
 
 .empty-title {
-  margin-top: 12px;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--text);
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .empty-desc {
-  margin-top: 4px;
-  font-size: 13px;
+  font-size: 12.5px;
+  color: var(--text-muted);
   max-width: 420px;
   text-align: center;
 }

@@ -44,7 +44,7 @@ const displayLabel = computed(() => props.label || props.toolName || "工具调�
     <div class="tool-body">
       <div class="tool-head">
         <span class="tool-label">{{ displayLabel }}</span>
-        <n-tag size="small" :bordered="false" :type="meta.tagType" round>{{ meta.text }}</n-tag>
+        <n-tag size="small" :bordered="false" :type="meta.tagType">{{ meta.text }}</n-tag>
       </div>
       <div v-if="message" class="tool-message">{{ message }}</div>
       <n-progress
@@ -66,7 +66,7 @@ const displayLabel = computed(() => props.label || props.toolName || "工具调�
   align-items: flex-start;
   gap: 8px;
   padding: 10px 12px;
-  background: var(--bg);
+  background: var(--bg-subtle);
   border: 1px solid var(--border);
   border-radius: 6px;
 

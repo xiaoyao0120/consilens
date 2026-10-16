@@ -67,6 +67,12 @@ export const menuRoutes = [
     component: () => import("@/views/nodes/index.vue"),
     meta: { title: "节点与集群", icon: "server-outline" },
   },
+  {
+    path: "/:pathMatch(.*)*",
+    name: "not-found",
+    component: () => import("@/views/notFound.vue"),
+    meta: { title: "页面不存在", hidden: true },
+  },
 ];
 
 const routes = [

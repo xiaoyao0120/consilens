@@ -16,11 +16,16 @@ const short = computed(() =>
 );
 
 async function copy() {
+  if (!navigator.clipboard) {
+    message.error("当前环境不支持剪贴板，复制失败");
+    return;
+  }
   try {
-    await navigator.clipboard?.writeText(full.value);
+    await navigator.clipboard.writeText(full.value);
     message.success("已复制 " + full.value);
   } catch {
-    // 剪贴板不可用时静默
+    // 非安全上下文 / 权限被拒时 writeText 会抛错
+    message.error("复制失败，请手动选择复制");
   }
 }
 </script>

@@ -65,6 +65,13 @@ const statusMeta = computed(() => {
 const NEEDS_FULL_PAGE = new Set(["WAITING_SECRET", "WAITING_APPROVAL"]);
 const gotoBanner = computed(() => NEEDS_FULL_PAGE.has(store.session?.status || ""));
 
+const composerRef = ref(null);
+
+// 时间线开场建议：填入输入框并聚焦，由用户确认后发送
+function handleSuggest(text) {
+  composerRef.value?.setText(text);
+}
+
 async function handleSend(text) {
   try {
     await store.sendMessage(text);
@@ -101,7 +108,7 @@ function gotoAssistant() {
       <div class="drawer-head">
         <div class="drawer-title">
           <span class="drawer-title-text">AI 助手</span>
-          <n-tag size="small" :bordered="false" :type="statusMeta.type" round>
+          <n-tag size="small" :bordered="false" :type="statusMeta.type">
             {{ statusMeta.label }}
           </n-tag>
         </div>
@@ -131,9 +138,11 @@ function gotoAssistant() {
         :pending-delta="store.pendingDelta"
         :session-id="store.currentSessionId"
         :is-running="store.isRunning"
+        @suggest="handleSuggest"
       />
 
       <agent-composer
+        ref="composerRef"
         class="drawer-composer"
         :disabled="!store.currentSessionId"
         :sending="store.sending"
@@ -191,7 +200,7 @@ function gotoAssistant() {
   padding: 8px 14px;
   font-size: 12px;
   color: var(--warning);
-  background: rgba(250, 173, 20, 0.08);
+  background: var(--warning-bg);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }

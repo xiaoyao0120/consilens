@@ -5,7 +5,6 @@ const THEME_KEY = "consilens-theme";
 export const useAppStore = defineStore("app", {
   state: () => ({
     theme: localStorage.getItem(THEME_KEY) || "bright",
-    collapsed: false,
   }),
   actions: {
     updateTheme(theme) {

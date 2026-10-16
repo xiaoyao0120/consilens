@@ -1,19 +1,22 @@
 <script setup>
-const tableHeight = "calc(100vh - 250px)";
 import { ref, reactive, onMounted, h } from "vue";
 import { useRouter } from "vue-router";
 import { useMessage } from "naive-ui";
-import { NButton, NIcon, NSpace, NDataTable } from "naive-ui";
-import { RefreshOutline, EyeOutline, CopyOutline } from "@vicons/ionicons5";
+import { RefreshOutline } from "@vicons/ionicons5";
 import { listArtifacts } from "@/api/modules";
 import { ARTIFACT_TYPE_OPTIONS } from "@/common/statusMapping";
-import { formatTime, formatBytes, buildPageParams } from "@/utils/format";
+import { useListQuerySync } from "@/composables/useListQuerySync";
+import { formatBytes, buildPageParams } from "@/utils/format";
 import StateTag from "@/components/common/StateTag.vue";
+import EmptyState from "@/components/common/EmptyState.vue";
+import SkeletonTable from "@/components/common/SkeletonTable.vue";
+import TimeText from "@/components/common/TimeText.vue";
 
 const router = useRouter();
 const message = useMessage();
 
 const loading = ref(false);
+const loadError = ref(false);
 const data = reactive({ total: 0, items: [] });
 const pagination = reactive({
   page: 1,
@@ -21,8 +24,10 @@ const pagination = reactive({
   itemCount: 0,
   pageSizes: [10, 20, 50, 100],
   showSizePicker: true,
+  prefix: ({ itemCount }) => `共 ${itemCount} 条`,
 });
 
+// 筛选与 URL 双向同步：初始从 query 恢复，每次加载写回
 const filters = reactive({
   artifactType: null,
   keyword: "",
@@ -30,60 +35,17 @@ const filters = reactive({
   endTime: null,
 });
 
-const columns = [
-  {
-    title: "Artifact ID",
-    key: "id",
-    render: (row) =>
-      h(
-        "a",
-        {
-          class: "app-name-link",
-          onClick: () => router.push(`/artifacts/${row.id}`),
-        },
-        row.id
-      ),
-  },
-  {
-    title: "类型",
-    key: "artifactType",
-    width: 110,
-    render: (row) => h(StateTag, { status: row.artifactType }),
-  },
-  { title: "格式", key: "format", width: 80, render: (row) => row.format || "-" },
-  { title: "大小", key: "sizeBytes", width: 100, render: (row) => formatBytes(row.sizeBytes) },
-  {
-    title: "元数据",
-    key: "metadata",
-    render: (row) =>
-      row.metadata && Object.keys(row.metadata).length
-        ? Object.entries(row.metadata)
-            .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`)
-            .join(" · ")
-        : "-",
-  },
-  { title: "创建时间", key: "createdAt", width: 170, render: (row) => formatTime(row.createdAt) },
-  {
-    title: "操作",
-    key: "actions",
-    width: 160,
-    render: (row) =>
-      h(NSpace, { size: 4 }, { default: () => [
-        h(NButton, { size: "small", quaternary: true, type: "primary", onClick: () => router.push(`/artifacts/${row.id}`) },
-          { icon: () => h(NIcon, null, { default: () => h(EyeOutline) }), default: () => "查看" }),
-        h(NButton, { size: "small", quaternary: true, onClick: () => copyId(row.id) },
-          { icon: () => h(NIcon, null, { default: () => h(CopyOutline) }), default: () => "复制 ID" }),
-      ] }),
-  },
-];
-
-function copyId(id) {
-  navigator.clipboard.writeText(id);
-  message.success("已复制 artifactId");
-}
+const { filtersActive, syncToUrl } = useListQuerySync(filters, pagination, {
+  artifactType: { queryKey: "type", parse: (v) => v || null },
+  keyword: {},
+  startTime: { parse: (v) => Number(v) || null, serialize: String },
+  endTime: { parse: (v) => Number(v) || null, serialize: String },
+});
 
 async function loadData() {
   loading.value = true;
+  loadError.value = false;
+  syncToUrl();
   try {
     const result = await listArtifacts(
       buildPageParams(pagination.page, pagination.pageSize, {
@@ -96,6 +58,10 @@ async function loadData() {
     data.total = result.total;
     data.items = result.items || [];
     pagination.itemCount = result.total;
+  } catch {
+    loadError.value = true;
+    data.items = [];
+    pagination.itemCount = 0;
   } finally {
     loading.value = false;
   }
@@ -114,6 +80,76 @@ function handleReset() {
   handleSearch();
 }
 
+const columns = [
+  {
+    title: "Artifact ID",
+    key: "id",
+    render: (row) =>
+      h(
+        "a",
+        {
+          class: "app-name-link mono",
+          onClick: () => router.push(`/artifacts/${row.id}`),
+        },
+        row.id
+      ),
+  },
+  {
+    title: "类型",
+    key: "artifactType",
+    width: 110,
+    render: (row) => h(StateTag, { status: row.artifactType }),
+  },
+  { title: "格式", key: "format", width: 80, render: (row) => h("span", { class: "text-secondary" }, row.format || "-") },
+  {
+    title: "大小",
+    key: "sizeBytes",
+    width: 100,
+    align: "right",
+    render: (row) => h("span", { class: "num" }, formatBytes(row.sizeBytes)),
+  },
+  {
+    title: "元数据",
+    key: "metadata",
+    ellipsis: { tooltip: true },
+    render: (row) =>
+      row.metadata && Object.keys(row.metadata).length
+        ? h(
+            "span",
+            { class: "text-secondary" },
+            Object.entries(row.metadata)
+              .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`)
+              .join(" · ")
+          )
+        : h("span", { class: "text-muted" }, "-"),
+  },
+  {
+    title: "创建时间",
+    key: "createdAt",
+    width: 170,
+    render: (row) => h(TimeText, { value: row.createdAt }),
+  },
+  {
+    title: "操作",
+    key: "actions",
+    width: 150,
+    render: (row) =>
+      h("div", { class: "row-actions" }, [
+        h(
+          "a",
+          { class: "row-action", onClick: () => router.push(`/artifacts/${row.artifactId}`) },
+          "查看"
+        ),
+        h("a", { class: "row-action", onClick: () => copyId(row.artifactId) }, "复制 ID"),
+      ]),
+  },
+];
+
+function copyId(id) {
+  navigator.clipboard.writeText(id);
+  message.success("已复制 artifactId");
+}
+
 onMounted(loadData);
 </script>
 
@@ -126,19 +162,21 @@ onMounted(loadData);
       </div>
     </div>
 
-    <n-card :bordered="true" class="mb-16">
+    <n-card size="small" :bordered="true" class="mt-12 mb-12">
       <div class="filter-bar">
         <n-select
           v-model:value="filters.artifactType"
           :options="ARTIFACT_TYPE_OPTIONS"
           placeholder="全部类型"
           clearable
+          size="small"
           class="filter-item"
         />
         <n-input
           v-model:value="filters.keyword"
           placeholder="搜索 artifactId"
           clearable
+          size="small"
           class="filter-item"
           @keyup.enter="handleSearch"
         />
@@ -146,6 +184,7 @@ onMounted(loadData);
           v-model:value="filters.startTime"
           type="datetime"
           clearable
+          size="small"
           class="filter-item"
           placeholder="开始时间"
         />
@@ -153,14 +192,15 @@ onMounted(loadData);
           v-model:value="filters.endTime"
           type="datetime"
           clearable
+          size="small"
           class="filter-item"
           placeholder="结束时间"
         />
-        <n-button type="primary" secondary :loading="loading" @click="handleSearch">
+        <n-button size="small" type="primary" :loading="loading" @click="handleSearch">
           查询
         </n-button>
-        <n-button @click="handleReset">重置</n-button>
-        <n-button quaternary circle class="ml-8" title="刷新" :loading="loading" @click="loadData">
+        <n-button size="small" @click="handleReset">重置</n-button>
+        <n-button size="small" quaternary circle title="刷新" :loading="loading" @click="loadData">
           <template #icon>
             <n-icon><RefreshOutline /></n-icon>
           </template>
@@ -168,38 +208,31 @@ onMounted(loadData);
       </div>
     </n-card>
 
-    <n-card :bordered="true">
-      <template #header>
-        <div class="flex-bc">
-          <span class="card-title">Artifact 列表</span>
-          <span class="text-muted">共 {{ data.total }} 条</span>
-        </div>
-      </template>
+    <n-card size="small" :bordered="true" class="table-card">
+      <SkeletonTable v-if="loading && !data.items.length" :rows="8" />
+      <EmptyState
+        v-else-if="!loading && !data.items.length"
+        class="flex-1"
+        :title="loadError ? '加载失败' : filtersActive ? '没有匹配的 Artifact' : '暂无 Artifact'"
+        :description="loadError ? '网络或服务异常，请重试' : filtersActive ? '尝试调整或清除筛选条件' : '任务运行产生的配置、结果与报告都会存放在这里'"
+        :action="loadError ? '重试' : filtersActive ? '清除筛选' : ''"
+        @action="loadError ? loadData() : handleReset()"
+      />
       <n-data-table
+        v-else
+        class="main-table"
         :columns="columns"
         :data="data.items"
         :loading="loading"
         :row-key="(row) => row.id"
-        :max-height="tableHeight"
-        size="small"
+        flex-height
         :bordered="false"
+        size="small"
         :pagination="pagination"
+        remote
         @update:page="(page) => { pagination.page = page; loadData(); }"
         @update:page-size="(size) => { pagination.pageSize = size; pagination.page = 1; loadData(); }"
       />
     </n-card>
   </div>
 </template>
-
-<style scoped lang="scss">
-.filter-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.filter-item {
-  width: 180px;
-}
-</style>

@@ -1,14 +1,12 @@
 <script setup>
-const tableHeight = "calc(100vh - 250px)";
 import { ref, reactive, computed, h, onMounted, watch, nextTick } from "vue";
 import { useMessage, useDialog } from "naive-ui";
-import { NButton, NIcon, NInput, NSelect, NModal, NCard, NDrawer, NDrawerContent, NTree, NDataTable, NTag, NSpin, NPopconfirm, NEmpty, NPagination } from "naive-ui";
-import { AddOutline, LinkOutline, CubeOutline, GridOutline, ListOutline, ServerOutline, EyeOutline, SparklesOutline } from "@vicons/ionicons5";
+import { NIcon, NTag } from "naive-ui";
+import { AddOutline, LinkOutline, CubeOutline, GridOutline, ListOutline, ServerOutline, SparklesOutline, RefreshOutline } from "@vicons/ionicons5";
 import {
   listDatasourceTypes,
   getDatasourceTypeConfig,
   listDatasources,
-  listDatasourcesPage,
   createDatasource,
   updateDatasource,
   deleteDatasource,
@@ -17,16 +15,23 @@ import {
   listDatasourceTables,
   listDatasourceColumns,
 } from "@/api/modules";
-import { formatTime } from "@/utils/format";
 import DataSourceForm from "@/components/DataSourceForm.vue";
 import AiAssistantDrawer from "@/components/ai/AiAssistantDrawer.vue";
+import EmptyState from "@/components/common/EmptyState.vue";
+import SkeletonTable from "@/components/common/SkeletonTable.vue";
+import CopyableId from "@/components/common/CopyableId.vue";
+import TimeText from "@/components/common/TimeText.vue";
 import { FALLBACK_DS_FIELDS, collectDsParam, splitTestOptions } from "@/common/datasourceDefaults";
+import { datasourceTypeColor } from "@/common/statusMapping";
 
 const message = useMessage();
 const dialog = useDialog();
 
 // ===== 列表 =====
+// 数据源数量少，后端也提供了不分页的列表接口：这里一次拉全量，筛选与分页在本地完成
+// （数量增长后需改回分页接口 + 服务端筛选；与运行实例列表同样的筛选交互）
 const loading = ref(false);
+const loadError = ref(false);
 const aiDrawerShow = ref(false);
 const items = ref([]);
 const types = ref([]);
@@ -36,7 +41,45 @@ const pagination = reactive({
   itemCount: 0,
   pageSizes: [10, 20, 50],
   showSizePicker: true,
+  prefix: ({ itemCount }) => `共 ${itemCount} 条`,
 });
+
+// 筛选：filters 绑定输入，applied 在点「查询」时生效（与其它列表页一致）
+const filters = reactive({ keyword: "", type: null, startTime: null, endTime: null });
+const applied = reactive({ keyword: "", type: null, startTime: null, endTime: null });
+
+const filtersActive = computed(
+  () => !!(applied.keyword || applied.type || applied.startTime || applied.endTime)
+);
+
+function timeOf(value) {
+  if (!value) return null;
+  const t = new Date(value).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+const filteredItems = computed(() => {
+  const keyword = applied.keyword.trim().toLowerCase();
+  return items.value.filter((item) => {
+    if (keyword && !String(item.name || "").toLowerCase().includes(keyword)) return false;
+    if (applied.type && item.type !== applied.type) return false;
+    const created = timeOf(item.createdAt);
+    if (applied.startTime && (created === null || created < applied.startTime)) return false;
+    if (applied.endTime && (created === null || created > applied.endTime)) return false;
+    return true;
+  });
+});
+
+watch(
+  filteredItems,
+  (list) => {
+    pagination.itemCount = list.length;
+    // 筛选后页码越界时回退到最后一页，避免空页
+    const maxPage = Math.max(1, Math.ceil(list.length / pagination.pageSize));
+    if (pagination.page > maxPage) pagination.page = maxPage;
+  },
+  { immediate: true }
+);
 
 async function loadTypes() {
   try {
@@ -48,19 +91,27 @@ async function loadTypes() {
 
 async function loadData() {
   loading.value = true;
+  loadError.value = false;
   try {
-    const result = (await listDatasourcesPage(pagination.page, pagination.pageSize)) || { total: 0, items: [] };
-    items.value = result.items || [];
-    pagination.itemCount = result.total ?? items.value.length;
-    // 删除最后一页最后一条后回退页码，避免空页
-    if (items.value.length === 0 && pagination.itemCount > 0 && pagination.page > 1) {
-      pagination.page = Math.ceil(pagination.itemCount / pagination.pageSize);
-      const retry = (await listDatasourcesPage(pagination.page, pagination.pageSize)) || { items: [] };
-      items.value = retry.items || [];
-    }
+    const result = await listDatasources();
+    items.value = Array.isArray(result) ? result : result?.items || [];
+  } catch {
+    loadError.value = true;
+    items.value = [];
   } finally {
     loading.value = false;
   }
+}
+
+function handleSearch() {
+  Object.assign(applied, filters);
+  pagination.page = 1;
+}
+
+function handleReset() {
+  Object.assign(filters, { keyword: "", type: null, startTime: null, endTime: null });
+  Object.assign(applied, { keyword: "", type: null, startTime: null, endTime: null });
+  pagination.page = 1;
 }
 
 // ===== 新建 / 编辑 =====
@@ -330,7 +381,12 @@ function renderTreeLabel({ option }) {
 }
 
 const columnColumns = [
-  { title: "列名", key: "name", minWidth: 140, render: (row) => h("span", { class: "mono" }, row.name) },
+  {
+    title: "列名",
+    key: "name",
+    minWidth: 140,
+    render: (row) => h(CopyableId, { value: row.name, length: 20 }),
+  },
   { title: "类型", key: "dataType", width: 120, render: (row) => h("span", { class: "text-secondary" }, row.dataType || "-") },
   {
     title: "可空",
@@ -339,7 +395,7 @@ const columnColumns = [
     render: (row) =>
       row.nullable === null || row.nullable === undefined
         ? h("span", { class: "text-muted" }, "-")
-        : h(NTag, { size: "small", type: row.nullable ? "default" : "info" }, row.nullable ? "可空" : "非空"),
+        : h(NTag, { size: "small", bordered: false, type: row.nullable ? "default" : "info" }, row.nullable ? "可空" : "非空"),
   },
 ];
 
@@ -348,10 +404,20 @@ const columns = [
     title: "名称",
     key: "name",
     minWidth: 200,
-    render: (row) => h("div", { class: "ds-name" }, [
-      h(NIcon, { size: 15, class: "ds-icon" }, { default: () => h(LinkOutline) }),
-      h("span", row.name),
-    ]),
+    render: (row) =>
+      h(
+        "a",
+        { class: "app-name-link ds-name-link", onClick: () => openBrowse(row) },
+        [
+          // naive NIcon 的 color 走 props（style 会被组件内部吞掉）
+          h(
+            NIcon,
+            { size: 15, class: "ds-icon", color: datasourceTypeColor(row.type) },
+            { default: () => h(LinkOutline) }
+          ),
+          h("span", row.name),
+        ]
+      ),
   },
   {
     title: "类型",
@@ -363,34 +429,18 @@ const columns = [
     title: "创建时间",
     key: "createdAt",
     width: 170,
-    render: (row) => h("span", { class: "text-secondary" }, formatTime(row.createdAt)),
+    render: (row) => h(TimeText, { value: row.createdAt }),
   },
   {
     title: "操作",
     key: "actions",
-    width: 240,
+    width: 220,
     render: (row) =>
       h("div", { class: "row-actions" }, [
-        h(
-          NButton,
-          { size: "small", text: true, type: "primary", onClick: () => handleRowTest(row) },
-          { default: () => "测试连接" }
-        ),
-        h(
-          NButton,
-          { size: "small", text: true, type: "primary", onClick: () => openBrowse(row) },
-          { default: () => "浏览" }
-        ),
-        h(
-          NButton,
-          { size: "small", text: true, onClick: () => openEdit(row) },
-          { default: () => "编辑" }
-        ),
-        h(
-          NButton,
-          { size: "small", text: true, type: "error", onClick: () => handleDelete(row) },
-          { default: () => "删除" }
-        ),
+        h("a", { class: "row-action", onClick: () => handleRowTest(row) }, "测试连接"),
+        h("a", { class: "row-action", onClick: () => openBrowse(row) }, "浏览"),
+        h("a", { class: "row-action", onClick: () => openEdit(row) }, "编辑"),
+        h("a", { class: "row-action-danger", onClick: () => handleDelete(row) }, "删除"),
       ]),
   },
 ];
@@ -399,6 +449,11 @@ const typeOptions = computed(() => types.value.map((item) => ({
   label: item.type,
   value: item.type,
 })));
+
+// 筛选栏的类型下拉（优先用后端返回的展示名）
+const typeFilterOptions = computed(() =>
+  types.value.map((item) => ({ label: item.label || item.type, value: item.type }))
+);
 
 onMounted(() => {
   loadTypes();
@@ -413,61 +468,106 @@ onMounted(() => {
         <div class="page-title">数据源</div>
         <div class="page-desc">管理数据连接，供任务创建时直接选用，支持实时浏览库 / 表 / 列</div>
       </div>
-      <n-button quaternary circle title="AI 辅助" @click="aiDrawerShow = true">
-        <template #icon>
-          <n-icon><SparklesOutline /></n-icon>
-        </template>
-      </n-button>
-      <n-button type="primary" @click="openCreate">
-        <template #icon>
-          <n-icon><AddOutline /></n-icon>
-        </template>
-        新建数据源
-      </n-button>
+      <div class="head-actions">
+        <n-button size="small" quaternary circle title="AI 辅助" @click="aiDrawerShow = true">
+          <template #icon>
+            <n-icon><SparklesOutline /></n-icon>
+          </template>
+        </n-button>
+        <n-button type="primary" size="small" @click="openCreate">
+          <template #icon>
+            <n-icon><AddOutline /></n-icon>
+          </template>
+          新建数据源
+        </n-button>
+      </div>
     </div>
 
     <ai-assistant-drawer v-model:show="aiDrawerShow" />
 
-    <n-card :bordered="true">
-      <template #header>
-        <div class="flex-bc">
-          <span class="card-title">数据源列表</span>
-          <span class="text-muted">共 {{ pagination.itemCount }} 个</span>
-        </div>
-      </template>
+    <n-card size="small" :bordered="true" class="mt-12 mb-12">
+      <div class="filter-bar">
+        <n-input
+          v-model:value="filters.keyword"
+          placeholder="数据源名称"
+          clearable
+          size="small"
+          class="filter-item"
+          @keyup.enter="handleSearch"
+        />
+        <n-select
+          v-model:value="filters.type"
+          :options="typeFilterOptions"
+          placeholder="全部类型"
+          clearable
+          size="small"
+          class="filter-item"
+        />
+        <n-date-picker
+          v-model:value="filters.startTime"
+          type="datetime"
+          clearable
+          size="small"
+          class="filter-item"
+          placeholder="创建开始时间"
+        />
+        <n-date-picker
+          v-model:value="filters.endTime"
+          type="datetime"
+          clearable
+          size="small"
+          class="filter-item"
+          placeholder="创建结束时间"
+        />
+        <n-button size="small" type="primary" :loading="loading" @click="handleSearch">
+          查询
+        </n-button>
+        <n-button size="small" @click="handleReset">重置</n-button>
+        <n-button size="small" quaternary circle title="刷新" :loading="loading" @click="loadData">
+          <template #icon>
+            <n-icon><RefreshOutline /></n-icon>
+          </template>
+        </n-button>
+      </div>
+    </n-card>
+
+    <n-card size="small" :bordered="true" class="table-card">
+      <SkeletonTable v-if="loading && !items.length" :rows="8" />
+      <EmptyState
+        v-else-if="!loading && !filteredItems.length"
+        class="flex-1"
+        :title="loadError ? '加载失败' : filtersActive ? '没有匹配的数据源' : '还没有数据源'"
+        :description="loadError ? '网络或服务异常，请重试' : filtersActive ? '尝试调整或清除筛选条件' : '新建数据源后即可在任务创建时直接选用'"
+        :action="loadError ? '重试' : filtersActive ? '清除筛选' : '新建数据源'"
+        @action="loadError ? loadData() : filtersActive ? handleReset() : openCreate()"
+      />
       <n-data-table
+        v-else
+        class="main-table"
         :columns="columns"
-        :data="items"
+        :data="filteredItems"
         :loading="loading"
         :row-key="(row) => row.id"
-        :max-height="tableHeight"
+        flex-height
         :bordered="false"
         size="small"
+        :pagination="pagination"
+        @update:page="(page) => { pagination.page = page; }"
+        @update:page-size="(size) => { pagination.pageSize = size; pagination.page = 1; }"
       />
-      <div class="list-pagination">
-        <n-pagination
-          v-model:page="pagination.page"
-          v-model:page-size="pagination.pageSize"
-          :item-count="pagination.itemCount"
-          :page-sizes="pagination.pageSizes"
-          show-size-picker
-          @update:page="loadData"
-          @update:page-size="() => { pagination.page = 1; loadData(); }"
-        />
-      </div>
     </n-card>
 
     <!-- 新建 / 编辑弹窗 -->
     <n-modal v-model:show="modal.show" preset="card" style="width: 640px" :title="modal.editing ? '编辑数据源' : '新建数据源'">
       <div class="ds-form">
-        <div class="ds-row ds-row-top">
+        <div class="ds-row-top">
           <div class="field">
             <label class="field-label">名称</label>
-            <n-input ref="nameInputRef" v-model:value="modal.form.name" placeholder="例如：生产订单库" />
+            <n-input ref="nameInputRef" v-model:value="modal.form.name" placeholder="例如：生产订单库" size="small" />
           </div>
           <div class="field">
             <label class="field-label">类型</label>
-            <n-select v-model:value="modal.form.type" :options="typeOptions" />
+            <n-select v-model:value="modal.form.type" :options="typeOptions" size="small" />
           </div>
         </div>
         <div class="ds-separator" />
@@ -484,14 +584,14 @@ onMounted(() => {
       <template #footer>
         <div class="modal-footer">
           <div class="modal-footer-left">
-            <n-button class="btn-ghost btn-sm" :loading="modal.testing" @click="handleModalTest">测试连接</n-button>
+            <n-button size="small" :loading="modal.testing" @click="handleModalTest">测试连接</n-button>
             <span v-if="modal.testResult" class="conn-result" :class="modal.testResult.ok ? 'ok' : 'fail'">
               <span class="conn-dot" />{{ modal.testResult.text }}
             </span>
           </div>
           <div class="modal-footer-right">
-            <n-button class="btn-ghost" @click="modal.show = false">取消</n-button>
-            <n-button type="primary" :loading="modal.saving" @click="handleSave">
+            <n-button size="small" @click="modal.show = false">取消</n-button>
+            <n-button size="small" type="primary" :loading="modal.saving" @click="handleSave">
               {{ modal.editing ? "保存" : "创建" }}
             </n-button>
           </div>
@@ -518,7 +618,7 @@ onMounted(() => {
                 :on-load="loadTreeNode"
                 @update:selected-keys="handleTreeSelect"
               />
-              <n-empty v-else-if="!browse.loading" description="未获取到数据库列表" size="small" />
+              <div v-else-if="!browse.loading" class="browse-hint">未获取到数据库列表</div>
             </n-spin>
           </div>
           <div class="browse-panel">
@@ -526,6 +626,7 @@ onMounted(() => {
               <n-icon size="15"><ListOutline /></n-icon>
               <span>列信息</span>
               <span v-if="browse.selectedTable" class="browse-table-tag">{{ browse.selectedTable }}</span>
+              <span v-if="browse.columns.length" class="browse-count">{{ browse.columns.length }} 列</span>
             </div>
             <n-data-table
               :columns="columnColumns"
@@ -545,30 +646,6 @@ onMounted(() => {
 </template>
 
 <style scoped lang="scss">
-// ===== 按钮 =====
-.btn-ghost {
-  height: 36px;
-  padding: 0 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--card);
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s ease;
-
-  &:hover {
-    background: var(--bg);
-  }
-}
-
-.btn-sm {
-  height: 32px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
 .ds-form {
   padding-top: 4px;
 }
@@ -614,9 +691,9 @@ onMounted(() => {
 .field-label {
   display: block;
   margin-bottom: 6px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  color: var(--text);
+  color: var(--text-secondary);
 }
 
 .conn-result {
@@ -650,34 +727,16 @@ onMounted(() => {
   flex-shrink: 0;
 }
 
-.ds-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 500;
-  color: var(--text);
-}
-
-.ds-icon {
-  color: var(--text-muted);
-}
-
-.row-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
 .browse-grid {
   display: grid;
   grid-template-columns: 320px 1fr;
-  gap: 14px;
+  gap: 12px;
   height: 100%;
   align-items: stretch;
 }
 
 .browse-panel {
-  background: var(--bg);
+  background: var(--bg-subtle);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 12px;
@@ -704,7 +763,7 @@ onMounted(() => {
   color: var(--text-secondary);
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 5px;
 }
 
 .browse-table-tag {
@@ -714,26 +773,8 @@ onMounted(() => {
   font-size: 11px;
   font-weight: 500;
   color: var(--primary);
-  background: rgba(37, 99, 235, 0.08);
-  border-radius: 999px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.tree-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.tree-icon {
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-
-.tree-text {
+  background: var(--primary-bg);
+  border-radius: 5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -744,28 +785,5 @@ onMounted(() => {
   text-align: center;
   font-size: 12px;
   color: var(--text-muted);
-}
-
-// ===== 分页 =====
-.list-pagination {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 14px;
-}
-
-// ===== 固定列不透明(防穿透),与差异明细列表处理一致 =====
-:deep(.n-data-table-td--fixed-left),
-:deep(.n-data-table-td--fixed-right) {
-  background-color: var(--n-merged-td-color, #fff) !important;
-}
-
-:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-left),
-:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-right) {
-  background-color: #f4f6ff !important;
-}
-
-:deep(.n-data-table-th--fixed-left),
-:deep(.n-data-table-th--fixed-right) {
-  background-color: var(--n-merged-th-color, #fafafa) !important;
 }
 </style>

@@ -6,13 +6,15 @@ import { parsePrimaryKey } from "@/utils/format";
 
 // 差异明细展示（参考 DataGrip / Redgate Data Compare 等对比工具的配色习惯）：
 // - 整行按操作类型着色：更新=琥珀、新增=绿、删除=红（极浅背景）
-// - 每个变化字段一列（源端/目标双列），旧值红色、新值绿色，变化单元格带浅色底标记
+// - 每个字段一列（源端/目标双列），变化字段旧值红色、新值绿色，未变化字段原样展示
 // - 「详情」抽屉逐字段对比，变化的行红底、源红目标绿
 const props = defineProps({
   // [{operation, primaryKey, metadata, changedColumns, columnNames, sourceValues, targetValues}]
   samples: { type: Array, default: () => [] },
   // 占满父容器高度：表格内部滚动、表头固定不随内容滚动
   flexHeight: { type: Boolean, default: true },
+  // 列显示开关（由父页面图例行的开关控制）：默认只显示不一致行的差异列
+  showAllColumns: { type: Boolean, default: false },
 });
 
 function formatValue(value) {
@@ -29,38 +31,63 @@ function isMismatch(sample) {
   return opKey(sample) === "mismatch";
 }
 
-// 展示为列的字段下标：MISMATCH 只列变化字段，增/删行列全部字段
-function changedIndices(sample) {
+// mismatch 行的变化字段下标：优先 metadata.changedColumnIndices，
+// 其次 changedColumns1/2（列名），最后逐值比较兜底
+function mismatchChangedIndices(sample) {
   const names = sample.columnNames || [];
   const source = sample.sourceValues || [];
   const target = sample.targetValues || [];
-  if (isMismatch(sample)) {
-    const metadata = sample.metadata || {};
-    let indices = Array.isArray(metadata.changedColumnIndices) && metadata.changedColumnIndices.length
-      ? metadata.changedColumnIndices
-      : null;
-    if (!indices) {
-      indices = [];
-      const max = Math.max(names.length, source.length, target.length);
-      for (let i = 0; i < max; i++) {
-        if (formatValue(source[i]) !== formatValue(target[i])) indices.push(i);
-      }
-    }
-    return indices.filter((i) => i >= 0 && i < names.length);
+  const metadata = sample.metadata || {};
+
+  if (Array.isArray(metadata.changedColumnIndices) && metadata.changedColumnIndices.length) {
+    return metadata.changedColumnIndices.filter((i) => i >= 0 && i < names.length);
   }
-  return names.map((_, i) => i);
+
+  const changedNames = new Set();
+  for (const key of ["changedColumns1", "changedColumns2"]) {
+    if (Array.isArray(metadata[key])) {
+      for (const name of metadata[key]) changedNames.add(name);
+    }
+  }
+  if (changedNames.size) {
+    const indices = [];
+    names.forEach((name, i) => {
+      if (changedNames.has(name)) indices.push(i);
+    });
+    if (indices.length) return indices;
+  }
+
+  const indices = [];
+  const max = Math.max(names.length, source.length, target.length);
+  for (let i = 0; i < max; i++) {
+    if (formatValue(source[i]) !== formatValue(target[i])) indices.push(i);
+  }
+  return indices.filter((i) => i >= 0 && i < names.length);
 }
 
-// 该行展示用的字段对比（仅变化字段；增/删行单边有值）
+// 该行展示用的字段对比：
+// mismatch 行默认只输出差异列（“显示全部列”开关打开时输出全部，差异列标 diff）；
+// 增删行输出全部字段（单侧有值即为差异语义）。
 function fieldPairs(sample) {
   const names = sample.columnNames || [];
   const source = sample.sourceValues || [];
   const target = sample.targetValues || [];
-  return changedIndices(sample).map((i) => ({
-    name: names[i],
+  const changed = isMismatch(sample) ? new Set(mismatchChangedIndices(sample)) : null;
+  if (changed !== null && !props.showAllColumns) {
+    return names
+      .map((name, i) => ({
+        name,
+        source: formatValue(source[i]),
+        target: formatValue(target[i]),
+        diff: changed.has(i),
+      }))
+      .filter((pair) => pair.diff);
+  }
+  return names.map((name, i) => ({
+    name,
     source: formatValue(source[i]),
     target: formatValue(target[i]),
-    diff: formatValue(source[i]) !== formatValue(target[i]),
+    diff: changed !== null ? changed.has(i) : false,
   }));
 }
 
@@ -78,16 +105,18 @@ function allFieldPairs(sample) {
 }
 
 const rows = computed(() =>
-  props.samples.map((sample, index) => ({
-    key: index,
-    sample,
-    operationKey: opKey(sample),
-    pairs: fieldPairs(sample),
-  }))
+  props.samples
+    .filter((sample) => opKey(sample) !== "unchanged")
+    .map((sample, index) => ({
+      key: index,
+      sample,
+      operationKey: opKey(sample),
+      pairs: fieldPairs(sample),
+    }))
 );
 
-// 所有行出现过的变化字段（并集，作为表格列）
-const changedFieldNames = computed(() => {
+// 所有行出现过的字段（并集，作为表格列；含未变化字段）
+const fieldNames = computed(() => {
   const names = [];
   for (const row of rows.value) {
     for (const pair of row.pairs) {
@@ -144,7 +173,7 @@ const columns = computed(() => {
       render: (row) => h("span", { class: "pk-text" }, parsePrimaryKey(row.sample.primaryKey)),
     },
   ];
-  for (const name of changedFieldNames.value) {
+  for (const name of fieldNames.value) {
     cols.push({
       title: name,
       key: `f_${name}`,
@@ -185,7 +214,7 @@ const columns = computed(() => {
   return cols;
 });
 
-const scrollX = computed(() => 96 + 150 + changedFieldNames.value.length * 360 + 84);
+const scrollX = computed(() => 96 + 150 + fieldNames.value.length * 360 + 84);
 
 function rowClass(row) {
   if (row.operationKey === "source_missing") return "row-added";
@@ -302,13 +331,13 @@ function detailRowClass(row) {
   }
 
   :deep(.cell-old) {
-    color: #b91c1c;
-    background: rgba(220, 38, 38, 0.08);
+    color: var(--diff-old-text);
+    background: var(--diff-old-bg);
   }
 
   :deep(.cell-new) {
-    color: #15803d;
-    background: rgba(22, 163, 74, 0.08);
+    color: var(--diff-new-text);
+    background: var(--diff-new-bg);
   }
 
   :deep(.pk-text) {
@@ -320,15 +349,15 @@ function detailRowClass(row) {
 
   // ===== 整行按操作着色 =====
   :deep(.row-updated) {
-    td { background-color: rgba(245, 158, 11, 0.04); }
+    td { background-color: var(--diff-updated-bg); }
   }
 
   :deep(.row-added) {
-    td { background-color: rgba(22, 163, 74, 0.045); }
+    td { background-color: var(--diff-added-bg); }
   }
 
   :deep(.row-removed) {
-    td { background-color: rgba(220, 38, 38, 0.045); }
+    td { background-color: var(--diff-removed-bg); }
   }
 
   // ===== 表头 =====
@@ -345,45 +374,49 @@ function detailRowClass(row) {
   // ===== 表格外框（表头+单元格，细浅框线）=====
   :deep(.n-data-table-th),
   :deep(.n-data-table-td) {
-    border: 0.5px solid rgba(128, 128, 140, 0.16) !important;
+    border: 0.5px solid var(--diff-grid) !important;
   }
 
   // ===== 固定列不透明（防穿透）=====
   :deep(.n-data-table-td--fixed-left),
   :deep(.n-data-table-td--fixed-right) {
-    background-color: var(--n-merged-td-color, #fff) !important;
+    background-color: var(--card) !important;
   }
 
-  // 着色行的固定列跟随行背景（不透明近似色，避免与行背景割裂）
+  // 着色行的固定列跟随行背景：用 card 底 + tint 叠加渐变，亮暗主题都成立
   :deep(.row-updated .n-data-table-td--fixed-left),
   :deep(.row-updated .n-data-table-td--fixed-right) {
-    background-color: #fefbf5 !important;
+    background-color: var(--card) !important;
+    background-image: linear-gradient(var(--diff-updated-bg), var(--diff-updated-bg));
   }
 
   :deep(.row-added .n-data-table-td--fixed-left),
   :deep(.row-added .n-data-table-td--fixed-right) {
-    background-color: #f5fbf7 !important;
+    background-color: var(--card) !important;
+    background-image: linear-gradient(var(--diff-added-bg), var(--diff-added-bg));
   }
 
   :deep(.row-removed .n-data-table-td--fixed-left),
   :deep(.row-removed .n-data-table-td--fixed-right) {
-    background-color: #fdf5f5 !important;
+    background-color: var(--card) !important;
+    background-image: linear-gradient(var(--diff-removed-bg), var(--diff-removed-bg));
   }
 
   :deep(.n-data-table-tr:hover > .n-data-table-td--fixed-left),
   :deep(.n-data-table-tr:hover > .n-data-table-td--fixed-right) {
-    background-color: #f4f6ff !important;
+    background-color: var(--bg-subtle) !important;
+    background-image: none;
   }
 
   :deep(.n-data-table-th--fixed-left),
   :deep(.n-data-table-th--fixed-right) {
-    background-color: var(--n-merged-th-color, #fafafa) !important;
+    background-color: var(--bg-subtle) !important;
   }
 
   // ===== 详情抽屉 =====
   :deep(.diff-cell-row) {
     td {
-      background-color: rgba(248, 113, 113, 0.08) !important;
+      background-color: var(--diff-old-bg) !important;
     }
   }
 

@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from "vue";
-import { DIFF_SCORE_STATUS_MAP } from "@/common/statusMapping";
+import { DIFF_SCORE_STATUS_MAP, statusTypeColor } from "@/common/statusMapping";
 import { formatNumber, formatRatio } from "@/utils/format";
 
 const props = defineProps({
@@ -13,13 +13,7 @@ const meta = computed(() => {
   return DIFF_SCORE_STATUS_MAP[props.summary.status] || DIFF_SCORE_STATUS_MAP.NONE;
 });
 
-const dotColor = computed(() => {
-  const type = meta.value.type;
-  if (type === "success") return "#18a058";
-  if (type === "warning") return "#f0a020";
-  if (type === "error") return "#d03050";
-  return "#909399";
-});
+const dotColor = computed(() => statusTypeColor(meta.value.type));
 
 const text = computed(() => {
   if (!props.summary || props.summary.differenceCount === null || props.summary.differenceCount === undefined) {

@@ -42,10 +42,6 @@ export function listArtifacts(params) {
   return request.get("/artifacts", { params });
 }
 
-export function getArtifact(artifactId) {
-  return request.get(`/artifacts/${artifactId}`);
-}
-
 export function getArtifactContent(artifactId, config) {
   return request.get(`/artifacts/${artifactId}/content`, config || {});
 }
@@ -83,10 +79,6 @@ export function getDatasourceTypeConfig(type) {
 
 export function listDatasources() {
   return request.get("/datasources");
-}
-
-export function listDatasourcesPage(page, pageSize) {
-  return request.get("/datasources/page", { params: { page, pageSize } });
 }
 
 export function createDatasource(payload) {

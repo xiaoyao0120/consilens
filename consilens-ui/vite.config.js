@@ -44,7 +44,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/v1": {
-        target: "http://localhost:18080",
+        target: "http://localhost:16789",
         changeOrigin: true,
       },
     },

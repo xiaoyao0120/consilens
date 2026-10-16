@@ -1,21 +1,24 @@
 <script setup>
-const tableHeight = "calc(100vh - 250px)";
 import { ref, reactive, onMounted, h } from "vue";
 import { useRouter } from "vue-router";
-import { useMessage, useDialog } from "naive-ui";
-import { NButton, NIcon, NPopconfirm } from "naive-ui";
+import { useMessage } from "naive-ui";
+import { NPopconfirm, NTag } from "naive-ui";
 import { RefreshOutline } from "@vicons/ionicons5";
 import { listTaskInstances, retryTask, cancelTask } from "@/api/modules";
 import { TASK_STATUS_OPTIONS } from "@/common/statusMapping";
-import { formatTime, formatDuration, buildPageParams } from "@/utils/format";
+import { useListQuerySync } from "@/composables/useListQuerySync";
+import { formatDuration, buildPageParams } from "@/utils/format";
 import StateTag from "@/components/common/StateTag.vue";
 import DiffSummaryBadge from "@/components/common/DiffSummaryBadge.vue";
+import EmptyState from "@/components/common/EmptyState.vue";
+import SkeletonTable from "@/components/common/SkeletonTable.vue";
+import TimeText from "@/components/common/TimeText.vue";
 
 const router = useRouter();
 const message = useMessage();
-const dialog = useDialog();
 
 const loading = ref(false);
+const loadError = ref(false);
 const data = reactive({ total: 0, items: [] });
 const pagination = reactive({
   page: 1,
@@ -23,8 +26,10 @@ const pagination = reactive({
   itemCount: 0,
   pageSizes: [10, 20, 50],
   showSizePicker: true,
+  prefix: ({ itemCount }) => `共 ${itemCount} 条`,
 });
 
+// 筛选状态与 URL 双向同步：初始从 query 恢复，每次加载写回（可分享 / 刷新保留）
 const filters = reactive({
   status: null,
   keyword: "",
@@ -33,8 +38,18 @@ const filters = reactive({
   endTime: null,
 });
 
+const { filtersActive, syncToUrl } = useListQuerySync(filters, pagination, {
+  status: { parse: (v) => v || null },
+  keyword: {},
+  executeNodeKey: { queryKey: "node" },
+  startTime: { parse: (v) => Number(v) || null, serialize: String },
+  endTime: { parse: (v) => Number(v) || null, serialize: String },
+});
+
 async function loadData() {
   loading.value = true;
+  loadError.value = false;
+  syncToUrl();
   try {
     const params = buildPageParams(pagination.page, pagination.pageSize, {
       status: filters.status ? [filters.status] : undefined,
@@ -48,6 +63,10 @@ async function loadData() {
     data.total = result.total;
     data.items = result.items || [];
     pagination.itemCount = result.total;
+  } catch {
+    loadError.value = true;
+    data.items = [];
+    pagination.itemCount = 0;
   } finally {
     loading.value = false;
   }
@@ -98,7 +117,12 @@ const columns = [
           ? h("span", { class: "text-muted" }, "已删除的定义")
           : h("span", { class: "text-muted" }, "外部直传"),
   },
-  { title: "类型", key: "taskType", width: 80, render: (row) => h("span", { class: "text-secondary" }, row.taskType) },
+  {
+    title: "类型",
+    key: "taskType",
+    width: 96,
+    render: (row) => h(NTag, { size: "small", bordered: false }, row.taskType),
+  },
   {
     title: "状态",
     key: "status",
@@ -125,13 +149,13 @@ const columns = [
     },
   },
   { title: "执行节点", key: "executeNodeKey", width: 130, ellipsis: { tooltip: true }, render: (row) => row.executeNodeKey || "-" },
-  { title: "重试", key: "retryCount", width: 60, render: (row) => row.retryCount ?? 0 },
-  { title: "提交时间", key: "submitTime", width: 150, render: (row) => h("span", { class: "text-secondary" }, formatTime(row.submitTime)) },
+  { title: "重试", key: "retryCount", width: 60, align: "right", render: (row) => h("span", { class: "num" }, String(row.retryCount ?? 0)) },
+  { title: "提交时间", key: "submitTime", width: 150, render: (row) => h(TimeText, { value: row.submitTime }) },
   {
     title: "耗时",
     key: "duration",
     width: 100,
-    render: (row) => h("span", { class: "text-secondary" }, formatDuration(row.startTime, row.endTime)),
+    render: (row) => h("span", { class: "num text-secondary" }, formatDuration(row.startTime, row.endTime)),
   },
   {
     title: "操作",
@@ -201,19 +225,21 @@ onMounted(loadData);
       </div>
     </div>
 
-    <n-card :bordered="true" class="mb-16">
+    <n-card size="small" :bordered="true" class="mt-12 mb-12">
       <div class="filter-bar">
         <n-select
           v-model:value="filters.status"
           :options="TASK_STATUS_OPTIONS"
           placeholder="全部状态"
           clearable
+          size="small"
           class="filter-item"
         />
         <n-input
           v-model:value="filters.keyword"
           placeholder="任务 ID / 序号"
           clearable
+          size="small"
           class="filter-item"
           @keyup.enter="handleSearch"
         />
@@ -221,6 +247,7 @@ onMounted(loadData);
           v-model:value="filters.executeNodeKey"
           placeholder="执行节点"
           clearable
+          size="small"
           class="filter-item"
           @keyup.enter="handleSearch"
         />
@@ -228,6 +255,7 @@ onMounted(loadData);
           v-model:value="filters.startTime"
           type="datetime"
           clearable
+          size="small"
           class="filter-item"
           placeholder="开始时间"
         />
@@ -235,14 +263,15 @@ onMounted(loadData);
           v-model:value="filters.endTime"
           type="datetime"
           clearable
+          size="small"
           class="filter-item"
           placeholder="结束时间"
         />
-        <n-button type="primary" secondary :loading="loading" @click="handleSearch">
+        <n-button size="small" type="primary" :loading="loading" @click="handleSearch">
           查询
         </n-button>
-        <n-button @click="handleReset">重置</n-button>
-        <n-button quaternary circle class="ml-8" title="刷新" :loading="loading" @click="loadData">
+        <n-button size="small" @click="handleReset">重置</n-button>
+        <n-button size="small" quaternary circle title="刷新" :loading="loading" @click="loadData">
           <template #icon>
             <n-icon><RefreshOutline /></n-icon>
           </template>
@@ -250,23 +279,29 @@ onMounted(loadData);
       </div>
     </n-card>
 
-    <n-card :bordered="true">
-      <template #header>
-        <div class="flex-bc">
-          <span class="card-title">任务列表</span>
-          <span class="text-muted">共 {{ data.total }} 条</span>
-        </div>
-      </template>
+    <n-card size="small" :bordered="true" class="table-card">
+      <SkeletonTable v-if="loading && !data.items.length" :rows="8" />
+      <EmptyState
+        v-else-if="!loading && !data.items.length"
+        class="flex-1"
+        :title="loadError ? '加载失败' : filtersActive ? '没有匹配的运行实例' : '暂无运行实例'"
+        :description="loadError ? '网络或服务异常，请重试' : filtersActive ? '尝试调整或清除筛选条件' : '任务提交后将在此展示执行记录'"
+        :action="loadError ? '重试' : filtersActive ? '清除筛选' : ''"
+        @action="loadError ? loadData() : handleReset()"
+      />
       <n-data-table
+        v-else
+        class="main-table"
         :columns="columns"
         :data="data.items"
         :loading="loading"
         :row-key="(row) => row.taskId"
-        :max-height="tableHeight"
+        flex-height
         :scroll-x="1540"
         :bordered="false"
         size="small"
         :pagination="pagination"
+        remote
         @update:page="(page) => { pagination.page = page; loadData(); }"
         @update:page-size="(size) => { pagination.pageSize = size; pagination.page = 1; loadData(); }"
       />
@@ -275,61 +310,6 @@ onMounted(loadData);
 </template>
 
 <style scoped lang="scss">
-.filter-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.filter-item {
-  width: 180px;
-}
-
-.app-name-link {
-  color: var(--primary);
-  font-weight: 500;
-  cursor: pointer;
-  text-decoration: none;
-
-  &:hover {
-    text-decoration: underline;
-  }
-}
-
-.row-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.row-action {
-  font-size: 13px;
-  color: var(--primary);
-  cursor: pointer;
-
-  &:hover {
-    text-decoration: underline;
-  }
-}
-
-.row-action-danger {
-  font-size: 13px;
-  color: var(--danger);
-  cursor: pointer;
-
-  &:hover {
-    text-decoration: underline;
-  }
-}
-
-.diff-link {
-  text-decoration: none;
-
-  &:hover {
-    text-decoration: underline;
-  }
-}
 // 列表横向滚动条始终可见，避免字段被隐藏的错觉
 :deep(.n-data-table .n-scrollbar-rail--horizontal) {
   display: block !important;
@@ -338,21 +318,5 @@ onMounted(loadData);
 
 :deep(.n-data-table .n-scrollbar-rail--horizontal .n-scrollbar-rail__scrollbar) {
   opacity: 1 !important;
-}
-
-// ===== 固定列不透明(防穿透),与差异明细列表处理一致 =====
-:deep(.n-data-table-td--fixed-left),
-:deep(.n-data-table-td--fixed-right) {
-  background-color: var(--n-merged-td-color, #fff) !important;
-}
-
-:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-left),
-:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-right) {
-  background-color: #f4f6ff !important;
-}
-
-:deep(.n-data-table-th--fixed-left),
-:deep(.n-data-table-th--fixed-right) {
-  background-color: var(--n-merged-th-color, #fafafa) !important;
 }
 </style>

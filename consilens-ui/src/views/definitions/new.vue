@@ -7,6 +7,7 @@ import { ArrowBackOutline, ArrowForwardOutline, CheckmarkCircleOutline, GitCompa
 import { createTaskDefinition, updateTaskDefinition, getTaskDefinition, runTaskDefinition, listDatasources, listDatasourceDatabases, listDatasourceTables, listDatasourceColumns, listDatasourceTypes, getDatasourceTypeConfig, createDatasource, testConnection } from "@/api/modules";
 import { generateSerialNo } from "@/utils/format";
 import DataSourceForm from "@/components/DataSourceForm.vue";
+import CodeBlock from "@/components/common/CodeBlock.vue";
 import { FALLBACK_DS_FIELDS, collectDsParam, splitTestOptions } from "@/common/datasourceDefaults";
 
 const router = useRouter();
@@ -50,11 +51,63 @@ function makeSide() {
   };
 }
 
-const planForm = reactive({
-  goal: "生成源表与目标表的数据对比配置",
-  source: makeSide(),
-  target: makeSide(),
-  keys: [],
+// 表单默认值工厂：声明与「清空草稿」共用，避免两处默认值漂移
+function defaultPlanForm() {
+  return {
+    goal: "生成源表与目标表的数据对比配置",
+    source: makeSide(),
+    target: makeSide(),
+    keys: [],
+  };
+}
+
+function defaultAdvForm() {
+  return {
+    mode: "checksum",          // strategy.mode: checksum | join
+    algorithm: "concat",       // strategy.algorithm / checksumAlgorithm
+    bisectionFactor: 4,        // strategy.bisectionFactor
+    bisectionThreshold: 5000,  // strategy.bisectionThreshold
+    batchSize: 1000,           // strategy.batchSize（透传 attributes）
+    localCompareMode: "full",  // strategy.localCompare.mode: full | auto
+    validateUniqueKeys: true,  // 校验唯一键
+    maxDifferences: null,      // 最大差异数（可选）
+    enableProfiling: false,    // 性能分析
+  };
+}
+
+function defaultPlatformForm() {
+  return {
+    platform: "local",
+    yarn: {
+      archive: "",
+      queue: "",
+      amMemory: "1g",
+      amVCores: 1,
+      stagingDir: "",
+      files: "",
+      jars: "",
+      tags: "",
+      maxAppAttempts: null,
+    },
+    kubernetes: {
+      image: "",
+      namespace: "default",
+      jobName: "",
+      memory: "1g",
+      cpu: "0.5",
+      serviceAccount: "",
+      imagePullSecrets: "",
+      envsText: "",
+      secretEnvText: "",
+    },
+  };
+}
+
+const planForm = reactive(defaultPlanForm());
+const compareForm = reactive({
+  keyMappings: [], // [{source, target}] 主键映射
+  fieldMappings: [], // [{source, target}] 比较字段映射
+  ignoreColumns: [], // [name] 排除字段
 });
 
 // 数据源选择（来自 /v1/datasources）
@@ -251,13 +304,6 @@ function handleSideTableChange(side) {
   loadSideColumns(side);
 }
 
-// ===== Step 2: 字段加载与映射 =====
-const compareForm = reactive({
-  keyMappings: [], // [{source, target}] 主键映射
-  fieldMappings: [], // [{source, target}] 比较字段映射
-  ignoreColumns: [], // [name] 排除字段
-});
-
 // 从数据源 + 库 + 表实时获取字段
 async function loadSideColumns(side) {
   const datasource = datasources.value.find((item) => item.id === planForm[side].datasourceId);
@@ -337,31 +383,7 @@ function autoMatchKeys() {
 }
 
 // ===== Step 3: 高级选项 =====
-const platformForm = reactive({
-  platform: "local",
-  yarn: {
-    archive: "",
-    queue: "",
-    amMemory: "1g",
-    amVCores: 1,
-    stagingDir: "",
-    files: "",
-    jars: "",
-    tags: "",
-    maxAppAttempts: null,
-  },
-  kubernetes: {
-    image: "",
-    namespace: "default",
-    jobName: "",
-    memory: "1g",
-    cpu: "0.5",
-    serviceAccount: "",
-    imagePullSecrets: "",
-    envsText: "",
-    secretEnvText: "",
-  },
-});
+const platformForm = reactive(defaultPlatformForm());
 
 const runForm = reactive({
   serialNo: generateSerialNo(),
@@ -374,17 +396,7 @@ function regenerateSerialNo() {
 }
 
 // ===== 比对策略高级选项（对齐 CLI strategy 配置）=====
-const advForm = reactive({
-  mode: "checksum",          // strategy.mode: checksum | join
-  algorithm: "concat",       // strategy.algorithm / checksumAlgorithm
-  bisectionFactor: 4,        // strategy.bisectionFactor
-  bisectionThreshold: 5000,  // strategy.bisectionThreshold
-  batchSize: 1000,           // strategy.batchSize（透传 attributes）
-  localCompareMode: "full",  // strategy.localCompare.mode: full | auto
-  validateUniqueKeys: true,  // 校验唯一键
-  maxDifferences: null,      // 最大差异数（可选）
-  enableProfiling: false,    // 性能分析
-});
+const advForm = reactive(defaultAdvForm());
 
 // ===== Step 4: 确认（Plan → Validate → Execute）=====
 function sideHasInput(side) {
@@ -421,6 +433,86 @@ const defForm = reactive({
   description: "",
   runNow: true,
 });
+
+// ===== 草稿持久化：非编辑模式下自动保存/恢复，误关页面不丢填写内容 =====
+const DRAFT_KEY = "consilens-wizard-draft";
+const DRAFT_VERSION = 1;
+const draftRestored = ref(false);
+
+function writeDraft() {
+  if (editId.value) return;
+  try {
+    localStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({
+        version: DRAFT_VERSION,
+        currentStep: currentStep.value,
+        planForm,
+        compareForm,
+        advForm,
+        platformForm,
+        runForm,
+        defForm,
+      })
+    );
+  } catch {
+    // 存储不可用（隐私模式等）时静默
+  }
+}
+
+let draftTimer = null;
+// 清空草稿后的抑制窗口：resetForms 触发的 watch 不再把默认表单写回存储
+let draftSuspended = false;
+watch(
+  [planForm, compareForm, advForm, platformForm, runForm, defForm, currentStep],
+  () => {
+    if (editId.value || draftSuspended) return;
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(writeDraft, 400);
+  },
+  { deep: true }
+);
+
+function restoreDraft() {
+  if (editId.value) return false;
+  try {
+    const raw = localStorage.getItem(DRAFT_KEY);
+    if (!raw) return false;
+    const draft = JSON.parse(raw);
+    if (draft.version !== DRAFT_VERSION) return false;
+    Object.assign(planForm, draft.planForm || {});
+    Object.assign(compareForm, draft.compareForm || {});
+    Object.assign(advForm, draft.advForm || {});
+    Object.assign(platformForm, draft.platformForm || {});
+    Object.assign(runForm, draft.runForm || {});
+    Object.assign(defForm, draft.defForm || {});
+    currentStep.value = draft.currentStep || 1;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resetForms() {
+  Object.assign(planForm, defaultPlanForm());
+  Object.assign(compareForm, { keyMappings: [], fieldMappings: [], ignoreColumns: [] });
+  Object.assign(advForm, defaultAdvForm());
+  Object.assign(platformForm, defaultPlatformForm());
+  Object.assign(runForm, { serialNo: generateSerialNo(), timeoutMs: 300000, dryRun: false });
+  Object.assign(defForm, { name: "", description: "", runNow: true });
+  currentStep.value = 1;
+}
+
+function clearDraft() {
+  draftSuspended = true;
+  localStorage.removeItem(DRAFT_KEY);
+  resetForms();
+  draftRestored.value = false;
+  message.success("草稿已清空");
+  setTimeout(() => {
+    draftSuspended = false;
+  }, 600);
+}
 
 // ===== 编辑模式（?editId=）=====
 const editId = ref(route.query.editId || "");
@@ -674,9 +766,11 @@ async function handleSaveDefinition() {
       : await createTaskDefinition(payload);
     if (defForm.runNow) {
       const accepted = await runTaskDefinition(definition.id);
+      localStorage.removeItem(DRAFT_KEY);
       message.success(`${editId.value ? "已更新定义" : "已保存定义"}并提交运行：${accepted.taskId}`);
       router.push(`/instances/${accepted.taskId}`);
     } else {
+      localStorage.removeItem(DRAFT_KEY);
       message.success(`定义「${definition.name}」已${editId.value ? "更新" : "保存"}`);
       router.push(`/definitions/${definition.id}`);
     }
@@ -739,11 +833,16 @@ const summary = computed(() => [
   { label: "试运行", value: runForm.dryRun ? "开启" : "关闭" },
 ]);
 
-// 进入页面时预加载数据源列表；编辑模式加载定义
-loadDatasources();
+// 进入页面时预加载数据源列表；编辑模式加载定义；新建模式恢复草稿
 if (editId.value) {
   loadForEdit();
+} else {
+  draftRestored.value = restoreDraft();
+  if (draftRestored.value) {
+    message.success("已恢复上次未提交的草稿");
+  }
 }
+loadDatasources();
 </script>
 
 <template>
@@ -751,10 +850,13 @@ if (editId.value) {
     <div class="wizard-wrap">
       <!-- 页头 -->
       <div class="wizard-head">
-        <a class="back-link" @click="router.push('/definitions')">
-          <n-icon size="14"><ArrowBackOutline /></n-icon>
-          返回定义列表
-        </a>
+        <div class="wizard-head-row">
+          <a class="back-link" @click="router.push('/definitions')">
+            <n-icon size="14"><ArrowBackOutline /></n-icon>
+            返回定义列表
+          </a>
+          <a v-if="draftRestored && !editId" class="draft-clear" @click="clearDraft">清空草稿</a>
+        </div>
         <h1 class="wizard-title">{{ editId ? "编辑定义" : "新建定义" }}</h1>
         <p class="wizard-subtitle">四步保存一个可复用的数据校验任务定义</p>
       </div>
@@ -808,7 +910,7 @@ if (editId.value) {
                   class="flex-1"
                   @update:value="handleDatasourceChange(side)"
                 />
-                <n-button class="btn-ghost btn-sm" @click="openDsModal(side)" title="新建数据源">+ 添加</n-button>
+                <n-button size="small" @click="openDsModal(side)" title="新建数据源">+ 添加</n-button>
               </div>
             </div>
             <div class="field">
@@ -884,11 +986,11 @@ if (editId.value) {
               <n-select :value="mapping.source" :options="sourceColumnOptions" placeholder="源表主键列" filterable @update:value="(value) => setMapping('keyMappings', index, 'source', value)" />
               <span class="mapping-arrow">→</span>
               <n-select :value="mapping.target" :options="targetColumnOptions" placeholder="目标表主键列" filterable @update:value="(value) => setMapping('keyMappings', index, 'target', value)" />
-              <n-button class="btn-ghost btn-icon" @click="removeMapping('keyMappings', index)">移除</n-button>
+              <n-button size="small" quaternary type="error" @click="removeMapping('keyMappings', index)">移除</n-button>
             </div>
             <div class="section-actions">
-              <n-button class="btn-ghost btn-sm" @click="autoMatchKeys">自动匹配同名字段</n-button>
-              <n-button class="btn-ghost btn-sm" @click="addMapping('keyMappings')">+ 添加主键</n-button>
+              <n-button size="small" @click="autoMatchKeys">自动匹配同名字段</n-button>
+              <n-button size="small" @click="addMapping('keyMappings')">+ 添加主键</n-button>
             </div>
           </div>
           <div class="section">
@@ -901,11 +1003,11 @@ if (editId.value) {
               <n-select :value="mapping.source" :options="sourceColumnOptions" placeholder="源表字段" filterable @update:value="(value) => setMapping('fieldMappings', index, 'source', value)" />
               <span class="mapping-arrow">→</span>
               <n-select :value="mapping.target" :options="targetColumnOptions" placeholder="目标表字段" filterable @update:value="(value) => setMapping('fieldMappings', index, 'target', value)" />
-              <n-button class="btn-ghost btn-icon" @click="removeMapping('fieldMappings', index)">移除</n-button>
+              <n-button size="small" quaternary type="error" @click="removeMapping('fieldMappings', index)">移除</n-button>
             </div>
             <div class="section-actions">
-              <n-button class="btn-ghost btn-sm" @click="autoMatchFields">自动匹配同名字段</n-button>
-              <n-button class="btn-ghost btn-sm" @click="addMapping('fieldMappings')">+ 添加映射</n-button>
+              <n-button size="small" @click="autoMatchFields">自动匹配同名字段</n-button>
+              <n-button size="small" @click="addMapping('fieldMappings')">+ 添加映射</n-button>
             </div>
           </div>
           <div class="section">
@@ -990,8 +1092,8 @@ if (editId.value) {
         <div class="field">
           <label class="field-label">任务序号</label>
           <div class="inline-row">
-            <n-input v-model:value="runForm.serialNo" class="flex-1" />
-            <n-button class="btn-ghost btn-sm" @click="regenerateSerialNo">重新生成</n-button>
+            <n-input v-model:value="runForm.serialNo" class="flex-1" size="small" />
+            <n-button size="small" @click="regenerateSerialNo">重新生成</n-button>
           </div>
         </div>
         <div class="field">
@@ -1122,18 +1224,13 @@ if (editId.value) {
             <span class="summary-value">{{ item.value }}</span>
           </div>
         </div>
-        <div class="code-block">
-          <div class="code-head">
-            <span>运行配置（保存到定义）</span>
-          </div>
-          <pre class="code-body">{{ configDisplay }}</pre>
-        </div>
+        <CodeBlock :content="configDisplay" label="运行配置（保存到定义）" :max-height="320" />
       </div>
 
       <!-- 底部操作栏（固定，卡片内部滚动） -->
       <div class="step-bar">
         <div class="step-bar-inner">
-          <n-button v-if="currentStep > 1" class="btn-ghost" @click="goPrev">
+          <n-button v-if="currentStep > 1" size="small" @click="goPrev">
             <template #icon>
               <n-icon><ArrowBackOutline /></n-icon>
             </template>
@@ -1141,7 +1238,7 @@ if (editId.value) {
           </n-button>
           <div class="flex-1" />
           <template v-if="currentStep < 4">
-            <n-button class="btn-primary" @click="goNext">
+            <n-button type="primary" size="small" @click="goNext">
               下一步
               <template #icon>
                 <n-icon><ArrowForwardOutline /></n-icon>
@@ -1149,7 +1246,7 @@ if (editId.value) {
             </n-button>
           </template>
           <template v-else>
-            <n-button class="btn-primary" :loading="submitting" @click="handleSaveDefinition">
+            <n-button type="primary" size="small" :loading="submitting" @click="handleSaveDefinition">
               <template #icon>
                 <n-icon><SaveOutline /></n-icon>
               </template>
@@ -1186,14 +1283,14 @@ if (editId.value) {
         <template #footer>
           <div class="modal-footer">
             <div class="modal-footer-left">
-              <n-button class="btn-ghost btn-sm" :loading="dsModal.testing" @click="handleDsTest">测试连接</n-button>
+              <n-button size="small" :loading="dsModal.testing" @click="handleDsTest">测试连接</n-button>
               <span v-if="dsModal.testResult" class="conn-result" :class="dsModal.testResult.ok ? 'ok' : 'fail'">
                 <span class="conn-dot" />{{ dsModal.testResult.text }}
               </span>
             </div>
             <div class="modal-footer-right">
-              <n-button class="btn-ghost" @click="dsModal.show = false">取消</n-button>
-              <n-button class="btn-primary" :loading="dsModal.saving" @click="handleDsCreate">创建</n-button>
+              <n-button size="small" @click="dsModal.show = false">取消</n-button>
+              <n-button size="small" type="primary" :loading="dsModal.saving" @click="handleDsCreate">创建</n-button>
             </div>
           </div>
         </template>
@@ -1210,6 +1307,7 @@ if (editId.value) {
 }
 
 .wizard-wrap {
+  width: 100%;
   max-width: 1200px;
   margin: 0 auto;
   height: 100%;
@@ -1219,34 +1317,50 @@ if (editId.value) {
 
 .wizard-head {
   flex-shrink: 0;
-  margin-bottom: 16px;
+
+  .wizard-head-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
 
   .back-link {
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 13px;
-    color: var(--text-secondary);
+    font-size: 12.5px;
+    color: var(--text-muted);
     cursor: pointer;
     text-decoration: none;
 
     &:hover {
-      color: var(--text);
+      color: var(--text-secondary);
+    }
+  }
+
+  .draft-clear {
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+
+    &:hover {
+      color: var(--danger);
     }
   }
 
   .wizard-title {
-    margin: 12px 0 4px;
-    font-size: 20px;
+    margin: 8px 0 2px;
+    font-size: 16px;
     font-weight: 600;
+    line-height: 24px;
     color: var(--text);
-    letter-spacing: -0.01em;
   }
 
   .wizard-subtitle {
     margin: 0;
-    font-size: 13px;
-    color: var(--text-secondary);
+    font-size: 12.5px;
+    color: var(--text-muted);
   }
 }
 
@@ -1255,12 +1369,11 @@ if (editId.value) {
   flex-shrink: 0;
   display: flex;
   align-items: flex-start;
-  padding: 20px 24px;
-  margin-bottom: 16px;
+  padding: 16px 20px;
+  margin-top: 12px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: var(--card-shadow);
+  border-radius: var(--radius-card);
 }
 
 .stepper-item {
@@ -1269,6 +1382,7 @@ if (editId.value) {
   gap: 10px;
   flex: 1;
   min-width: 0;
+  cursor: default;
 }
 
 .stepper-line {
@@ -1289,14 +1403,14 @@ if (editId.value) {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   flex-shrink: 0;
   border-radius: 50%;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--text-muted);
-  background: var(--bg);
+  background: var(--bg-subtle);
   border: 1px solid var(--border);
 
   .stepper-item.active & {
@@ -1308,6 +1422,7 @@ if (editId.value) {
   .stepper-item.done & {
     color: var(--primary);
     border-color: var(--primary);
+    background: var(--card);
   }
 }
 
@@ -1343,27 +1458,27 @@ if (editId.value) {
   overflow-y: auto;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: var(--card-shadow);
-  padding: 24px;
+  border-radius: var(--radius-card);
+  padding: 20px;
+  margin-top: 12px;
 }
 
 .panel-head {
-  padding-bottom: 16px;
-  margin-bottom: 20px;
+  padding-bottom: 14px;
+  margin-bottom: 18px;
   border-bottom: 1px solid var(--border);
 
   .panel-title {
     margin: 0;
-    font-size: 15px;
+    font-size: 13.5px;
     font-weight: 600;
     color: var(--text);
   }
 
   .panel-desc {
-    margin: 4px 0 0;
+    margin: 2px 0 0;
     font-size: 12px;
-    color: var(--text-secondary);
+    color: var(--text-muted);
   }
 }
 
@@ -1379,9 +1494,9 @@ if (editId.value) {
 .field-label {
   display: block;
   margin-bottom: 6px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  color: var(--text);
+  color: var(--text-secondary);
 }
 
 .required {
@@ -1413,8 +1528,8 @@ if (editId.value) {
   justify-content: space-between;
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-subtle);
 }
 
 .switch-text {
@@ -1427,15 +1542,15 @@ if (editId.value) {
 .side-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px;
+  gap: 12px;
   margin-bottom: 4px;
 }
 
 .side-card {
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-subtle);
 }
 
 .side-head {
@@ -1448,9 +1563,10 @@ if (editId.value) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
-    border-radius: 5px;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    border-radius: var(--radius-badge);
     font-size: 11px;
     font-weight: 600;
     color: #fff;
@@ -1480,57 +1596,6 @@ if (editId.value) {
 
 .side-card .field {
   margin-bottom: 12px;
-}
-
-// ===== 连接测试 =====
-.conn-block {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px dashed var(--border);
-}
-
-.conn-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 10px;
-
-  .conn-label {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-
-  .conn-tip {
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-}
-
-.conn-grid {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1.4fr;
-  gap: 8px;
-  margin-bottom: 8px;
-
-  &:last-of-type {
-    margin-bottom: 0;
-  }
-}
-
-.conn-test-btn {
-  height: 34px;
-  padding: 0 12px;
-  font-size: 13px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--card);
-  color: var(--text);
-  cursor: pointer;
-
-  &:hover {
-    background: var(--bg);
-  }
 }
 
 .conn-result {
@@ -1564,18 +1629,13 @@ if (editId.value) {
   flex-shrink: 0;
 }
 
-.conn-msg {
-  word-break: break-all;
-}
-
-// ===== 提示框 =====
 // ===== Step 2: 比对键 =====
 .section {
   margin-bottom: 22px;
   padding: 16px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-subtle);
 }
 
 .section-head {
@@ -1601,8 +1661,8 @@ if (editId.value) {
   margin-bottom: 10px;
   font-size: 12px;
   color: var(--text-muted);
-  border: 1px dashed var(--border);
-  border-radius: 6px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-ctl);
   background: var(--card);
 }
 
@@ -1630,17 +1690,11 @@ if (editId.value) {
   margin-top: 12px;
 }
 
-.btn-icon {
-  height: 34px;
-  padding: 0 8px;
-  font-size: 12px;
-}
-
 .hint-box {
   padding: 12px 16px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-subtle);
   margin-bottom: 4px;
 
   .hint-title {
@@ -1676,62 +1730,11 @@ if (editId.value) {
   padding: 0 4px 4px;
 }
 
-// ===== 按钮（shadcn 风格）=====
-.btn-primary {
-  height: 36px;
-  padding: 0 18px;
-  border: none;
-  border-radius: 6px;
-  background: var(--text);
-  color: var(--card);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: opacity 0.15s ease;
-
-  &:hover {
-    opacity: 0.85;
-  }
-}
-
-.btn-ghost {
-  height: 36px;
-  padding: 0 14px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--card);
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s ease;
-
-  &:hover {
-    background: var(--bg);
-  }
-}
-
-.btn-sm {
-  height: 32px;
-  padding: 0 10px;
-  font-size: 12px;
-}
-
 // ===== 确认页 =====
-.error-banner {
-  padding: 10px 14px;
-  margin-bottom: 16px;
-  font-size: 13px;
-  color: var(--danger);
-  background: rgba(220, 38, 38, 0.06);
-  border: 1px solid rgba(220, 38, 38, 0.25);
-  border-radius: 6px;
-}
-
 .summary-list {
   margin-bottom: 16px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-ctl);
   overflow: hidden;
 }
 
@@ -1742,11 +1745,11 @@ if (editId.value) {
   font-size: 13px;
 
   &:nth-child(odd) {
-    background: var(--bg);
+    background: var(--bg-subtle);
   }
 
   .summary-label {
-    flex: 0 0 100px;
+    flex: 0 0 90px;
     color: var(--text-muted);
   }
 
@@ -1754,93 +1757,6 @@ if (editId.value) {
     flex: 1;
     color: var(--text);
     word-break: break-all;
-  }
-}
-
-.code-block {
-  margin-bottom: 16px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-
-  .code-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 14px;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    background: var(--bg);
-    border-bottom: 1px solid var(--border);
-
-    .code-meta {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 11px;
-      color: var(--text-muted);
-    }
-  }
-
-  .code-body {
-    margin: 0;
-    padding: 14px;
-    max-height: 320px;
-    overflow: auto;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.6;
-    color: var(--text);
-    background: var(--card);
-    white-space: pre;
-  }
-}
-
-.validate-result {
-  margin-top: 16px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-
-  .validate-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 14px;
-    font-size: 13px;
-    font-weight: 500;
-
-    &.ok {
-      color: var(--success);
-      background: rgba(22, 163, 74, 0.06);
-
-      .conn-dot {
-        background: var(--success);
-      }
-    }
-
-    &.fail {
-      color: var(--danger);
-      background: rgba(220, 38, 38, 0.06);
-
-      .conn-dot {
-        background: var(--danger);
-      }
-    }
-
-    .validate-id {
-      margin-left: auto;
-      font-size: 11px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: var(--text-muted);
-    }
-  }
-
-  .error-list {
-    margin: 0;
-    padding: 8px 14px 12px 34px;
-    font-size: 12px;
-    color: var(--danger);
-    line-height: 1.8;
   }
 }
 
@@ -1852,14 +1768,6 @@ if (editId.value) {
 
   .stepper-desc {
     display: none;
-  }
-
-  .conn-grid {
-    grid-template-columns: 1fr 1fr;
-
-    .conn-host {
-      grid-column: 1 / -1;
-    }
   }
 }
 

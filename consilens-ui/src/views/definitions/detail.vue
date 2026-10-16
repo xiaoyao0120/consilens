@@ -8,6 +8,8 @@ import { getTaskDefinition, deleteTaskDefinition, runTaskDefinition, toggleTaskD
 import { formatTime, formatDuration } from "@/utils/format";
 import StateTag from "@/components/common/StateTag.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
+import CodeBlock from "@/components/common/CodeBlock.vue";
+import TimeText from "@/components/common/TimeText.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -98,7 +100,7 @@ const recentColumns = [
     title: "实例 ID",
     key: "instanceId",
     render: (row) =>
-      h("a", { class: "app-name-link", onClick: () => router.push(`/instances/${row.instanceId}`) }, row.instanceId),
+      h("a", { class: "app-name-link mono", onClick: () => router.push(`/instances/${row.instanceId}`) }, row.instanceId),
   },
   { title: "序号", key: "serialNo", ellipsis: { tooltip: true }, render: (row) => h("span", { class: "mono text-secondary" }, row.serialNo) },
   {
@@ -111,13 +113,13 @@ const recentColumns = [
     title: "提交时间",
     key: "submitTime",
     width: 170,
-    render: (row) => h("span", { class: "text-secondary" }, formatTime(row.submitTime)),
+    render: (row) => h(TimeText, { value: row.submitTime }),
   },
   {
     title: "耗时",
     key: "duration",
     width: 100,
-    render: (row) => h("span", { class: "text-secondary" }, formatDuration(row.submitTime, row.endTime)),
+    render: (row) => h("span", { class: "num text-secondary" }, formatDuration(row.submitTime, row.endTime)),
   },
 ];
 
@@ -144,7 +146,9 @@ onMounted(loadData);
               </div>
               <div class="meta-row">
                 <span class="meta-item">创建于 {{ formatTime(definition.createdAt) }}</span>
-                <span v-if="definition.lastRunAt" class="meta-item">上次运行 {{ formatTime(definition.lastRunAt) }}</span>
+                <span v-if="definition.lastRunAt" class="meta-item">
+                  上次运行 <TimeText :value="definition.lastRunAt" />
+                </span>
               </div>
             </div>
           </div>
@@ -182,20 +186,19 @@ onMounted(loadData);
                 <span class="summary-value">{{ item.value }}</span>
               </div>
             </div>
-            <div class="code-block">
-              <pre class="code-body">{{ configText }}</pre>
-            </div>
+            <CodeBlock :content="configText" label="运行配置 JSON" :max-height="360" />
             </n-tab-pane>
             <n-tab-pane name="recent" tab="最近运行">
             <n-data-table
+              v-if="(definition.recentInstances || []).length"
               :columns="recentColumns"
-              :data="definition.recentInstances || []"
+              :data="definition.recentInstances"
               size="small"
               :bordered="false"
               :row-key="(row) => row.instanceId"
             />
             <EmptyState
-              v-if="!(definition.recentInstances || []).length"
+              v-else
               title="暂无运行记录"
               description="点击「立即运行」创建第一条运行实例"
             />
@@ -212,17 +215,24 @@ onMounted(loadData);
 </template>
 
 <style scoped lang="scss">
+// 详情页内容随卡片自然生长，允许整页滚动
+.page-container {
+  overflow: auto;
+
+  > * {
+    flex-shrink: 0;
+  }
+}
+
 .detail-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 18px 20px;
-  margin-bottom: 16px;
+  padding: 16px 20px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: var(--card-shadow);
+  border-radius: var(--radius-card);
 }
 
 .header-left {
@@ -243,8 +253,9 @@ onMounted(loadData);
 }
 
 .def-name {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
+  line-height: 24px;
   color: var(--text);
 }
 
@@ -252,13 +263,13 @@ onMounted(loadData);
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-top: 6px;
+  margin-top: 2px;
   flex-wrap: wrap;
 }
 
 .meta-item {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--text-muted);
 }
 
 .header-actions {
@@ -269,7 +280,7 @@ onMounted(loadData);
 }
 
 .panel-card {
-  box-shadow: var(--card-shadow);
+  margin-top: 12px;
 }
 
 .summary-list {
@@ -286,7 +297,7 @@ onMounted(loadData);
   font-size: 13px;
 
   &:nth-child(odd) {
-    background: var(--bg);
+    background: var(--bg-subtle);
   }
 
   .summary-label {
@@ -298,35 +309,6 @@ onMounted(loadData);
     flex: 1;
     color: var(--text);
     word-break: break-all;
-  }
-}
-
-.code-block {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-
-  .code-body {
-    margin: 0;
-    padding: 12px;
-    max-height: 320px;
-    overflow: auto;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.6;
-    color: var(--text);
-    white-space: pre;
-  }
-}
-
-.app-name-link {
-  color: var(--primary);
-  font-weight: 500;
-  cursor: pointer;
-  text-decoration: none;
-
-  &:hover {
-    text-decoration: underline;
   }
 }
 </style>

@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, nextTick } from "vue";
-import { NIcon, NTag, NEmpty } from "naive-ui";
+import { NIcon, NTag } from "naive-ui";
 import {
   PersonOutline,
   SparklesOutline,
@@ -20,13 +20,28 @@ const props = defineProps({
   isRunning: { type: Boolean, default: false },
 });
 
-const listRef = ref(null);
+const emit = defineEmits(["suggest"]);
 
-function scrollToBottom() {
+const listRef = ref(null);
+const showJump = ref(false);
+
+// 用户上翻阅读历史时，流式追加不强行拉回底部
+function nearBottom() {
+  const el = listRef.value;
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+}
+
+function scrollToBottom(force = false) {
   nextTick(() => {
     const el = listRef.value;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (force || nearBottom()) el.scrollTop = el.scrollHeight;
   });
+}
+
+function handleScroll() {
+  showJump.value = !nearBottom();
 }
 
 watch(
@@ -34,6 +49,23 @@ watch(
   () => scrollToBottom(),
   { flush: "post" }
 );
+
+// 切换会话后强制回到最新
+watch(
+  () => props.sessionId,
+  () => {
+    showJump.value = false;
+    scrollToBottom(true);
+  },
+  { flush: "post" }
+);
+
+// 空会话的开场建议（点击填入输入框）
+const SUGGESTIONS = [
+  "创建一个 MySQL 数据源并测试连接",
+  "对比两张结构相同的表并生成差异报告",
+  "看看最近的校验任务运行情况",
+];
 
 // ===== 事件渲染辅助 =====
 
@@ -128,10 +160,24 @@ function isAuditEvent(type) {
 </script>
 
 <template>
-  <div ref="listRef" class="timeline-scroll">
-    <div v-if="!events.length" class="timeline-empty">
-      <n-empty description="还没有消息，描述你的目标开始对话" size="small" />
-    </div>
+  <div class="timeline-root">
+    <div ref="listRef" class="timeline-scroll" @scroll="handleScroll">
+      <div v-if="!events.length" class="timeline-empty">
+        <div class="te-glyph">✦</div>
+        <div class="te-title">开始一段对话</div>
+        <div class="te-desc">描述你的目标，AI 助手将帮你创建数据源、任务定义并发起比对</div>
+        <div class="te-suggestions">
+          <button
+            v-for="s in SUGGESTIONS"
+            :key="s"
+            class="te-chip"
+            type="button"
+            @click="emit('suggest', s)"
+          >
+            {{ s }}
+          </button>
+        </div>
+      </div>
 
     <div v-for="event in events" :key="event.seq" class="timeline-item">
       <!-- 用户消息 -->
@@ -181,7 +227,6 @@ function isAuditEvent(type) {
                 :key="slot"
                 size="small"
                 :bordered="false"
-                round
               >
                 {{ slot }}
               </n-tag>
@@ -269,10 +314,25 @@ function isAuditEvent(type) {
         </div>
       </div>
     </div>
+    </div>
+
+    <transition name="fade-up">
+      <button v-if="showJump" class="jump-bottom" type="button" @click="scrollToBottom(true)">
+        回到底部 ↓
+      </button>
+    </transition>
   </div>
 </template>
 
 <style scoped lang="scss">
+.timeline-root {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .timeline-scroll {
   flex: 1;
   min-height: 0;
@@ -280,12 +340,89 @@ function isAuditEvent(type) {
   padding: 16px;
 }
 
+.jump-bottom {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+
+  &:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+}
+
+.fade-up-enter-active,
+.fade-up-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.fade-up-enter-from,
+.fade-up-leave-to {
+  opacity: 0;
+  transform: translateX(-50%) translateY(4px);
+}
+
 .timeline-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100%;
   min-height: 200px;
+  text-align: center;
+}
+
+.te-glyph {
+  font-size: 26px;
+  line-height: 1;
+  color: var(--border-strong);
+}
+
+.te-title {
+  margin-top: 10px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.te-desc {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  max-width: 320px;
+}
+
+.te-suggestions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.te-chip {
+  padding: 6px 14px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+
+  &:hover {
+    color: var(--primary);
+    border-color: var(--primary-border);
+  }
 }
 
 .timeline-item {
@@ -320,7 +457,7 @@ function isAuditEvent(type) {
   width: 28px;
   height: 28px;
   border-radius: 6px;
-  background: rgba(37, 99, 235, 0.08);
+  background: var(--primary-bg);
   flex-shrink: 0;
 }
 
@@ -400,7 +537,8 @@ function isAuditEvent(type) {
 }
 
 .resource-card {
-  border-left: 3px solid var(--success);
+  background: var(--success-bg);
+  border-color: transparent;
 }
 
 .resource-link {

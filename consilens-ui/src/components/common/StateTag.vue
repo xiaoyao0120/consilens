@@ -50,7 +50,7 @@ const meta = computed(() => {
 </script>
 
 <template>
-  <n-tag :type="meta.type" size="small" :bordered="false" round>
+  <n-tag :type="meta.type" size="small" :bordered="false">
     <template #icon>
       <span class="state-dot" :class="meta.type" />
     </template>

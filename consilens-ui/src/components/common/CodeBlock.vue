@@ -13,21 +13,29 @@ const props = defineProps({
 const message = useMessage();
 const expanded = ref(false);
 
+// .code-body 行高（px）：折叠高度按行数估算，样式里通过同一 CSS 变量取值，避免两处漂移
+const BODY_LINE_HEIGHT = 19; // 12px 字号 × 1.6 行高
+
 const lineCount = computed(() => (props.content ? props.content.split("\n").length : 0));
 const collapsible = computed(
   () => props.collapseLines > 0 && lineCount.value > props.collapseLines
 );
 const bodyMaxHeight = computed(() => {
   if (!collapsible.value || expanded.value) return props.maxHeight;
-  return Math.min(props.maxHeight, props.collapseLines * 19);
+  return Math.min(props.maxHeight, props.collapseLines * BODY_LINE_HEIGHT);
 });
 
 async function copyAll() {
+  if (!navigator.clipboard) {
+    message.error("当前环境不支持剪贴板，复制失败");
+    return;
+  }
   try {
-    await navigator.clipboard?.writeText(props.content);
+    await navigator.clipboard.writeText(props.content);
     message.success("已复制");
   } catch {
-    // 剪贴板不可用时静默
+    // 非安全上下文 / 权限被拒时 writeText 会抛错
+    message.error("复制失败，请手动选择复制");
   }
 }
 </script>
@@ -44,7 +52,7 @@ async function copyAll() {
         <button type="button" class="code-btn" @click="copyAll">复制</button>
       </div>
     </div>
-    <pre class="code-body" :style="{ maxHeight: bodyMaxHeight + 'px' }">{{ content }}</pre>
+    <pre class="code-body" :style="{ maxHeight: bodyMaxHeight + 'px', '--code-line-height': BODY_LINE_HEIGHT + 'px' }">{{ content }}</pre>
     <div v-if="collapsible && !expanded" class="code-foot" @click="expanded = true">
       显示全部 {{ lineCount }} 行
     </div>
@@ -107,7 +115,7 @@ async function copyAll() {
   overflow: auto;
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: var(--code-line-height, 1.6);
   color: var(--code-text);
   white-space: pre;
 }

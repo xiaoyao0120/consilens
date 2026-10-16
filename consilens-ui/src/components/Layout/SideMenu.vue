@@ -2,7 +2,6 @@
 import { h, computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { NIcon } from "naive-ui";
-import { useAppStore } from "@/store";
 import {
   GridOutline,
   SparklesOutline,
@@ -10,31 +9,43 @@ import {
   PulseOutline,
   ServerOutline,
   LinkOutline,
-  SunnyOutline,
-  MoonOutline,
+  AlbumsOutline,
 } from "@vicons/ionicons5";
+import { menuRoutes } from "@/router/routes";
 
 function renderIcon(icon) {
   return () => h(NIcon, null, { default: () => h(icon) });
 }
 
-const menuOptions = [
-  { label: "工作台", key: "/dashboard", icon: renderIcon(GridOutline) },
-  { label: "AI 助手", key: "/ai", icon: renderIcon(SparklesOutline) },
-  { label: "任务定义", key: "/definitions", icon: renderIcon(PlayCircleOutline) },
-  { label: "运行实例", key: "/instances", icon: renderIcon(PulseOutline) },
-  { label: "数据源", key: "/datasources", icon: renderIcon(LinkOutline) },
-  { label: "节点与集群", key: "/nodes", icon: renderIcon(ServerOutline) },
-];
+// 路由 meta.icon 的字符串名 → 图标组件（新增页面只需在 routes.js 的 meta 里补 title/icon）
+const ICONS = {
+  "grid-outline": GridOutline,
+  "sparkles-outline": SparklesOutline,
+  "play-circle-outline": PlayCircleOutline,
+  "pulse-outline": PulseOutline,
+  "albums-outline": AlbumsOutline,
+  "link-outline": LinkOutline,
+  "server-outline": ServerOutline,
+};
+
+// 全站菜单唯一来源：带 meta.title 且未标记 hidden 的顶层路由（参数路由 / 子路由不进菜单）
+const MENU = menuRoutes
+  .filter((item) => item.meta?.title && !item.meta.hidden && !item.path.includes(":"))
+  .map((item) => ({
+    label: item.meta.title,
+    key: item.path,
+    icon: ICONS[item.meta.icon] ? renderIcon(ICONS[item.meta.icon]) : undefined,
+  }));
 
 const route = useRoute();
 const router = useRouter();
-const appStore = useAppStore();
 
-// 详情页（/definitions/:id、/instances/:id）时保持父菜单高亮
+// 详情页（/definitions/:id、/instances/:id 等）时保持父菜单高亮
 const activeKey = computed(() => {
-  if (route.path.startsWith("/definitions/") && route.path !== "/definitions/new") return "/definitions";
-  if (route.path.startsWith("/instances/")) return "/instances";
+  const match = MENU.find(
+    (item) => route.path === item.key || route.path.startsWith(item.key + "/")
+  );
+  if (match && route.path !== "/definitions/new") return match.key;
   return route.path;
 });
 
@@ -47,29 +58,10 @@ function handleSelect(key) {
   <div class="side-menu-wrap">
     <n-menu
       class="side-menu"
-      :options="menuOptions"
+      :options="MENU"
       :value="activeKey"
-      :collapsed="appStore.collapsed"
-      :collapsed-width="64"
-      :collapsed-icon-size="22"
-      :root-indent="20"
-      :indent="20"
       @update:value="handleSelect"
     />
-    <div class="side-footer" :class="{ collapsed: appStore.collapsed }">
-      <n-tooltip placement="right">
-        <template #trigger>
-          <n-button quaternary circle size="small" @click="appStore.toggleTheme()">
-            <template #icon>
-              <n-icon :size="18">
-                <component :is="appStore.theme === 'dark' ? SunnyOutline : MoonOutline" />
-              </n-icon>
-            </template>
-          </n-button>
-        </template>
-        {{ appStore.theme === "dark" ? "切换到亮色" : "切换到暗色" }}
-      </n-tooltip>
-    </div>
   </div>
 </template>
 
@@ -77,23 +69,12 @@ function handleSelect(key) {
 .side-menu-wrap {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 57px);
+  height: 100%;
 }
 
 .side-menu {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-}
-
-.side-footer {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 10px 0;
-  border-top: 1px solid var(--border);
-
-  &.collapsed {
-    padding: 10px 0;
-  }
 }
 </style>

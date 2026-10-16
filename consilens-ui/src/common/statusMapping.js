@@ -49,3 +49,31 @@ export const DIFF_SCORE_STATUS_MAP = {
   POOR: { label: "差异较多", type: "error" },
   NONE: { label: "暂无数据", type: "default" },
 };
+
+// badge 类型 → 语义色（引用 global.scss 的 CSS 变量，主题切换自动跟随；页面禁止另写 hex）
+export const STATUS_TYPE_COLORS = {
+  success: "var(--success)",
+  warning: "var(--accent-amber)",
+  error: "var(--danger)",
+  info: "var(--primary)",
+  primary: "var(--primary)",
+  default: "var(--text-muted)",
+};
+
+export function statusTypeColor(type) {
+  return STATUS_TYPE_COLORS[type] || STATUS_TYPE_COLORS.default;
+}
+
+// 数据源类型 → 图标色（仅后端 GET /v1/datasources/types 支持的类型）
+export const DS_TYPE_COLORS = {
+  mysql: "var(--primary)",
+  doris: "var(--accent-amber)",
+  hive: "var(--accent-green)",
+  postgresql: "var(--violet)",
+  clickhouse: "var(--danger)",
+};
+
+// 未知类型回退到中性色（列表必须能渲染未知类型的行）
+export function datasourceTypeColor(type) {
+  return DS_TYPE_COLORS[String(type || "").toLowerCase()] || "var(--text-muted)";
+}

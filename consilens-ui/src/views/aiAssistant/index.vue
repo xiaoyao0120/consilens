@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
 import { NIcon, NButton, NTag, NModal, NInput, NDrawer, NDrawerContent, NEmpty, useDialog } from "naive-ui";
 import {
   AddOutline,
@@ -22,6 +22,12 @@ const createModal = ref(false);
 const newTitle = ref("");
 const creating = ref(false);
 const titleComposing = ref(false);
+const titleInputRef = ref(null);
+
+// 打开弹窗自动聚焦标题输入框
+watch(createModal, (show) => {
+  if (show) nextTick(() => titleInputRef.value?.focus());
+});
 
 // 标题框同样要避开 IME 组合期间的回车（确认候选词不是提交）
 function handleTitleKeydown(event) {
@@ -81,6 +87,13 @@ async function handleRefresh() {
 }
 
 // ===== 消息 =====
+const composerRef = ref(null);
+
+// 时间线开场建议：填入输入框并聚焦，由用户确认后发送
+function handleSuggest(text) {
+  composerRef.value?.setText(text);
+}
+
 async function handleSend(text) {
   try {
     await store.sendMessage(text);
@@ -162,19 +175,19 @@ onBeforeUnmount(() => {
         <div class="page-title">AI 助手</div>
         <div class="page-desc">通过连续对话创建数据源与比对任务，写操作需审批，凭据走安全表单</div>
       </div>
-      <div class="header-actions">
-        <n-button v-if="isNarrow" quaternary :disabled="!store.currentSessionId" @click="drawerShow = true">
+      <div class="head-actions">
+        <n-button v-if="isNarrow" size="small" quaternary :disabled="!store.currentSessionId" @click="drawerShow = true">
           <template #icon>
             <n-icon><AlbumsOutline /></n-icon>
           </template>
           草稿
         </n-button>
-        <n-button quaternary circle title="刷新会话" :disabled="!store.currentSessionId" @click="handleRefresh">
+        <n-button size="small" quaternary circle title="刷新会话" :disabled="!store.currentSessionId" @click="handleRefresh">
           <template #icon>
             <n-icon><RefreshOutline /></n-icon>
           </template>
         </n-button>
-        <n-button type="primary" @click="openCreateModal">
+        <n-button type="primary" size="small" @click="openCreateModal">
           <template #icon>
             <n-icon><AddOutline /></n-icon>
           </template>
@@ -209,7 +222,7 @@ onBeforeUnmount(() => {
               </n-button>
             </div>
             <div class="session-item-meta">
-              <n-tag size="tiny" :bordered="false" round>{{ STATUS_META[item.status]?.label || item.status || "-" }}</n-tag>
+              <n-tag size="tiny" :bordered="false">{{ STATUS_META[item.status]?.label || item.status || "-" }}</n-tag>
               <span>{{ formatTime(item.updatedAt, "MM-DD HH:mm") }}</span>
             </div>
           </div>
@@ -225,7 +238,7 @@ onBeforeUnmount(() => {
           <div class="conversation-title-wrap">
             <n-icon :size="16" color="var(--primary)"><ChatbubbleEllipsesOutline /></n-icon>
             <span class="conversation-title">{{ store.currentSession?.title || "AI 助手" }}</span>
-            <n-tag size="small" :bordered="false" :type="statusMeta.type" round>{{ statusMeta.label }}</n-tag>
+            <n-tag size="small" :bordered="false" :type="statusMeta.type">{{ statusMeta.label }}</n-tag>
           </div>
           <div class="conversation-sub">
             <span v-if="streamLabel" class="stream-state" :class="{ connecting: streamConnecting }">
@@ -240,9 +253,11 @@ onBeforeUnmount(() => {
           :pending-delta="store.pendingDelta"
           :session-id="store.currentSessionId"
           :is-running="store.isRunning"
+          @suggest="handleSuggest"
         />
 
         <agent-composer
+          ref="composerRef"
           :disabled="!store.currentSessionId"
           :sending="store.sending"
           :is-running="store.isRunning"
@@ -262,6 +277,7 @@ onBeforeUnmount(() => {
     <!-- 新建会话弹窗 -->
     <n-modal v-model:show="createModal" preset="card" style="width: 440px" title="新建 AI 会话">
       <n-input
+        ref="titleInputRef"
         v-model:value="newTitle"
         placeholder="会话标题，例如：orders 对账"
         maxlength="60"
@@ -289,22 +305,11 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped lang="scss">
-.ai-page {
-  display: flex;
-  flex-direction: column;
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .ai-body {
   flex: 1;
   min-height: 0;
   display: flex;
-  gap: 16px;
+  gap: 12px;
 }
 
 // ===== 会话列表 =====
@@ -315,13 +320,13 @@ onBeforeUnmount(() => {
   flex-direction: column;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-card);
   overflow: hidden;
 }
 
 .session-title {
   padding: 12px 14px;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--text);
   border-bottom: 1px solid var(--border);
@@ -338,17 +343,17 @@ onBeforeUnmount(() => {
   padding: 10px 12px;
   margin-bottom: 6px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-ctl);
   cursor: pointer;
   transition: background 0.15s ease;
 
   &:hover {
-    background: var(--bg);
+    background: var(--bg-subtle);
   }
 
   &.active {
-    background: rgba(37, 99, 235, 0.06);
-    border-color: rgba(37, 99, 235, 0.25);
+    background: var(--primary-bg);
+    border-color: var(--primary-border);
   }
 }
 
@@ -406,7 +411,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-card);
   overflow: hidden;
 }
 
@@ -427,7 +432,7 @@ onBeforeUnmount(() => {
 }
 
 .conversation-title {
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--text);
   overflow: hidden;
@@ -465,13 +470,13 @@ onBeforeUnmount(() => {
   flex-direction: column;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-card);
   overflow: hidden;
 }
 
 .working-title {
   padding: 12px 14px;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--text);
   border-bottom: 1px solid var(--border);

@@ -1,25 +1,27 @@
 <script setup>
-const tableHeight = "calc(100vh - 250px)";
 import { ref, reactive, h, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useMessage, useDialog } from "naive-ui";
-import { NButton, NIcon, NDataTable, NTag, NSwitch, NPopconfirm, NInput } from "naive-ui";
-import { AddOutline, RefreshOutline, PlayCircleOutline, SparklesOutline } from "@vicons/ionicons5";
+import { NTag } from "naive-ui";
+import { AddOutline, RefreshOutline, SparklesOutline } from "@vicons/ionicons5";
 import {
   listTaskDefinitions,
   deleteTaskDefinition,
   runTaskDefinition,
   toggleTaskDefinition,
 } from "@/api/modules";
-import { formatTime } from "@/utils/format";
-import StateTag from "@/components/common/StateTag.vue";
+import { useListQuerySync } from "@/composables/useListQuerySync";
 import AiAssistantDrawer from "@/components/ai/AiAssistantDrawer.vue";
+import EmptyState from "@/components/common/EmptyState.vue";
+import SkeletonTable from "@/components/common/SkeletonTable.vue";
+import TimeText from "@/components/common/TimeText.vue";
 
 const router = useRouter();
 const message = useMessage();
 const dialog = useDialog();
 
 const loading = ref(false);
+const loadError = ref(false);
 const aiDrawerShow = ref(false);
 const data = reactive({ total: 0, items: [] });
 const pagination = reactive({
@@ -28,11 +30,24 @@ const pagination = reactive({
   itemCount: 0,
   pageSizes: [10, 20, 50],
   showSizePicker: true,
+  prefix: ({ itemCount }) => `共 ${itemCount} 条`,
 });
-const filters = reactive({ keyword: "", enabled: null });
+// 筛选与 URL 双向同步：初始从 query 恢复，每次加载写回
+const filters = reactive({
+  keyword: "",
+  enabled: null,
+});
+
+const { filtersActive, syncToUrl } = useListQuerySync(filters, pagination, {
+  keyword: {},
+  // 三态：true / false / null（未筛选）
+  enabled: { parse: (v) => (v === "true" ? true : v === "false" ? false : null) },
+});
 
 async function loadData() {
   loading.value = true;
+  loadError.value = false;
+  syncToUrl();
   try {
     const result = await listTaskDefinitions({
       page: pagination.page,
@@ -43,6 +58,10 @@ async function loadData() {
     data.total = result.total;
     data.items = result.items || [];
     pagination.itemCount = result.total;
+  } catch {
+    loadError.value = true;
+    data.items = [];
+    pagination.itemCount = 0;
   } finally {
     loading.value = false;
   }
@@ -116,31 +135,31 @@ const columns = [
   {
     title: "类型",
     key: "taskType",
-    width: 80,
-    render: (row) => h("span", { class: "text-secondary" }, row.taskType),
+    width: 96,
+    render: (row) => h(NTag, { size: "small", bordered: false }, row.taskType),
   },
   {
-    title: "启用",
+    title: "状态",
     key: "enabled",
-    width: 70,
+    width: 84,
     render: (row) =>
-      h(NSwitch, {
-        value: row.enabled,
-        size: "small",
-        onUpdateValue: (v) => handleToggle(row, v),
-      }),
+      h(
+        NTag,
+        { size: "small", bordered: false, type: row.enabled ? "success" : "default" },
+        { default: () => (row.enabled ? "已启用" : "已停用") }
+      ),
   },
   {
     title: "上次运行",
     key: "lastRunAt",
     width: 170,
-    render: (row) => h("span", { class: "text-secondary" }, formatTime(row.lastRunAt)),
+    render: (row) => h(TimeText, { value: row.lastRunAt }),
   },
   {
     title: "创建时间",
     key: "createdAt",
     width: 170,
-    render: (row) => h("span", { class: "text-secondary" }, formatTime(row.createdAt)),
+    render: (row) => h(TimeText, { value: row.createdAt }),
   },
   {
     title: "操作",
@@ -148,26 +167,17 @@ const columns = [
     width: 210,
     render: (row) =>
       h("div", { class: "row-actions" }, [
+        row.enabled
+          ? h("a", { class: "row-action", onClick: () => handleRun(row) }, "运行")
+          : h("span", { class: "row-action-disabled" }, "运行"),
         h(
-          NButton,
-          { size: "small", text: true, type: "primary", disabled: !row.enabled, onClick: () => handleRun(row) },
-          { default: () => "运行" }
+          "a",
+          { class: "row-action", onClick: () => handleToggle(row, !row.enabled) },
+          row.enabled ? "停用" : "启用"
         ),
-        h(
-          NButton,
-          { size: "small", text: true, type: "primary", onClick: () => router.push(`/definitions/${row.id}`) },
-          { default: () => "详情" }
-        ),
-        h(
-          NButton,
-          { size: "small", text: true, onClick: () => router.push(`/definitions/new?editId=${row.id}`) },
-          { default: () => "编辑" }
-        ),
-        h(
-          NButton,
-          { size: "small", text: true, type: "error", onClick: () => handleDelete(row) },
-          { default: () => "删除" }
-        ),
+        h("a", { class: "row-action", onClick: () => router.push(`/definitions/${row.id}`) }, "详情"),
+        h("a", { class: "row-action", onClick: () => router.push(`/definitions/new?editId=${row.id}`) }, "编辑"),
+        h("a", { class: "row-action-danger", onClick: () => handleDelete(row) }, "删除"),
       ]),
   },
 ];
@@ -182,27 +192,30 @@ onMounted(loadData);
         <div class="page-title">任务定义</div>
         <div class="page-desc">保存可复用的数据校验配置，支持随时运行与停用</div>
       </div>
-      <n-button quaternary circle title="AI 辅助" @click="aiDrawerShow = true">
-        <template #icon>
-          <n-icon><SparklesOutline /></n-icon>
-        </template>
-      </n-button>
-      <n-button type="primary" @click="router.push('/definitions/new')">
-        <template #icon>
-          <n-icon><AddOutline /></n-icon>
-        </template>
-        新建定义
-      </n-button>
+      <div class="head-actions">
+        <n-button size="small" quaternary circle title="AI 辅助" @click="aiDrawerShow = true">
+          <template #icon>
+            <n-icon><SparklesOutline /></n-icon>
+          </template>
+        </n-button>
+        <n-button type="primary" size="small" @click="router.push('/definitions/new')">
+          <template #icon>
+            <n-icon><AddOutline /></n-icon>
+          </template>
+          新建定义
+        </n-button>
+      </div>
     </div>
 
     <ai-assistant-drawer v-model:show="aiDrawerShow" />
 
-    <n-card :bordered="true" class="mb-16">
+    <n-card size="small" class="mt-12 mb-12">
       <div class="filter-bar">
         <n-input
           v-model:value="filters.keyword"
           placeholder="定义名称"
           clearable
+          size="small"
           class="filter-item"
           @keyup.enter="handleSearch"
         />
@@ -213,11 +226,12 @@ onMounted(loadData);
             { label: '已启用', value: true },
             { label: '已停用', value: false },
           ]"
+          size="small"
           class="filter-item"
         />
-        <n-button type="primary" secondary :loading="loading" @click="handleSearch">查询</n-button>
-        <n-button @click="handleReset">重置</n-button>
-        <n-button quaternary circle class="ml-8" title="刷新" :loading="loading" @click="loadData">
+        <n-button size="small" type="primary" :loading="loading" @click="handleSearch">查询</n-button>
+        <n-button size="small" @click="handleReset">重置</n-button>
+        <n-button size="small" quaternary circle title="刷新" :loading="loading" @click="loadData">
           <template #icon>
             <n-icon><RefreshOutline /></n-icon>
           </template>
@@ -225,54 +239,31 @@ onMounted(loadData);
       </div>
     </n-card>
 
-    <n-card :bordered="true">
-      <template #header>
-        <div class="flex-bc">
-          <span class="card-title">定义列表</span>
-          <span class="text-muted">共 {{ data.total }} 条</span>
-        </div>
-      </template>
+    <n-card size="small" class="table-card">
+      <SkeletonTable v-if="loading && !data.items.length" :rows="8" />
+      <EmptyState
+        v-else-if="!loading && !data.items.length"
+        class="flex-1"
+        :title="loadError ? '加载失败' : filtersActive ? '没有匹配的定义' : '还没有任务定义'"
+        :description="loadError ? '网络或服务异常，请重试' : filtersActive ? '尝试调整或清除筛选条件' : '保存可复用的数据校验配置后即可一键运行'"
+        :action="loadError ? '重试' : filtersActive ? '清除筛选' : '新建定义'"
+        @action="loadError ? loadData() : filtersActive ? handleReset() : router.push('/definitions/new')"
+      />
       <n-data-table
+        v-else
+        class="main-table"
         :columns="columns"
         :data="data.items"
         :loading="loading"
         :row-key="(row) => row.id"
-        :max-height="tableHeight"
+        flex-height
         :bordered="false"
         size="small"
         :pagination="pagination"
+        remote
         @update:page="(page) => { pagination.page = page; loadData(); }"
         @update:page-size="(size) => { pagination.pageSize = size; pagination.page = 1; loadData(); }"
       />
     </n-card>
   </div>
 </template>
-
-<style scoped lang="scss">
-.filter-bar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.filter-item {
-  width: 180px;
-}
-
-// ===== 固定列不透明(防穿透),与差异明细列表处理一致 =====
-:deep(.n-data-table-td--fixed-left),
-:deep(.n-data-table-td--fixed-right) {
-  background-color: var(--n-merged-td-color, #fff) !important;
-}
-
-:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-left),
-:deep(.n-data-table-tr:hover > .n-data-table-td--fixed-right) {
-  background-color: #f4f6ff !important;
-}
-
-:deep(.n-data-table-th--fixed-left),
-:deep(.n-data-table-th--fixed-right) {
-  background-color: var(--n-merged-th-color, #fafafa) !important;
-}
-</style>

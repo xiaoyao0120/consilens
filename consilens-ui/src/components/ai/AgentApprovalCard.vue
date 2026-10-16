@@ -72,7 +72,7 @@ async function handleDecide(decision) {
     <template v-else>
       <div v-if="approval.summary" class="approval-summary">{{ approval.summary }}</div>
       <div v-if="approval.risk" class="approval-risk">
-        <n-tag size="small" :bordered="false" type="warning" round>风险提示</n-tag>
+        <n-tag size="small" :bordered="false" type="warning">风险提示</n-tag>
         <span class="risk-text">{{ approval.risk }}</span>
       </div>
       <n-data-table
@@ -103,7 +103,7 @@ async function handleDecide(decision) {
 <style scoped lang="scss">
 .approval-card {
   padding: 12px 14px;
-  background: var(--bg);
+  background: var(--bg-subtle);
   border: 1px solid var(--border);
   border-radius: 6px;
 

@@ -2,6 +2,7 @@
 import { darkTheme, zhCN, dateZhCN } from "naive-ui";
 import { useAppStore } from "@/store";
 import { naiveTheme } from "@/common/theme";
+import RouteProgress from "@/components/common/RouteProgress.vue";
 
 const appStore = useAppStore();
 </script>
@@ -16,6 +17,7 @@ const appStore = useAppStore();
     <n-loading-bar-provider>
       <n-message-provider>
         <n-dialog-provider>
+          <route-progress />
           <router-view />
         </n-dialog-provider>
       </n-message-provider>

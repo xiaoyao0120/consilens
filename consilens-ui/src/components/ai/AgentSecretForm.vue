@@ -129,7 +129,7 @@ onBeforeUnmount(clearValues);
 <style scoped lang="scss">
 .secret-form {
   padding: 12px 14px;
-  background: var(--bg);
+  background: var(--bg-subtle);
   border: 1px solid var(--border);
   border-radius: 6px;
 
