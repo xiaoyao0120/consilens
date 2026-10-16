@@ -325,7 +325,8 @@ public class DiffService {
                 .localCompareMode(config.getStrategy().getLocalCompare() != null
                         ? config.getStrategy().getLocalCompare().getMode()
                         : null)
-                .validateUniqueKeys(true)
+                // 键唯一档位走配置：默认开放档（重复键按多重集语义比较），严格档在 strategy 里显式打开
+                .validateUniqueKeys(Boolean.TRUE.equals(config.getStrategy().getValidateUniqueKeys()))
                 .maxDifferences(config.getStrategy().getMaxDifferences())
                 .attributes(attributes.isEmpty() ? null : attributes)
                 .build();

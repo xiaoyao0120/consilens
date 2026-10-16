@@ -53,6 +53,14 @@ public class StrategyConfig {
     @JsonProperty("maxDifferences")
     private Long maxDifferences = 1_000_000L;
 
+    /**
+     * 是否要求键唯一（严格档）。false（默认）按多重集语义比较：重复键中值相等的行互相抵消；
+     * true 时比对开始前做唯一键探针，命中重复键直接失败。
+     */
+    @Builder.Default
+    @JsonProperty("validateUniqueKeys")
+    private Boolean validateUniqueKeys = false;
+
     @JsonIgnore
     public ComparisonStrategy getModeEnum() {
         return ComparisonStrategy.fromString(mode);

@@ -325,11 +325,16 @@ class ExampleCoverageMatrixTest {
         for (String pair : EXPECTED_PAIRS) {
             Path pairDirectory = examplesDirectory().resolve("cross-db").resolve(pair);
             String targetSql = Files.readString(targetLoadSql(pairDirectory));
+            // 差异行的构造方式随方言能力而异：支持 UPDATE 的方言用 UPDATE ... WHERE，
+            // StarRocks 的 DUPLICATE KEY 表不支持 UPDATE，改用插入时的内联表达式
+            // （IF(n=1, 99999.9999, ...) / CASE WHEN n=2 THEN 'modified_status'）。
             assertSqlMatches(targetSql,
-                    "(?:UPDATE\\s+amount|SET\\s+amount)\\s*=\\s*99999\\.9999\\s+WHERE\\s+record_id\\s*=\\s*'REC0000000001'",
+                    "(?:UPDATE\\s+amount|SET\\s+amount)\\s*=\\s*99999\\.9999\\s+WHERE\\s+record_id\\s*=\\s*'REC0000000001'"
+                            + "|IF\\(n\\s*=\\s*1,\\s*99999\\.9999",
                     pair + " 缺少可定位到 amount 字段的值不一致行");
             assertSqlMatches(targetSql,
-                    "(?:UPDATE\\s+status|SET\\s+status)\\s*=\\s*'modified_status'\\s+WHERE\\s+record_id\\s*=\\s*'REC0000000002'",
+                    "(?:UPDATE\\s+status|SET\\s+status)\\s*=\\s*'modified_status'\\s+WHERE\\s+record_id\\s*=\\s*'REC0000000002'"
+                            + "|WHEN\\s+n\\s*=\\s*2\\s+THEN\\s+'modified_status'",
                     pair + " 缺少可定位到 status 字段的值不一致行");
             assertSqlMatches(targetSql, "REC_EXTRA_001",
                     pair + " 缺少只存在于目标端的 SOURCE_MISSING 行");

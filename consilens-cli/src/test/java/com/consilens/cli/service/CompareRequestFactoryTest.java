@@ -61,7 +61,8 @@ class CompareRequestFactoryTest {
                 request.getTarget().getResource().getPath());
         assertEquals(null, request.getSourceFilter());
         assertEquals(null, request.getTargetFilter());
-        assertEquals(Boolean.TRUE, request.getExecutionOptions().getValidateUniqueKeys());
+        // CLI 走开放档：重复键按多重集语义比较（严格档需显式开启）
+        assertEquals(Boolean.FALSE, request.getExecutionOptions().getValidateUniqueKeys());
         assertEquals(1_000_000L, request.getExecutionOptions().getMaxDifferences());
     }
 
@@ -100,6 +101,53 @@ class CompareRequestFactoryTest {
     }
 
     @Test
+    void shouldHonorStrictUniqueKeyValidationFromStrategyConfig() {
+        CliConfiguration config = baseConfig();
+        config.setStrategy(StrategyConfig.builder()
+                .mode("checksum")
+                .algorithm("concat")
+                .bisectionFactor(4)
+                .bisectionThreshold(1000L)
+                .batchSize(100)
+                .enableProfiling(false)
+                .maxDifferences(10L)
+                .localCompare(LocalCompareConfig.builder().mode("full").build())
+                .validateUniqueKeys(true)
+                .build());
+        config.setComparison(ComparisonConfig.builder()
+                .keys(ListPairConfig.builder().source(List.of("id")).target(List.of("id")).build())
+                .build());
+
+        CompareRequest request = factory.create(config);
+
+        // 严格档（命中重复键即失败）由 strategy.validateUniqueKeys 显式打开
+        assertEquals(Boolean.TRUE, request.getExecutionOptions().getValidateUniqueKeys());
+    }
+
+    @Test
+    void shouldDefaultToOpenTierWhenStrategyOmitsValidateUniqueKeys() {
+        CliConfiguration config = baseConfig();
+        config.setStrategy(StrategyConfig.builder()
+                .mode("checksum")
+                .algorithm("concat")
+                .bisectionFactor(4)
+                .bisectionThreshold(1000L)
+                .batchSize(100)
+                .enableProfiling(false)
+                .maxDifferences(10L)
+                .localCompare(LocalCompareConfig.builder().mode("full").build())
+                .build());
+        config.setComparison(ComparisonConfig.builder()
+                .keys(ListPairConfig.builder().source(List.of("id")).target(List.of("id")).build())
+                .build());
+
+        CompareRequest request = factory.create(config);
+
+        // 默认开放档：重复键按多重集语义比较
+        assertEquals(Boolean.FALSE, request.getExecutionOptions().getValidateUniqueKeys());
+    }
+
+    @Test
     void shouldMapChecksumStrategyToPreferredPlansAndExecutionOptions() {
         CliConfiguration config = baseConfig();
         config.setStrategy(StrategyConfig.builder()
@@ -129,7 +177,8 @@ class CompareRequestFactoryTest {
         assertEquals(12_000L, request.getExecutionOptions().getBisectionThreshold());
         assertEquals(Boolean.TRUE, request.getExecutionOptions().getEnableProfiling());
         assertEquals("row-hash", request.getExecutionOptions().getLocalCompareMode());
-        assertEquals(Boolean.TRUE, request.getExecutionOptions().getValidateUniqueKeys());
+        // CLI 走开放档：重复键按多重集语义比较（严格档需显式开启）
+        assertEquals(Boolean.FALSE, request.getExecutionOptions().getValidateUniqueKeys());
         assertEquals(123L, request.getExecutionOptions().getMaxDifferences());
         assertEquals(123L, request.getExecutionOptions().getAttributes().get("maxDifferences"));
     }

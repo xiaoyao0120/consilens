@@ -89,8 +89,23 @@ public class DefaultConfigCapability implements ConfigCapability {
             loadResolved(configRef);
             return ValidationReport.builder().passed(true).message("Configuration validation passed").build();
         } catch (Exception e) {
+            // 生成的配置引用的是"运行时才提供"的凭据环境变量（CLI 已把变量名作为 requiredEnv
+            // 暴露给用户）：配置本身结构完整，缺环境变量是运行前置条件而非配置缺陷，
+            // 否则在用户设置变量之前 `consilens config` 永远判失败。
+            if (isMissingEnvironmentVariable(e)) {
+                return ValidationReport.builder()
+                        .passed(true)
+                        .message("Configuration generated; " + e.getMessage())
+                        .build();
+            }
             return ValidationReport.builder().passed(false).message(e.getMessage()).build();
         }
+    }
+
+    private boolean isMissingEnvironmentVariable(Exception e) {
+        return e instanceof com.consilens.cli.config.ConfigurationException
+                && e.getMessage() != null
+                && e.getMessage().startsWith("Missing required environment variable");
     }
 
     @Override
