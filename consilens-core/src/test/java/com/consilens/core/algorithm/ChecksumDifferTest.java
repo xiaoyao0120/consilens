@@ -7,6 +7,7 @@ import com.consilens.core.database.adpter.DatabaseAdapter.RowMapper;
 import com.consilens.core.database.connection.ConnectionPool;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffResult.InfoTreeNode;
+import com.consilens.core.diff.DiffOperation;
 import com.consilens.core.thread.ConcurrencyConfig;
 import com.consilens.core.thread.ExecutorProvider;
 import com.consilens.connector.api.model.TablePath;
@@ -413,6 +414,158 @@ class ChecksumDifferTest {
                                         "标准分裂节点应该全部使用 factor=2");
                         assertTrue(standardSplitNodes.stream().noneMatch(node -> node.getSplitFactor() == config.getBisectionFactor()),
                                         "递归子段不应该继续沿用初始 N 分段因子");
+                }
+        }
+
+        @Nested
+        @DisplayName("尾部键空间覆盖测试")
+        class TailKeySpaceTests {
+
+                /**
+                 * 分段基座取两侧键范围并集：较大表的键空间之外的较小表行不再依赖尾扫，
+                 * 而是落入"一侧有行、另一侧无行"的段里由常规段比较报出。
+                 *
+                 * <p>场景：source 有 0..99（100 行），target 有 0..94 加 200/201（97 行）——
+                 * target 行数更少但键范围更宽。并集基座为 [0,201]，因此 200/201 所在段上
+                 * source 为空、target 有行 → SOURCE_MISSING；95..99 只存在于 source → TARGET_MISSING。
+                 */
+                @Test
+                @DisplayName("并集分段覆盖较小表的越界行（不依赖尾扫）")
+                void shouldCoverSmallerSideKeySpaceThroughUnionSegments() throws Exception {
+                        List<Object[]> sourceRows = new ArrayList<>();
+                        for (long i = 0; i < 100; i++) {
+                                sourceRows.add(new Object[] { i, "name_" + i, "value_" + i });
+                        }
+                        List<Object[]> targetRows = new ArrayList<>();
+                        for (long i = 0; i < 95; i++) {
+                                targetRows.add(new Object[] { i, "name_" + i, "value_" + i });
+                        }
+                        targetRows.add(new Object[] { 200L, "name_200", "value_200" });
+                        targetRows.add(new Object[] { 201L, "name_201", "value_201" });
+
+                        lenient().when(mockAdapter1.countAndBounds(any(TableSegment.class)))
+                                        .thenReturn(new ChecksumResult(100, null, Arrays.asList(0L), Arrays.asList(100L)));
+                        lenient().when(mockAdapter2.countAndBounds(any(TableSegment.class)))
+                                        .thenReturn(new ChecksumResult(97, null, Arrays.asList(0L), Arrays.asList(201L)));
+                        stubRangeAwareData(mockAdapter1, sourceRows);
+                        stubRangeAwareData(mockAdapter2, targetRows);
+
+                        DiffResult result = differ.diffTables(segment1, segment2).get();
+
+                        List<Long> sourceMissing = new ArrayList<>();
+                        List<Long> targetMissing = new ArrayList<>();
+                        for (var row : result.getDifferences()) {
+                                long key = ((Number) row.getPrimaryKey().get(0)).longValue();
+                                if (row.getOperation() == DiffOperation.SOURCE_MISSING) {
+                                        sourceMissing.add(key);
+                                } else if (row.getOperation() == DiffOperation.TARGET_MISSING) {
+                                        targetMissing.add(key);
+                                } else {
+                                        fail("远端稀疏键的公共区间完全相同，不应出现 MISMATCH: " + row.getPrimaryKey());
+                                }
+                        }
+                        assertEquals(List.of(200L, 201L), sourceMissing, "target 越界行应记为 source 缺失");
+                        assertEquals(List.of(95L, 96L, 97L, 98L, 99L), targetMissing,
+                                        "source 独有行应记为 target 缺失");
+                }
+
+                /** 让 count / countAndChecksum / querySegment 都按段范围真实取数。 */
+                private void stubRangeAwareData(DatabaseAdapter adapter, List<Object[]> rows) {
+                        lenient().when(adapter.count(any(TableSegment.class)))
+                                        .thenAnswer(invocation -> rowsInRange(rows, invocation.getArgument(0)).size());
+                        lenient().when(adapter.countAndChecksum(any(TableSegment.class)))
+                                        .thenAnswer(invocation -> {
+                                                List<Object[]> inRange = rowsInRange(rows, invocation.getArgument(0));
+                                                StringBuilder checksum = new StringBuilder();
+                                                for (Object[] row : inRange) {
+                                                        checksum.append(row[0]).append(';');
+                                                }
+                                                return new ChecksumResult(inRange.size(), checksum.toString(),
+                                                                Arrays.asList(0L), Arrays.asList(0L));
+                                        });
+                        lenient().when(adapter.querySegment(any(TableSegment.class)))
+                                        .thenAnswer(invocation -> rowsInRange(rows, invocation.getArgument(0)));
+                        lenient().when(adapter.querySegmentByKeys(any(TableSegment.class), anySet()))
+                                        .thenAnswer(invocation -> {
+                                                Set<List<Object>> keys = invocation.getArgument(1);
+                                                return rows.stream()
+                                                                .filter(row -> keys.contains(List.of(row[0])))
+                                                                .collect(Collectors.toList());
+                                        });
+                }
+
+                private List<Object[]> rowsInRange(List<Object[]> rows, TableSegment segment) {
+                        Optional<List<Object>> minKey = segment.getMinKey();
+                        Optional<List<Object>> maxKey = segment.getMaxKey();
+                        return rows.stream().filter(row -> {
+                                long key = ((Number) row[0]).longValue();
+                                boolean aboveMin = minKey.isEmpty() || key >= ((Number) minKey.get().get(0)).longValue();
+                                boolean belowMax = maxKey.isEmpty()
+                                                || (segment.isUpperBoundInclusive()
+                                                                ? key <= ((Number) maxKey.get().get(0)).longValue()
+                                                                : key < ((Number) maxKey.get().get(0)).longValue());
+                                return aboveMin && belowMax;
+                        }).collect(Collectors.toList());
+                }
+
+                /**
+                 * 分段边界取自较大表的键空间，较小表中落在该空间外的行不会被任何分段访问：
+                 * source 有 0..99，target 与 source 公共区间完全一致，但多了 200/201 两行
+                 * （target maxKey=201 > source maxKey=100）。这两行必须由尾扫补报，
+                 * 且等值极值兜底不能把它们重复计数。
+                 */
+                @Test
+                @DisplayName("尾扫把超出对端键范围的行各报一次，不重复计数")
+                void shouldReportTailRowsOutsideTheOtherSidesKeyRangeExactlyOnce() throws Exception {
+                        lenient().when(mockAdapter1.countAndBounds(any(TableSegment.class)))
+                                        .thenAnswer(invocation -> new ChecksumResult(100, null,
+                                                        Arrays.asList(0L), Arrays.asList(100L)));
+                        lenient().when(mockAdapter2.countAndBounds(any(TableSegment.class)))
+                                        .thenAnswer(invocation -> new ChecksumResult(99, null,
+                                                        Arrays.asList(0L), Arrays.asList(201L)));
+                        // 公共区间两侧完全一致：校验和相同，主流程不再产生差异
+                        lenient().when(mockAdapter1.countAndChecksum(any(TableSegment.class)))
+                                        .thenAnswer(invocation -> new ChecksumResult(100, "shared",
+                                                        Arrays.asList(0L), Arrays.asList(100L)));
+                        lenient().when(mockAdapter2.countAndChecksum(any(TableSegment.class)))
+                                        .thenAnswer(invocation -> new ChecksumResult(99, "shared",
+                                                        Arrays.asList(0L), Arrays.asList(100L)));
+                        lenient().when(mockAdapter1.querySegment(any(TableSegment.class))).thenReturn(List.of());
+                        lenient().when(mockAdapter2.querySegment(any(TableSegment.class)))
+                                        .thenAnswer(invocation -> {
+                                                TableSegment segment = invocation.getArgument(0);
+                                                // 区间尾扫按 [source maxKey, ∞) 取数
+                                                boolean tailFetch = segment.getMinKey().isPresent()
+                                                                && ((Number) segment.getMinKey().get().get(0)).longValue() == 100L;
+                                                if (tailFetch) {
+                                                        return List.of(
+                                                                        new Object[] { 200L, "name_200", "value_200" },
+                                                                        new Object[] { 201L, "name_201", "value_201" });
+                                                }
+                                                return List.of();
+                                        });
+                        // 等值极值兜底：source 侧查不到这两个键，target 侧查得到
+                        lenient().when(mockAdapter1.querySegmentByKeys(any(TableSegment.class), anySet()))
+                                        .thenReturn(List.of());
+                        lenient().when(mockAdapter2.querySegmentByKeys(any(TableSegment.class), anySet()))
+                                        .thenAnswer(invocation -> {
+                                                Set<List<Object>> keys = invocation.getArgument(1);
+                                                return keys.stream()
+                                                                .map(key -> new Object[] { key.get(0), "name_" + key.get(0),
+                                                                                "value_" + key.get(0) })
+                                                                .collect(Collectors.toList());
+                                        });
+
+                        DiffResult result = differ.diffTables(segment1, segment2).get();
+
+                        // 用 list 计数（不是 set）：等值极值兜底若把同一行重复计入，总数会变成 3
+                        List<Long> sourceMissingKeys = new ArrayList<>();
+                        for (var row : result.getDifferences()) {
+                                assertEquals(DiffOperation.SOURCE_MISSING, row.getOperation());
+                                sourceMissingKeys.add(((Number) row.getPrimaryKey().get(0)).longValue());
+                        }
+                        assertEquals(List.of(200L, 201L), sourceMissingKeys,
+                                        "两个越界行各报一次；等值极值兜底不得重复计数");
                 }
         }
 

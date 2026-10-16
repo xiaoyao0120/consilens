@@ -32,7 +32,10 @@ public class TableSegment {
             "\\s+|<=|>=|<>|!=|=|<|>|\\(|\\)|,|-?\\d+(?:\\.\\d+)?|'(?:''|[^'])*'|[A-Za-z_][A-Za-z0-9_]*");
 
     private static final Set<String> ALLOWED_WHERE_KEYWORDS = Set.of(
-            "AND", "OR", "NOT", "IN", "IS", "NULL", "LIKE", "BETWEEN", "TRUE", "FALSE");
+            "AND", "OR", "NOT", "IN", "IS", "NULL", "LIKE", "BETWEEN", "TRUE", "FALSE",
+            // CAST enables typed literals (e.g. CAST('2026-05-01' AS DATE)) required by
+            // strict-typed dialects (Trino/Presto) that reject date-vs-varchar comparison
+            "CAST");
 
     private static final Set<String> BLOCKED_WHERE_KEYWORDS = Set.of(
             "SELECT", "UNION", "DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE",
@@ -351,88 +354,106 @@ public class TableSegment {
                 String column = keyColumns.get(0);
                 Object minValue = minValues.get(0);
 
+                // NULL 下界（整列全 NULL 时 MIN 为 NULL）即段起点，无需下界谓词；
+                // 「NULL 排在最前」口径下所有行（含 NULL 行）都在该段内。
                 if (minValue != null) {
                     whereBuilder.append(String.format("%s >= %s", column, formatValue(minValue, columnType(column))));
                 }
-                
+
                 // Always add maxKey condition if it exists (segment upper bound)
                 if (maxKey != null && maxKey.isPresent()) {
                     List<Object> maxValues = maxKey.get();
                     Object maxValue = maxValues.get(0);
+                    String upperCondition;
                     if (maxValue != null) {
-                        if (whereBuilder.length() > 0) {
-                            whereBuilder.append(" AND ");
-                        }
-                        whereBuilder.append(String.format("%s %s %s",
+                        upperCondition = String.format("%s %s %s",
                                 column,
                                 upperBoundInclusive ? "<=" : "<",
-                                formatValue(maxValue, columnType(column))));
+                                formatValue(maxValue, columnType(column)));
+                    } else if (upperBoundInclusive) {
+                        // NULL 上界：<= NULL 按「NULL 排在最前」口径仅 NULL 行满足，
+                        // 直接丢弃谓词会把上界之外的行也纳入本段（与复合键分支同理）。
+                        upperCondition = String.format("%s IS NULL", column);
+                    } else {
+                        // NULL 上界：< NULL 恒假（NULL 是最小值），该段无行可选
+                        upperCondition = "1 = 0";
                     }
+                    if (whereBuilder.length() > 0) {
+                        whereBuilder.append(" AND ");
+                    }
+                    whereBuilder.append(upperCondition);
                 }
             } else {
                 // Composite key: use proper range logic
                 // Build lower bound: (key1 > min1 OR (key1 = min1 AND key2 >= min2 AND ...))
+                //
+                // 边界分量可能是 NULL（键列允许 NULL 时 MIN/MAX 会取到 NULL）。SQL 中
+                // `k > NULL` / `k = NULL` 恒为 UNKNOWN，整个谓词会退化为假，导致分段查询
+                // 取不到任何行（实测 dq_cmp_edge_* 因此漏报 27/28 条差异）。按「NULL 排在最前」
+                // 的分段口径改写：`= NULL` → `IS NULL`，`> NULL` → `IS NOT NULL`，
+                // `< NULL` 无解 → 该备选项直接丢弃。
                 StringBuilder lowerBound = new StringBuilder("(");
+                boolean lowerHasTerm = false;
                 for (int i = 0; i < keyColumns.size(); i++) {
-                    if (i > 0) {
+                    String comparison = compositeKeyComparison(keyColumns.get(i),
+                            i == keyColumns.size() - 1 ? ">=" : ">", minValues.get(i));
+                    if (comparison == null) {
+                        continue;
+                    }
+                    if (lowerHasTerm) {
                         lowerBound.append(" OR (");
                     }
-                    
-                    // Add equality conditions for all previous keys
                     for (int j = 0; j < i; j++) {
-                        lowerBound.append(String.format("%s = %s AND ", 
-                                keyColumns.get(j), formatValue(minValues.get(j), columnType(keyColumns.get(j)))));
+                        String prefix = compositeKeyComparison(keyColumns.get(j), "=", minValues.get(j));
+                        lowerBound.append(prefix).append(" AND ");
                     }
-                    
-                    // Add comparison for current key
-                    if (i == keyColumns.size() - 1) {
-                        // Last key: use >=
-                        lowerBound.append(String.format("%s >= %s", 
-                                keyColumns.get(i), formatValue(minValues.get(i), columnType(keyColumns.get(i)))));
-                    } else {
-                        // Not last key: use >
-                        lowerBound.append(String.format("%s > %s", 
-                                keyColumns.get(i), formatValue(minValues.get(i), columnType(keyColumns.get(i)))));
-                    }
-                    
-                    if (i > 0) {
+                    lowerBound.append(comparison);
+                    if (lowerHasTerm) {
                         lowerBound.append(")");
                     }
+                    lowerHasTerm = true;
                 }
-                lowerBound.append(")");
-                
-                whereBuilder.append(lowerBound);
-                
+                if (!lowerHasTerm) {
+                    // 无可用下界（例如极值 < NULL），该段无行可选
+                    whereBuilder.append("1 = 0");
+                } else {
+                    lowerBound.append(")");
+                    whereBuilder.append(lowerBound);
+                }
+
                 // Always add upper bound if maxKey exists (segment upper bound)
                 if (maxKey != null && maxKey.isPresent()) {
                     List<Object> maxValues = maxKey.get();
-                    
+
                     // Build upper bound: (key1 < max1 OR (key1 = max1 AND key2 < max2 AND ...))
                     StringBuilder upperBound = new StringBuilder("(");
+                    boolean upperHasTerm = false;
                     for (int i = 0; i < keyColumns.size(); i++) {
-                        if (i > 0) {
+                        String comparison = compositeKeyComparison(keyColumns.get(i),
+                                (upperBoundInclusive && i == keyColumns.size() - 1) ? "<=" : "<",
+                                maxValues.get(i));
+                        if (comparison == null) {
+                            continue;
+                        }
+                        if (upperHasTerm) {
                             upperBound.append(" OR (");
                         }
-                        
-                        // Add equality conditions for all previous keys
                         for (int j = 0; j < i; j++) {
-                            upperBound.append(String.format("%s = %s AND ", 
-                                    keyColumns.get(j), formatValue(maxValues.get(j), columnType(keyColumns.get(j)))));
+                            String prefix = compositeKeyComparison(keyColumns.get(j), "=", maxValues.get(j));
+                            upperBound.append(prefix).append(" AND ");
                         }
-                        
-                        // Add comparison for current key.
-                        upperBound.append(String.format("%s %s %s",
-                                keyColumns.get(i),
-                                (upperBoundInclusive && i == keyColumns.size() - 1) ? "<=" : "<",
-                                formatValue(maxValues.get(i), columnType(keyColumns.get(i)))));
-                        
-                        if (i > 0) {
+                        upperBound.append(comparison);
+                        if (upperHasTerm) {
                             upperBound.append(")");
                         }
+                        upperHasTerm = true;
                     }
                     upperBound.append(")");
-                    
-                    whereBuilder.append(" AND ").append(upperBound);
+
+                    if (whereBuilder.length() > 0) {
+                        whereBuilder.append(" AND ");
+                    }
+                    whereBuilder.append(upperHasTerm ? upperBound : "1 = 0");
                 }
             }
         }
@@ -663,6 +684,28 @@ public class TableSegment {
         } else {
             throw new IllegalArgumentException("Unsupported key value type: " + value.getClass().getName());
         }
+    }
+
+    /**
+     * 复合键分量的 SQL 比较片段。
+     *
+     * <p>边界值为 NULL 时不能用 {@code =} / {@code >} / {@code <} 表达（SQL 中与 NULL 比较恒为
+     * UNKNOWN），需按「NULL 排在最前」的分段口径改写：{@code =} / {@code <= NULL} 改
+     * {@code IS NULL}，{@code >} / {@code >= NULL} 改 {@code IS NOT NULL}；当该备选项恒假
+     * （{@code < NULL}）时返回 {@code null} 交由调用方丢弃。
+     */
+    private String compositeKeyComparison(String column, String operator, Object boundValue) {
+        if (boundValue != null) {
+            return String.format("%s %s %s", column, operator,
+                    formatValue(boundValue, columnType(column)));
+        }
+        if ("=".equals(operator) || "<=".equals(operator)) {
+            return String.format("%s IS NULL", column);
+        }
+        if (">".equals(operator) || ">=".equals(operator)) {
+            return String.format("%s IS NOT NULL", column);
+        }
+        return null;
     }
 
     /**

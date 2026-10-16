@@ -48,7 +48,9 @@ public class CompareExecutionSettings {
                         ? LocalCompareMode.fromString(executionOptions.getLocalCompareMode())
                         : LocalCompareMode.FULL)
                 .concurrencyConfig(resolveConcurrencyConfig(attributes))
-                .validateUniqueKeys(executionOptions == null || !Boolean.FALSE.equals(executionOptions.getValidateUniqueKeys()))
+                // 默认开放档（false）：重复键按多重集语义比较（值相等的重复行互相抵消）。
+                // 严格档（true）需调用方在 executionOptions 里显式开启，命中重复键时直接失败。
+                .validateUniqueKeys(executionOptions != null && Boolean.TRUE.equals(executionOptions.getValidateUniqueKeys()))
                 .maxDifferences(resolveMaxDifferences(executionOptions, attributes))
                 .build();
     }
@@ -61,7 +63,8 @@ public class CompareExecutionSettings {
                 checksumAlgorithm,
                 localCompareMode,
                 concurrencyConfig,
-                maxDifferences);
+                maxDifferences,
+                validateUniqueKeys);
     }
 
     public CompareExecutionSettings withChecksumAlgorithm(ChecksumAlgorithm checksumAlgorithm) {

@@ -244,6 +244,32 @@ public class TableSegmentTest {
         assertTrue(whereClause.contains("code < '00200'"));
     }
 
+    /**
+     * 单键列边界为 NULL（整列全 NULL 时 MIN/MAX 为 NULL）时不得静默丢弃谓词：
+     * 闭合上界（{@code <= NULL}）改写为 {@code IS NULL}，开区间上界（{@code < NULL}）恒假。
+     */
+    @Test
+    public void testBuildWhereClauseWithNullSingleColumnBounds() {
+        TableSegment inclusive = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Collections.singletonList("code"))
+                .minKey(Optional.of(Collections.singletonList(null)))
+                .maxKey(Optional.of(Collections.singletonList(null)))
+                .upperBoundInclusive(true)
+                .build();
+
+        assertEquals("code IS NULL", inclusive.buildWhereClause());
+
+        TableSegment exclusive = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Collections.singletonList("code"))
+                .minKey(Optional.of(Collections.singletonList(null)))
+                .maxKey(Optional.of(Collections.singletonList(null)))
+                .build();
+
+        assertEquals("1 = 0", exclusive.buildWhereClause());
+    }
+
     @Test
     public void testBuildWhereClauseUnquotesNumericKeyFromDriverString() {
         Map<String, ColumnInfo> columns = new LinkedHashMap<>();

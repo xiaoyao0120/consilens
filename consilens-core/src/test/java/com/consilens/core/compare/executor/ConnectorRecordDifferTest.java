@@ -182,7 +182,10 @@ class ConnectorRecordDifferTest {
                         .validateUniqueKeys(false)
                         .build());
 
-        assertEquals(3L, result.getStatistics().getTotalDifferences());
+        // 开放档按多重集语义：值相等的行互相抵消，仅 (1,B) 无对侧行 → 1 条差异
+        // （与 checksum/streaming 的多重集配对结论一致）。
+        assertEquals(1L, result.getStatistics().getTotalDifferences());
+        assertEquals(1L, result.getStatistics().getTargetMissingCount());
     }
 
     @Test

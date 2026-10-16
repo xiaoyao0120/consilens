@@ -123,14 +123,15 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
     @Override
     public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... parameters) {
         Connection connection = null;
-        PreparedStatement statement = null;
+        Statement statement = null;
         ResultSet resultSet = null;
 
         try {
             connection = getConnection();
-            statement = connection.prepareStatement(sql);
-            setParameters(statement, parameters);
-            resultSet = statement.executeQuery();
+            statement = createQueryStatement(connection, sql, parameters);
+            resultSet = statement instanceof PreparedStatement
+                    ? ((PreparedStatement) statement).executeQuery()
+                    : statement.executeQuery(sql);
 
             return processResultSet(resultSet, rowMapper);
         } catch (SQLException e) {
@@ -450,121 +451,6 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
 
 
     /**
-     * Build database-specific checksum expression.
-     */
-    protected String buildDatabaseChecksumExpression(List<String> columns, TableSegment segment) {
-        if (columns.isEmpty()) {
-            return "''";
-        }
-
-        String databaseType = getConnectorType();
-
-        switch (databaseType) {
-            case "postgresql":
-                return buildPostgreSQLChecksum(columns);
-            case "mysql":
-                return buildMySQLChecksum(columns);
-            case "oracle":
-                return buildOracleChecksum(columns);
-            case "sqlserver":
-            case "mssql":
-                return buildSQLServerChecksum(columns);
-            default:
-                return buildGenericChecksum(columns);
-        }
-    }
-
-    /**
-     * PostgreSQL checksum expression.
-     */
-    private String buildPostgreSQLChecksum(List<String> columns) {
-        StringBuilder expr = new StringBuilder();
-        if (columns.size() == 1) {
-            expr.append("COALESCE(CAST(").append(columns.get(0)).append(" AS TEXT), '')");
-        } else {
-            expr.append("MD5(");
-            for (int i = 0; i < columns.size(); i++) {
-                if (i > 0) {
-                    expr.append(" || '|' || ");
-                }
-                expr.append("COALESCE(CAST(").append(columns.get(i)).append(" AS TEXT), '')");
-            }
-            expr.append(")");
-        }
-        return expr.toString();
-    }
-
-    /**
-     * MySQL checksum expression.
-     */
-    private String buildMySQLChecksum(List<String> columns) {
-        StringBuilder expr = new StringBuilder();
-        expr.append("MD5(CONCAT_WS('|'");
-        for (String column : columns) {
-            expr.append(", COALESCE(CAST(").append(column).append(" AS CHAR), '')");
-        }
-        expr.append("))");
-        return expr.toString();
-    }
-
-    /**
-     * Oracle checksum expression.
-     */
-    private String buildOracleChecksum(List<String> columns) {
-        StringBuilder expr = new StringBuilder();
-        expr.append("STANDARD_HASH(");
-        if (columns.size() == 1) {
-            expr.append("COALESCE(TO_CHAR(").append(columns.get(0)).append("), '')");
-        } else {
-            expr.append("CONCAT(");
-            for (int i = 0; i < columns.size(); i++) {
-                if (i > 0)
-                    expr.append(", '|', ");
-                expr.append("COALESCE(TO_CHAR(").append(columns.get(i)).append("), '')");
-            }
-            expr.append(")");
-        }
-        expr.append(", 'MD5')");
-        return expr.toString();
-    }
-
-    /**
-     * SQL Server checksum expression.
-     */
-    private String buildSQLServerChecksum(List<String> columns) {
-        StringBuilder expr = new StringBuilder();
-        expr.append("CONVERT(VARCHAR(32), HASHBYTES('MD5', ");
-        if (columns.size() == 1) {
-            expr.append("COALESCE(CAST(").append(columns.get(0)).append(" AS VARCHAR(MAX)), '')");
-        } else {
-            expr.append("CONCAT(");
-            for (int i = 0; i < columns.size(); i++) {
-                if (i > 0)
-                    expr.append(", '|', ");
-                expr.append("COALESCE(CAST(").append(columns.get(i)).append(" AS VARCHAR(MAX)), '')");
-            }
-            expr.append(")");
-        }
-        expr.append("))");
-        return expr.toString();
-    }
-
-    /**
-     * Generic checksum expression.
-     */
-    private String buildGenericChecksum(List<String> columns) {
-        StringBuilder expr = new StringBuilder();
-        expr.append("MD5(CONCAT(");
-        for (int i = 0; i < columns.size(); i++) {
-            if (i > 0)
-                expr.append(", '|', ");
-            expr.append("COALESCE(CAST(").append(columns.get(i)).append(" AS VARCHAR), '')");
-        }
-        expr.append("))");
-        return expr.toString();
-    }
-
-    /**
      * Get min or max key values for the segment.
      */
     private List<Object> getMinMaxKey(TableSegment segment, boolean getMin) {
@@ -604,6 +490,14 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
         return null;
     }
 
+    private String appendNotNullKeys(List<String> keyColumns) {
+        StringBuilder condition = new StringBuilder();
+        for (String column : keyColumns) {
+            condition.append(" AND ").append(quoteColumn(column)).append(" IS NOT NULL");
+        }
+        return condition.toString();
+    }
+
     private String buildSingleColumnBoundaryKeyQuery(TableSegment segment, boolean getMin) {
         String whereClause = segment.buildWhereClause();
         return segment.hasRelationSource()
@@ -629,8 +523,13 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
 
         if (whereClause != null && !whereClause.trim().isEmpty()) {
             sql.append(" WHERE ").append(whereClause);
+        } else {
+            sql.append(" WHERE 1 = 1");
         }
 
+        // 边界键必须排除 NULL：NULL 无法用区间谓词表达，且各库对 NULL 的排序位置不同
+        // （PostgreSQL 的 DESC 把 NULL 排最前），取到 NULL 行会让整段谓词恒假、差异全漏。
+        sql.append(appendNotNullKeys(keyColumns));
         String direction = getMin ? "ASC" : "DESC";
         sql.append(" ORDER BY ");
         sql.append(String.join(", ",
@@ -675,6 +574,48 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
             log.error("Error querying segment: {}", segment.getTablePath(), e);
             throw new RuntimeException("Segment query failed", e);
         }
+    }
+
+    /**
+     * 唯一键探针（严格档）：按键表达式分组，列出 count>1 的键及两侧行数。
+     * 键表达式与比对口径一致（归一化 + 二进制安全），因此"仅大小写/空白不同的键"
+     * 也按契约算同一键。
+     *
+     * <p>探测失败（SQL 资源、方言不支持等）时抛出异常而非返回空结果：调用方必须能区分
+     * "键唯一"与"根本没验证成"——严格档（validateUniqueKeys=true）据此明确失败，
+     * 开放档（JoinDiffer）自行捕获并降级。
+     */
+    @Override
+    public List<String> findDuplicateKeys(TableSegment segment) {
+        Optional<TableSchema> schemaOpt = segment.getSchema();
+        Map<String, DataType> keyTypes = new HashMap<>();
+        if (schemaOpt.isPresent()) {
+            for (String key : segment.getKeyColumns()) {
+                DataType type = schemaOpt.get().getColumnType(key);
+                if (type != null) {
+                    keyTypes.put(key, type);
+                }
+            }
+        }
+        String schema = segment.getTablePath().getSchema().orElse(null);
+        String table = segment.getTablePath().getTableName();
+        String sql = dialect.getSqlQueryGenerator().getDuplicateKeyProbeSQL(
+                schema, table, segment.getKeyColumns(), keyTypes, segment.buildWhereClause());
+        log.info("Executing duplicate-key probe: {}", sql);
+        List<Object[]> rows = query(sql, Object[].class);
+        List<String> violations = new ArrayList<>();
+        for (Object[] row : rows) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < row.length - 1; i++) {
+                if (i > 0) {
+                    sb.append(", ");
+                }
+                sb.append(row[i]);
+            }
+            sb.append(" => ").append(row[row.length - 1]).append(" 行");
+            violations.add(sb.toString());
+        }
+        return violations;
     }
 
     @Override
@@ -762,10 +703,10 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
         List<String> keyColumns = segment.getKeyColumns();
         String whereClause = segment.buildWhereClause();
 
-        String baseSelect = selectSql(segment, keyColumns, whereClause, keyColumns);
+        String baseSelect = selectSql(segment, keyColumns, whereClause, null);
 
         String limitClause = dialect.getSqlQueryGenerator().getLimitClause(offset, limit);
-        return baseSelect + " " + limitClause;
+        return baseSelect + nativeKeyOrderClause(keyColumns) + " " + limitClause;
     }
 
     @Override
@@ -789,10 +730,30 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
             whereClause = keysetClause;
         }
 
-        String baseSelect = selectSql(segment, keyColumns, whereClause, keyColumns);
+        String baseSelect = selectSql(segment, keyColumns, whereClause, null);
 
         String limitClause = dialect.getSqlQueryGenerator().getLimitClause(0, limit);
-        return baseSelect + " " + limitClause;
+        return baseSelect + nativeKeyOrderClause(keyColumns) + " " + limitClause;
+    }
+
+    /**
+     * 采样必须按**键的原生顺序**排序：offset/keyset 采样的前提是"第 N 行"与键区间一一对应。
+     * 不能复用 {@code getSelectSQL} 的字符串化 ORDER BY（那是本地归并比对的跨方言对齐口径），
+     * 否则字典序会把边界键取成完全不同的行——实测 dq_cmp_scale_100k 因此把
+     * [54994,100010] 切成 [100000,100010]+[100010,100010]，(54994,100000) 整段从未参与比对。
+     */
+    private String nativeKeyOrderClause(List<String> keyColumns) {
+        if (keyColumns == null || keyColumns.isEmpty()) {
+            return "";
+        }
+        StringBuilder clause = new StringBuilder(" ORDER BY ");
+        for (int i = 0; i < keyColumns.size(); i++) {
+            if (i > 0) {
+                clause.append(", ");
+            }
+            clause.append(quoteColumn(keyColumns.get(i)));
+        }
+        return clause.toString();
     }
 
     @Override
@@ -946,11 +907,26 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
         }
         
         List<String> selectColumns = new ArrayList<>();
+        java.util.Set<String> emitted = new java.util.HashSet<>();
         for (String column : relevantColumns) {
+            // SQL-source segments may carry the same column twice under different
+            // identifier case (config key vs metadata fields); Oracle rejects the
+            // duplicate alias with ORA-00960, so deduplicate case-insensitively.
+            if (!emitted.add(column.toLowerCase(java.util.Locale.ROOT))) {
+                continue;
+            }
             DataType dataType = columnDataTypes.get(column);
+            // Key columns must stay raw in the SELECT: range predicates and ORDER BY
+            // reference the column name, and dialects like ClickHouse resolve a WHERE
+            // reference to a same-named SELECT alias (string-cast key + numeric range
+            // bound fails with NO_COMMON_TYPE). Keys are normalized Java-side.
+            if (keyColumns.contains(column)) {
+                selectColumns.add(quote(column) + " AS " + quote(column));
+                continue;
+            }
             // Use DataTypeHandler to normalize the column (same as row-hash query)
             // Use original column names as aliases for compatibility
-            selectColumns.add(dialect.getDataTypeHandler().normalizeColumn(column, dataType) + 
+            selectColumns.add(dialect.getDataTypeHandler().normalizeColumn(column, dataType) +
                     " AS " + quote(column));
         }
         String whereClause = segment.buildWhereClause();
@@ -972,6 +948,15 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
      * maintaining consistency across local comparison modes.
      */
     protected String buildNormalizedQuery(TableSegment segment) {
+        return buildNormalizedQuery(segment, null);
+    }
+
+    /**
+     * 与 {@link #buildNormalizedQuery(TableSegment)} 同形，额外拼接引擎生成的谓词
+     * （如开放档 join 的"键重复"过滤器）。额外谓词不经用户 where 校验器（它是引擎构造的、
+     * 含 EXISTS/子查询，校验器会拒绝函数调用）；用户 filter 仍走 segment.buildWhereClause() 校验。
+     */
+    protected String buildNormalizedQuery(TableSegment segment, String extraPredicate) {
         // Get schema and column information
         Optional<TableSchema> schemaOpt = segment.getSchema();
         if (!schemaOpt.isPresent()) {
@@ -992,15 +977,26 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
         }
         
         List<String> selectColumns = new ArrayList<>();
+        java.util.Set<String> emitted = new java.util.HashSet<>();
         for (String column : relevantColumns) {
+            // Deduplicate case-insensitively (see buildNormalizedQueryByKeys).
+            if (!emitted.add(column.toLowerCase(java.util.Locale.ROOT))) {
+                continue;
+            }
             DataType dataType = columnDataTypes.get(column);
+            // Keep key columns raw so WHERE/ORDER BY never resolve to a normalized
+            // alias (see buildNormalizedQueryByKeys); keys are normalized Java-side.
+            if (keyColumns.contains(column)) {
+                selectColumns.add(quote(column) + " AS " + quote(column));
+                continue;
+            }
             // Use DataTypeHandler to normalize the column (same as row-hash query)
             // Use original column names as aliases for compatibility
-            selectColumns.add(dialect.getDataTypeHandler().normalizeColumn(column, dataType) + 
+            selectColumns.add(dialect.getDataTypeHandler().normalizeColumn(column, dataType) +
                     " AS " + quote(column));
         }
 
-        String whereClause = segment.buildWhereClause();
+        String whereClause = combinePredicates(segment.buildWhereClause(), extraPredicate);
 
         String sql = selectSql(segment, selectColumns, whereClause, keyColumns);
         
@@ -1008,6 +1004,27 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
                 segment.getDisplayName());
         
         return sql;
+    }
+
+    private String combinePredicates(String whereClause, String extraPredicate) {
+        boolean hasWhere = whereClause != null && !whereClause.trim().isEmpty();
+        boolean hasExtra = extraPredicate != null && !extraPredicate.trim().isEmpty();
+        if (hasWhere && hasExtra) {
+            return "(" + whereClause + ") AND (" + extraPredicate + ")";
+        }
+        return hasWhere ? whereClause : (hasExtra ? extraPredicate : null);
+    }
+
+    @Override
+    public List<Object[]> querySegmentWithPredicate(TableSegment segment, String extraPredicate) {
+        try {
+            String selectQuery = buildNormalizedQuery(segment, extraPredicate);
+            log.debug("Executing normalized segment query with predicate: {}", selectQuery);
+            return query(selectQuery, Object[].class);
+        } catch (Exception e) {
+            log.error("Error querying segment with predicate: {}", segment.getTablePath(), e);
+            throw new RuntimeException("Segment query failed", e);
+        }
     }
 
 
@@ -1061,6 +1078,24 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
                 throw new RuntimeException("Error mapping result to type " + resultType, e);
             }
         };
+    }
+
+    /**
+     * 有参查询始终用 {@link PreparedStatement}；无参查询是否可走服务端 prepare
+     * 由 {@link DatabaseDialect#supportsServerSidePrepare()} 决定（Presto 返回 false，
+     * 改用普通 {@link Statement}，原因见其方言实现）。
+     */
+    private Statement createQueryStatement(Connection connection, String sql, Object[] parameters)
+            throws SQLException {
+        if (parameters != null && parameters.length > 0) {
+            PreparedStatement prepared = connection.prepareStatement(sql);
+            setParameters(prepared, parameters);
+            return prepared;
+        }
+        if (!dialect.supportsServerSidePrepare()) {
+            return connection.createStatement();
+        }
+        return connection.prepareStatement(sql);
     }
 
     protected void setParameters(PreparedStatement statement, Object... parameters) throws SQLException {

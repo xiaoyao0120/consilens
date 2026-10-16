@@ -62,17 +62,24 @@ public class LocalDiffEngine {
 
         log.info("Finding differences between {} and {} rows", rows1.size(), rows2.size());
 
-        // Group rows by primary keys so we can reason about ADDED/REMOVED/MODIFIED row-by-row
-        Map<List<Object>, List<Object[]>> rowsByPk1 = groupRowsByPrimaryKey(rows1, keyColumns1.size());
-        Map<List<Object>, List<Object[]>> rowsByPk2 = groupRowsByPrimaryKey(rows2, keyColumns2.size());
+        // Group rows by primary keys so we can reason about ADDED/REMOVED/MODIFIED row-by-row.
+        // Keys are grouped by their *normalized* form: both sides may declare the same logical key
+        // with different physical types (INT vs VARCHAR), and comparing raw values would make
+        // Integer(21) and String("21") distinct keys, so every row would be reported as
+        // one-sided missing.
+        Map<String, PrimaryKeyGroup> rowsByPk1 = groupRowsByPrimaryKey(rows1, keyColumns1, columnTypes1);
+        Map<String, PrimaryKeyGroup> rowsByPk2 = groupRowsByPrimaryKey(rows2, keyColumns2, columnTypes2);
 
         List<DiffRow> differences = new ArrayList<>();
 
         // Process keys from table1, then keys that only exist in table2, so we
         // do not need a third full-size collection for all primary keys.
-        for (List<Object> pk : rowsByPk1.keySet()) {
-            List<Object[]> pkRows1 = rowsByPk1.getOrDefault(pk, Collections.emptyList());
-            List<Object[]> pkRows2 = rowsByPk2.getOrDefault(pk, Collections.emptyList());
+        for (Map.Entry<String, PrimaryKeyGroup> entry : rowsByPk1.entrySet()) {
+            PrimaryKeyGroup group1 = entry.getValue();
+            PrimaryKeyGroup group2 = rowsByPk2.get(entry.getKey());
+            List<Object> pk = group1.rawKey;
+            List<Object[]> pkRows1 = group1.rows;
+            List<Object[]> pkRows2 = group2 == null ? Collections.emptyList() : group2.rows;
 
             // Extract relevant columns (excluding ignored columns)
             List<Object[]> relevantRows1 = extractRelevantColumns(pkRows1, keyColumns1, extraColumns1);
@@ -88,17 +95,18 @@ public class LocalDiffEngine {
             differences.addAll(pkDifferences);
         }
 
-        for (List<Object> pk : rowsByPk2.keySet()) {
-            if (rowsByPk1.containsKey(pk)) {
+        for (Map.Entry<String, PrimaryKeyGroup> entry : rowsByPk2.entrySet()) {
+            if (rowsByPk1.containsKey(entry.getKey())) {
                 continue;
             }
-            List<Object[]> pkRows2 = rowsByPk2.get(pk);
+            PrimaryKeyGroup group2 = entry.getValue();
+            List<Object[]> pkRows2 = group2.rows;
             List<Object[]> relevantRows2 = extractRelevantColumns(pkRows2, keyColumns2, extraColumns2);
             List<String> columnNames1 = new ArrayList<>(keyColumns1);
             columnNames1.addAll(extraColumns1);
             List<String> columnNames2 = new ArrayList<>(keyColumns2);
             columnNames2.addAll(extraColumns2);
-            List<DiffRow> pkDifferences = findPrimaryKeyDifferences(pk, Collections.emptyList(), pkRows2,
+            List<DiffRow> pkDifferences = findPrimaryKeyDifferences(group2.rawKey, Collections.emptyList(), pkRows2,
                     Collections.emptyList(), relevantRows2, columnNames1, columnNames2, columnTypes1, columnTypes2);
             differences.addAll(pkDifferences);
         }
@@ -108,18 +116,53 @@ public class LocalDiffEngine {
     }
 
     /**
-     * Group rows by their primary key values.
+     * Rows sharing one logical primary key, kept together with the raw key of their own side so
+     * difference rows can still report the side-native key values.
      */
-    private static Map<List<Object>, List<Object[]>> groupRowsByPrimaryKey(List<Object[]> rows, int keyColumnCount) {
-        Map<List<Object>, List<Object[]>> groupedRows = new HashMap<>();
+    private static final class PrimaryKeyGroup {
+        private final List<Object> rawKey;
+        private final List<Object[]> rows = new ArrayList<>();
+
+        private PrimaryKeyGroup(List<Object> rawKey) {
+            this.rawKey = rawKey;
+        }
+    }
+
+    /**
+     * Group rows by their primary key values, normalized the same way the checksum path normalizes
+     * keys (see {@link ValueNormalizer}), then joined on the normalized form.
+     */
+    private static Map<String, PrimaryKeyGroup> groupRowsByPrimaryKey(List<Object[]> rows,
+            List<String> keyColumns, Map<String, DataType> columnTypes) {
+        Map<String, PrimaryKeyGroup> groupedRows = new LinkedHashMap<>();
+        int keyColumnCount = keyColumns.size();
 
         for (Object[] row : rows) {
-            // Copy only the PK portion so duplicate rows with the same key compress into the same bucket.
-            List<Object> primaryKey = Arrays.asList(Arrays.copyOf(row, keyColumnCount));
-            groupedRows.computeIfAbsent(primaryKey, k -> new ArrayList<>()).add(row);
+            String normalizedKey = normalizedKey(row, keyColumns, columnTypes);
+            PrimaryKeyGroup group = groupedRows.get(normalizedKey);
+            if (group == null) {
+                // Copy only the PK portion so duplicate rows with the same key compress into the same bucket.
+                group = new PrimaryKeyGroup(Arrays.asList(Arrays.copyOf(row, keyColumnCount)));
+                groupedRows.put(normalizedKey, group);
+            }
+            group.rows.add(row);
         }
 
         return groupedRows;
+    }
+
+    private static String normalizedKey(Object[] row, List<String> keyColumns,
+            Map<String, DataType> columnTypes) {
+        StringBuilder builder = new StringBuilder();
+        int keyColumnCount = keyColumns.size();
+        for (int index = 0; index < keyColumnCount; index++) {
+            String column = keyColumns.get(index);
+            DataType dataType = columnTypes == null ? null : columnTypes.get(column);
+            builder.append(ValueNormalizer.normalizeValue(row[index],
+                    dataType == null ? DataType.UNKNOWN : dataType));
+            builder.append('\u0001');
+        }
+        return builder.toString();
     }
 
     /**
@@ -196,19 +239,51 @@ public class LocalDiffEngine {
                 }
             } else {
                 /*
-                 * Multiple physical rows share the same logical primary key on one/both sides.
-                 * Because this violates the uniqueness assumption, surface every instance as a
-                 * diff: rows from table1 become REMOVED, rows from table2 become ADDED.
-                 * This makes the conflict explicit in downstream reports instead of silently
-                 * choosing an arbitrary representative.
+                 * 同键多行（重复键开放档 validateUniqueKeys=false）：多重集配对。
+                 * 值相等的行互相抵消（数据相同必须报 0）；剩余行两侧按"规范化整行签名"
+                 * 排序后按序 1:1 配对为 MISMATCH（含 changedColumns）；配不上的行按侧报
+                 * SM/TM。每行带 occurrence、键带 keyMultiplicity，让"键不唯一"可见。
+                 * 与 streaming 路径共用 MultisetRowPairing，保证两条计划结论一致。
                  */
-                for (Object[] row1 : rows1) {
-                    List<Object> values = Arrays.asList(row1);
-                    differences.add(DiffRow.removed(primaryKey, values, columnNames1));
+                List<String> sourceSignatures = new ArrayList<>(relevantRows1.size());
+                for (Object[] row : relevantRows1) {
+                    sourceSignatures.add(MultisetRowPairing.signature(
+                            normalizeRowValues(row, columnNames1, columnTypes1)));
                 }
-                for (Object[] row2 : rows2) {
-                    List<Object> values = Arrays.asList(row2);
-                    differences.add(DiffRow.added(primaryKey, values, columnNames2));
+                List<String> targetSignatures = new ArrayList<>(relevantRows2.size());
+                for (Object[] row : relevantRows2) {
+                    targetSignatures.add(MultisetRowPairing.signature(
+                            normalizeRowValues(row, columnNames2, columnTypes2)));
+                }
+                MultisetRowPairing.Outcome outcome = MultisetRowPairing.pair(sourceSignatures, targetSignatures);
+                log.info("Duplicate-key group PK={}: sourceRows={}, targetRows={}, equal={}, pairedMismatch={},"
+                                + " sourceOnly={}, targetOnly={}",
+                        primaryKey, relevantRows1.size(), relevantRows2.size(), outcome.equalPairs.size(),
+                        outcome.mismatchPairs.size(), outcome.sourceOnly.size(), outcome.targetOnly.size());
+
+                for (int[] pair : outcome.mismatchPairs) {
+                    Object[] row1 = relevantRows1.get(pair[0]);
+                    Object[] row2 = relevantRows2.get(pair[1]);
+                    List<String> changedColumns1 = new ArrayList<>();
+                    List<String> changedColumns2 = new ArrayList<>();
+                    findChangedColumnsWithDetails(row1, row2, columnNames1, changedColumns1, changedColumns2,
+                            columnTypes1, columnTypes2);
+                    DiffRow diff = DiffRow.modified(primaryKey,
+                            normalizeRowValues(row1, columnNames1, columnTypes1),
+                            normalizeRowValues(row2, columnNames2, columnTypes2),
+                            columnNames1, columnNames2, changedColumns1, changedColumns2);
+                    differences.add(DiffRow.withExtraMetadata(diff, MultisetRowPairing.metadata(
+                            outcome.sourceOccurrence[pair[0]], relevantRows1.size(), relevantRows2.size())));
+                }
+                for (int index : outcome.sourceOnly) {
+                    DiffRow diff = DiffRow.removed(primaryKey, Arrays.asList(rows1.get(index)), columnNames1);
+                    differences.add(DiffRow.withExtraMetadata(diff, MultisetRowPairing.metadata(
+                            outcome.sourceOccurrence[index], relevantRows1.size(), relevantRows2.size())));
+                }
+                for (int index : outcome.targetOnly) {
+                    DiffRow diff = DiffRow.added(primaryKey, Arrays.asList(rows2.get(index)), columnNames2);
+                    differences.add(DiffRow.withExtraMetadata(diff, MultisetRowPairing.metadata(
+                            outcome.targetOccurrence[index], relevantRows1.size(), relevantRows2.size())));
                 }
             }
         }
@@ -485,7 +560,30 @@ public class LocalDiffEngine {
 
         String str = value.toString().trim();
 
+        // JSON 值的紧凑规范化：不同引擎渲染同一 JSON 的空格策略不同
+        // （mysql/{“a”: 1} vs trino json_format/{“a”:1}），语义等价的 JSON
+        // 必须比较紧凑形式。只在 JSON 结构可解析时应用。
+        if (str.length() >= 2 && ((str.startsWith("{") && str.endsWith("}"))
+                || (str.startsWith("[") && str.endsWith("]")))) {
+            String compact = compactJson(str);
+            if (compact != null) {
+                return compact;
+            }
+        }
+
         return str;
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    private static String compactJson(String str) {
+        try {
+            Object tree = JSON_MAPPER.readTree(str);
+            return JSON_MAPPER.writeValueAsString(tree);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

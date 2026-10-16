@@ -47,6 +47,26 @@ public class TableSegmentCompositeNullBoundTest {
         assertTrue(where.contains("k1 IS NULL"), "相等前缀中的 NULL 应改写为 IS NULL: " + where);
     }
 
+    /**
+     * 上界末分量为 NULL 且区间闭合（{@code <=}）时，按「NULL 排在最前」口径应为 IS NULL；
+     * 直接丢弃谓词会把上界之外的行也纳入本段，漏掉 NULL 尾部行。
+     */
+    @Test
+    public void nullInclusiveUpperBoundIsRenderedWithIsNullSemantics() {
+        TableSegment segment = TableSegment.builder()
+                .tablePath(TablePath.fromString("dq_cmp_edge_a"))
+                .keyColumns(List.of("k1", "k2"))
+                .minKey(java.util.Optional.of(java.util.Arrays.asList("ABC", "s1")))
+                .maxKey(java.util.Optional.of(java.util.Arrays.asList("ABC", null)))
+                .upperBoundInclusive(true)
+                .build();
+
+        String where = segment.buildWhereClause();
+
+        assertFalse(where.contains("<= NULL"), "不得生成与 NULL 的比较: " + where);
+        assertTrue(where.contains("k2 IS NULL"), "NULL 尾部上界（<=）应改写为 IS NULL: " + where);
+    }
+
     @Test
     public void nonNullBoundsKeepPlainComparisons() {
         String where = segment(java.util.Arrays.asList("1", "s1"),

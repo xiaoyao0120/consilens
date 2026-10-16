@@ -187,13 +187,16 @@ public class RowSampleSegmentStrategy implements SegmentStrategy {
 
     private List<List<Object>> executeSamplingQueryRows(TableSegment table, String sql) {
         try {
-            return table.getDatabase().query(sql, (rs, rowNum) -> {
+            List<List<Object>> rows = table.getDatabase().query(sql, (rs, rowNum) -> {
                 List<Object> keyValues = new ArrayList<>();
                 for (int i = 1; i <= table.getKeyColumns().size(); i++) {
                     keyValues.add(rs.getObject(i));
                 }
                 return keyValues;
             });
+            log.debug("Sampling query returned {} rows, last={}: {}", rows.size(),
+                    rows.isEmpty() ? null : rows.get(rows.size() - 1), sql);
+            return rows;
         } catch (Exception e) {
             log.error("Failed to execute sampling query: {}", sql, e);
             return List.of();

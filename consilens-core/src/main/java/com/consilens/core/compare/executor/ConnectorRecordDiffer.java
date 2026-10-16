@@ -15,6 +15,7 @@ import com.consilens.connector.api.planner.CompareSegment;
 import com.consilens.connector.api.record.CanonicalRecord;
 import com.consilens.connector.api.record.CanonicalValue;
 import com.consilens.connector.api.record.CloseableIterator;
+import com.consilens.core.algorithm.MultisetRowPairing;
 import com.consilens.core.algorithm.ValueNormalizer;
 import com.consilens.core.compare.CompareExecutionSettings;
 import com.consilens.core.diff.DiffResult;
@@ -49,6 +50,8 @@ final class ConnectorRecordDiffer {
         long lastProgressLog = 0L;
         long sourceRowCount = 0L;
         long targetRowCount = 0L;
+        long duplicateKeyGroups = 0L;
+        long duplicateKeyRows = 0L;
 
         log.info("Starting ordered streaming compare: {} <-> {}",
                 resolveTablePath(source.getResource(), source.getDataset()).getFullPath(),
@@ -93,16 +96,56 @@ final class ConnectorRecordDiffer {
 
                         if (settings.isValidateUniqueKeys()
                                 && (sourceRows.size() > 1 || targetRows.size() > 1)) {
-                            throw new ConnectorException("Duplicate primary keys found for key: " + key.sortKey());
+                            throw new ConnectorException("唯一键校验失败：键 " + key.displayParts()
+                                    + " 在两侧分别出现 " + sourceRows.size() + " / " + targetRows.size()
+                                    + " 行（validateUniqueKeys=true）。如需按多重集语义比较"
+                                    + "（值相等的重复行互相抵消），请设置 executionOptions.validateUniqueKeys=false。");
                         }
 
                         if (sourceRows.size() != 1 || targetRows.size() != 1) {
+                            // 重复键开放档：与 checksum 的归因共用 MultisetRowPairing（抵消 → 按序配对 → SM/TM），
+                            // 保证两条计划对同一份数据给出完全一致的结论。
+                            List<String> sourceSignatures = new ArrayList<>(sourceRows.size());
                             for (RecordRow row : sourceRows) {
-                                addDifference(differences, DiffRow.removed(key.displayParts(), row.values, sourceData.columns), settings);
+                                sourceSignatures.add(MultisetRowPairing.signature(row.normalizedValues));
+                            }
+                            List<String> targetSignatures = new ArrayList<>(targetRows.size());
+                            for (RecordRow row : targetRows) {
+                                targetSignatures.add(MultisetRowPairing.signature(row.normalizedValues));
+                            }
+                            MultisetRowPairing.Outcome outcome = MultisetRowPairing.pair(sourceSignatures, targetSignatures);
+                            duplicateKeyGroups++;
+                            duplicateKeyRows += sourceRows.size() + targetRows.size();
+                            // 逐组明细只在 DEBUG 可见，避免大量重复键时刷屏；组数与行数汇总在完成日志里。
+                            log.debug("Duplicate-key group key={}: sourceRows={}, targetRows={}, equal={},"
+                                            + " pairedMismatch={}, sourceOnly={}, targetOnly={}",
+                                    key.sortKey(), sourceRows.size(), targetRows.size(), outcome.equalPairs.size(),
+                                    outcome.mismatchPairs.size(), outcome.sourceOnly.size(), outcome.targetOnly.size());
+
+                            for (int[] pair : outcome.mismatchPairs) {
+                                RecordRow sourceRow = sourceRows.get(pair[0]);
+                                RecordRow targetRow = targetRows.get(pair[1]);
+                                DiffRow diff = DiffRow.modified(key.displayParts(),
+                                        sourceRow.values, targetRow.values,
+                                        sourceData.columns, targetData.columns,
+                                        changedColumns(sourceData.columns, sourceRow.normalizedValues, targetRow.normalizedValues),
+                                        changedColumns(targetData.columns, sourceRow.normalizedValues, targetRow.normalizedValues));
+                                addDifference(differences, DiffRow.withExtraMetadata(diff, MultisetRowPairing.metadata(
+                                        outcome.sourceOccurrence[pair[0]], sourceRows.size(), targetRows.size())), settings);
+                                mismatchCount++;
+                            }
+                            for (int index : outcome.sourceOnly) {
+                                DiffRow diff = DiffRow.removed(key.displayParts(), sourceRows.get(index).values,
+                                        sourceData.columns);
+                                addDifference(differences, DiffRow.withExtraMetadata(diff, MultisetRowPairing.metadata(
+                                        outcome.sourceOccurrence[index], sourceRows.size(), targetRows.size())), settings);
                                 targetMissingCount++;
                             }
-                            for (RecordRow row : targetRows) {
-                                addDifference(differences, DiffRow.added(key.displayParts(), row.values, targetData.columns), settings);
+                            for (int index : outcome.targetOnly) {
+                                DiffRow diff = DiffRow.added(key.displayParts(), targetRows.get(index).values,
+                                        targetData.columns);
+                                addDifference(differences, DiffRow.withExtraMetadata(diff, MultisetRowPairing.metadata(
+                                        outcome.targetOccurrence[index], sourceRows.size(), targetRows.size())), settings);
                                 sourceMissingCount++;
                             }
                         } else {
@@ -138,15 +181,22 @@ final class ConnectorRecordDiffer {
             sourceRowCount = sourceCursor.rowCount();
             targetRowCount = targetCursor.rowCount();
         } catch (Exception e) {
+            log.error("Ordered streaming compare failed", e);
+            // 把根因带进消息：否则上层只看到"Failed during ordered streaming compare"，
+            // 排查需要翻 DEBUG 日志（且部分驱动异常不会打栈）。
             throw e instanceof ConnectorException
                     ? (ConnectorException) e
-                    : new ConnectorException("Failed during ordered streaming compare", e);
+                    : new ConnectorException("Failed during ordered streaming compare: "
+                            + e.getClass().getSimpleName() + ": " + e.getMessage(), e);
         }
 
-        log.info("Completed ordered streaming compare: sourceRows={}, targetRows={}, differences={}",
+        log.info("Completed ordered streaming compare: sourceRows={}, targetRows={}, differences={},"
+                        + " duplicateKeyGroups={}, duplicateKeyRows={}",
                 sourceRowCount,
                 targetRowCount,
-                sourceMissingCount + targetMissingCount + mismatchCount);
+                sourceMissingCount + targetMissingCount + mismatchCount,
+                duplicateKeyGroups,
+                duplicateKeyRows);
         return DiffResult.builder()
                 .differences(differences)
                 .statistics(DiffResult.DiffStatistics.builder()
@@ -219,7 +269,6 @@ final class ConnectorRecordDiffer {
         List<Object> rawValues = new ArrayList<>(columns.size());
         List<Object> normalizedValues = new ArrayList<>(columns.size());
         List<Object> normalizedKey = new ArrayList<>();
-        List<Object> rawKey = new ArrayList<>();
         List<String> keyColumns = keySpec != null && keySpec.getFields() != null ? keySpec.getFields() : List.of();
 
         for (String column : columns) {
@@ -227,19 +276,21 @@ final class ConnectorRecordDiffer {
             Object rawValue = value != null ? value.getValue() : null;
             DataType dataType = types.getOrDefault(column, DataType.UNKNOWN);
             String normalized = ValueNormalizer.normalizeValue(rawValue, dataType);
+            if (normalized == null) {
+                // 契约：NULL 归一为 ''。个别驱动/类型分支可能返回 null，
+                // 而 NormalizedKey 用 List.copyOf（拒绝 null 元素）会直接 NPE。
+                log.warn("Normalizer returned null for column '{}' (type={}, value={}), treating as empty",
+                        column, dataType, rawValue);
+                normalized = "";
+            }
             rawValues.add(rawValue);
             normalizedValues.add(normalized);
             if (keyColumns.contains(column)) {
                 normalizedKey.add(normalized);
-                rawKey.add(rawValue);
             }
         }
 
-        if (rawKey.isEmpty() && record.getKey() != null && record.getKey().getParts() != null) {
-            rawKey.addAll(record.getKey().getParts());
-        }
-
-        return new RecordRow(new NormalizedKey(normalizedKey, rawKey), rawValues, normalizedValues);
+        return new RecordRow(new NormalizedKey(normalizedKey), rawValues, normalizedValues);
     }
 
     private List<String> columns(KeySpec keySpec, ComparisonSpec comparisons, SchemaDescriptor schema) {
@@ -289,9 +340,19 @@ final class ConnectorRecordDiffer {
         Map<String, FieldDescriptor> fieldMap = schema != null && schema.getFieldMap() != null
                 ? schema.getFieldMap()
                 : Collections.emptyMap();
+        Map<String, FieldDescriptor> folded = new LinkedHashMap<>();
+        for (Map.Entry<String, FieldDescriptor> entry : fieldMap.entrySet()) {
+            folded.putIfAbsent(entry.getKey().toLowerCase(Locale.ROOT), entry.getValue());
+        }
         Map<String, DataType> result = new LinkedHashMap<>();
         for (String column : columns) {
+            // 元数据可能给出大写列名（Oracle 全大写），任务/段用小写：
+            // 大小写敏感查找会落空 → 类型 UNKNOWN → 本地归一化退化成对象 toString
+            // （byte[] 变 [B@hash、TIMESTAMPTZ 变句柄），两侧必然不等，整表误报。
             FieldDescriptor field = fieldMap.get(column);
+            if (field == null) {
+                field = folded.get(column.toLowerCase(Locale.ROOT));
+            }
             String canonicalType = field != null && field.getTypeDescriptor() != null
                     ? LegacyTypeMapper.toCanonicalType(field.getTypeDescriptor())
                     : field != null ? field.getCanonicalType() : null;
@@ -434,11 +495,11 @@ final class ConnectorRecordDiffer {
 
     private static final class NormalizedKey implements Comparable<NormalizedKey> {
         private final List<Object> parts;
-        private final List<Object> rawParts;
 
-        private NormalizedKey(List<Object> parts, List<Object> rawParts) {
-            this.parts = List.copyOf(parts);
-            this.rawParts = rawParts == null ? List.of() : List.copyOf(rawParts);
+        private NormalizedKey(List<Object> parts) {
+            // 必须用容忍 null 的拷贝：复合键允许 NULL 键值（edge 表即有此用例），
+            // 而 List.copyOf 遇到 null 元素直接 NPE（实测 oracle edge 整个任务失败）。
+            this.parts = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(parts));
         }
 
         private String sortKey() {
@@ -460,11 +521,9 @@ final class ConnectorRecordDiffer {
         public int compareTo(NormalizedKey other) {
             int max = Math.max(parts.size(), other.parts.size());
             for (int index = 0; index < max; index++) {
-                Object leftRaw = index < rawParts.size() ? rawParts.get(index) : null;
-                Object rightRaw = index < other.rawParts.size() ? other.rawParts.get(index) : null;
                 Object leftPart = index < parts.size() ? parts.get(index) : null;
                 Object rightPart = index < other.parts.size() ? other.parts.get(index) : null;
-                int comparison = comparePart(leftRaw, rightRaw, leftPart, rightPart);
+                int comparison = comparePart(leftPart, rightPart);
                 if (comparison != 0) {
                     return comparison;
                 }
@@ -472,24 +531,11 @@ final class ConnectorRecordDiffer {
             return 0;
         }
 
-        private int comparePart(Object leftRaw, Object rightRaw, Object leftPart, Object rightPart) {
-            if (leftRaw == null && rightRaw == null) {
-                return compareStrings(leftPart, rightPart);
-            }
-            if (leftRaw == null) {
-                return -1;
-            }
-            if (rightRaw == null) {
-                return 1;
-            }
-            if (leftRaw instanceof Number && rightRaw instanceof Number) {
-                return new BigDecimal(leftRaw.toString()).compareTo(new BigDecimal(rightRaw.toString()));
-            }
-            if (leftRaw instanceof Comparable && leftRaw.getClass().isInstance(rightRaw)) {
-                @SuppressWarnings({"rawtypes", "unchecked"})
-                int comparison = ((Comparable) leftRaw).compareTo(rightRaw);
-                return comparison;
-            }
+        private int comparePart(Object leftPart, Object rightPart) {
+            // 一律按"规范化字符串"比较，与 SQL 侧 ORDER BY 的字符串形态（orderByExpression）
+            // 保持同一套排序语义：归并要求两侧游标的推进顺序与 compareTo 一致，
+            // 一旦一侧按数字序、另一侧按字典序（或 Java 侧按数字、SQL 侧按字典），
+            // 归并会错位并把同键行判成互不匹配（实测 Oracle typediff 的 NUMBER vs VARCHAR2 键）。
             return compareStrings(leftPart, rightPart);
         }
 

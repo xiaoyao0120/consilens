@@ -84,6 +84,12 @@ public abstract class TableDiffer implements DiffEmitter {
             // Align schemas between the two segments before any expensive work
             validateAndAdjustColumns(table1, table2);
 
+            // 严格档（validateUniqueKeys=true，非默认）：键必须唯一。重复键下 join 会 N×M 倍增、
+            // checksum 的归因会退化成整键 SM+TM，都属于"按键比对不成立"，必须在开始前明确失败并给出证据。
+            if (config.isValidateUniqueKeys()) {
+                DuplicateKeyGuard.assertUnique(table1, table2);
+            }
+
             // Build the base info tree that the concrete algorithms can enrich
             InfoTreeRecorder infoTreeRecorder = new InfoTreeRecorder("diff");
             infoTreeRecorder.startNode("diff", null, "diff", "root", "diff", 0);
@@ -107,6 +113,11 @@ public abstract class TableDiffer implements DiffEmitter {
 
         } catch (Exception e) {
             log.error("Error during table diffing", e);
+            // 唯一键校验失败等"业务性拒绝"要保留原始信息（键与两侧行数），
+            // 不能被 "Table diff failed" 包一层导致明细丢失。
+            if (e instanceof com.consilens.connector.api.ConnectorException) {
+                return CompletableFuture.failedFuture(e);
+            }
             return CompletableFuture.failedFuture(new RuntimeException("Table diff failed", e));
         }
     }
@@ -274,12 +285,13 @@ public abstract class TableDiffer implements DiffEmitter {
         private final LocalCompareMode localCompareMode;
         private final ConcurrencyConfig concurrencyConfig;
         private final long maxDifferences;
+        private final boolean validateUniqueKeys;
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,
                            boolean enableProfiling, ChecksumAlgorithm checksumAlgorithm,
                            LocalCompareMode localCompareMode,
                            ConcurrencyConfig concurrencyConfig,
-                           long maxDifferences) {
+                           long maxDifferences, boolean validateUniqueKeys) {
             this.bisectionFactor = bisectionFactor;
             this.bisectionThreshold = bisectionThreshold;
             this.enableProfiling = enableProfiling;
@@ -288,6 +300,21 @@ public abstract class TableDiffer implements DiffEmitter {
             this.localCompareMode = localCompareMode != null ? localCompareMode : LocalCompareMode.FULL;
             this.concurrencyConfig = concurrencyConfig != null ? concurrencyConfig : ConcurrencyConfig.defaultConfig();
             this.maxDifferences = maxDifferences > 0 ? maxDifferences : 1_000_000L;
+            this.validateUniqueKeys = validateUniqueKeys;
+        }
+
+        public DifferConfig(int bisectionFactor, long bisectionThreshold,
+                           boolean enableProfiling, ChecksumAlgorithm checksumAlgorithm,
+                           LocalCompareMode localCompareMode,
+                           ConcurrencyConfig concurrencyConfig,
+                           long maxDifferences) {
+            this(bisectionFactor, bisectionThreshold, enableProfiling, checksumAlgorithm,
+                 localCompareMode, concurrencyConfig, maxDifferences, false);
+        }
+
+        /** 严格档开关：true 时比对前做唯一键探针，命中重复键直接失败并列出键与行数。 */
+        public boolean isValidateUniqueKeys() {
+            return validateUniqueKeys;
         }
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,

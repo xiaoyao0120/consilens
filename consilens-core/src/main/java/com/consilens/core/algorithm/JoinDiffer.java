@@ -1,5 +1,8 @@
 package com.consilens.core.algorithm;
 
+import com.consilens.connector.api.ConnectorException;
+import com.consilens.connector.api.model.DataType;
+import com.consilens.connector.api.model.TableSchema;
 import com.consilens.core.segment.TableSegment;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
@@ -23,6 +26,8 @@ import java.time.Instant;
 public class JoinDiffer extends TableDiffer implements AutoCloseable {
 
     private final boolean validateUniqueKeys;
+    /** 开放档命中重复键时的划分谓词（段级 join 计划必须复用同一过滤，否则 SQL 侧仍会 N×M）。 */
+    private volatile DupKeySplit activeSplit = DupKeySplit.none();
     private final JoinPerformanceMonitor performanceMonitor;
     private final AtomicLong sourceMissingCount = new AtomicLong(0);
     private final AtomicLong targetMissingCount = new AtomicLong(0);
@@ -63,22 +68,43 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
 
         DatabaseAdapter database = table1.getDatabase();
 
-        // Run background validations and preparations
-        // Kick off optional preflight jobs in parallel (key validation/materialization)
-        CompletableFuture<Void> validationFuture = validateUniqueKeys ? performKeyValidation(table1, table2)
-                : CompletableFuture.completedFuture(null);
+        // 严格档（validateUniqueKeys=true）的唯一键校验已在 TableDiffer.diffTables 入口完成
+        // （命中即失败，不会走到这里）。
+        // 开放档（默认）下重复键按多重集语义处理：FULL OUTER JOIN 对重复键会 N×M 倍增，
+        // 因此把"任一侧键重复"的行交给多重集配对引擎（与 checksum/streaming 同一实现），
+        // join 的 SQL 只跑"两侧键都唯一"的子集（此时 1:1，无倍增，结果与多重集语义一致）。
+        boolean openTier = !validateUniqueKeys;
+        CompletableFuture<DupKeySplit> splitFuture = openTier
+                ? CompletableFuture.supplyAsync(() -> prepareDupKeySplit(table1, table2),
+                        executorProvider.getIoExecutor())
+                : CompletableFuture.completedFuture(DupKeySplit.none());
 
-        return CompletableFuture.allOf(validationFuture)
-                .thenCompose(v -> {
+        return splitFuture
+                .thenCompose(split -> {
                     performanceMonitor.recordStage("preparations_complete");
 
-                    // Build the main join query
-                    JoinQueryPlan queryPlan = buildJoinQueryPlan(table1, table2, "t1", "t2",
-                            table1.buildWhereClause(), table2.buildWhereClause());
-                    performanceMonitor.recordStage("query_plan_built");
+                    activeSplit = split;
+                    CompletableFuture<Void> diffFuture;
+                    if (split.localOnly()) {
+                        // 方言不支持键多重性过滤（如 Doris）：整表本地多重集配对，跳过 SQL join
+                        diffFuture = CompletableFuture.runAsync(
+                                () -> compareWholeTableLocally(table1, table2, infoTreeRecorder),
+                                executorProvider.getCpuExecutor());
+                    } else {
+                        // Build the main join query（开放档：where 收窄到"两侧键都唯一"的子集）
+                        JoinQueryPlan queryPlan = buildJoinQueryPlan(table1, table2, "t1", "t2",
+                                split.joinWhere(table1, table2, true), split.joinWhere(table1, table2, false));
+                        performanceMonitor.recordStage("query_plan_built");
+                        diffFuture = executeJoinDiff(queryPlan, table1, table2, infoTreeRecorder)
+                                .thenAccept(result -> {
+                                    // 重复键子集：本地多重集配对（结果与 checksum/streaming 逐数字一致）
+                                    if (split.hasDuplicates()) {
+                                        compareDuplicateKeyRows(split, table1, table2, infoTreeRecorder);
+                                    }
+                                });
+                    }
 
-                    // Execute the join diff
-                    return executeJoinDiff(queryPlan, table1, table2, infoTreeRecorder)
+                    return diffFuture
                             .thenCompose(result -> {
                                 performanceMonitor.endJoin("root");
                                 infoTreeRecorder.endNode("joindiff");
@@ -106,6 +132,18 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
                 .exceptionally(e -> {
                     performanceMonitor.endJoin("root");
                     infoTreeRecorder.endNode("joindiff");
+                    // join 的"业务性拒绝"（重复键不得 N×M 放大、计划不可用等）要保留原始信息，
+                    // 不能被 "JoinDiff failed" 包一层导致拒绝理由丢失。
+                    Throwable cause = e;
+                    while ((cause instanceof java.util.concurrent.CompletionException
+                            || cause instanceof java.util.concurrent.ExecutionException)
+                            && cause.getCause() != null) {
+                        cause = cause.getCause();
+                    }
+                    if (cause instanceof ConnectorException) {
+                        log.warn("JoinDiff refused: {}", cause.getMessage());
+                        throw (ConnectorException) cause;
+                    }
                     log.error("JoinDiff failed", e);
                     throw new RuntimeException("JoinDiff failed", e);
                 });
@@ -172,6 +210,229 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
     }
 
     /**
+     * 开放档的重复键划分：探测两侧重复键；命中则给出
+     * ① join 用的 where（收窄到"两侧键都唯一"的子集）
+     * ② 多重集配对用的 where（"任一侧键重复"的行）。
+     */
+    private DupKeySplit prepareDupKeySplit(TableSegment table1, TableSegment table2) {
+        DatabaseAdapter database = table1.getDatabase();
+        List<String> sourceViolations = probeDuplicateKeys(table1);
+        List<String> targetViolations = probeDuplicateKeys(table2);
+        if (sourceViolations.isEmpty() && targetViolations.isEmpty()) {
+            return DupKeySplit.none();
+        }
+        var generator = database.getSqlQueryGenerator();
+        if (!generator.supportsKeyMultiplicityFilter()) {
+            log.info("JoinDiff 开放档：检测到重复键且该方言不支持键多重性过滤，整表退化为本地多重集配对"
+                            + "（与 checksum/streaming 同一实现）\n  source: {}\n  target: {}",
+                    String.join("; ", sourceViolations), String.join("; ", targetViolations));
+            return DupKeySplit.localOnlySplit();
+        }
+        log.info("JoinDiff 开放档：检测到重复键，这些键改走多重集配对（避免 FULL OUTER JOIN 的 N×M 放大）"
+                        + "\n  source: {}\n  target: {}",
+                String.join("; ", sourceViolations), String.join("; ", targetViolations));
+        String schema1 = table1.getTablePath().getSchema().orElse(null);
+        String tableName1 = table1.getTablePath().getTableName();
+        String schema2 = table2.getTablePath().getSchema().orElse(null);
+        String tableName2 = table2.getTablePath().getTableName();
+        String where1 = table1.buildWhereClause();
+        String where2 = table2.buildWhereClause();
+        Map<String, DataType> types1 = extractColumnTypes(table1);
+        Map<String, DataType> types2 = extractColumnTypes(table2);
+
+        // 每个谓词的外层限定名 = **被过滤行所在侧**的表名：本侧重复键判定与"对侧键是否重复"
+        // 都要针对本侧的行来求值（跨表谓词的子查询查对侧表，外层引用本侧列）。
+        return new DupKeySplit(true, false, where1, where2,
+                generator.getKeyMultiplicityFilterSQL(schema1, tableName1, table1.getKeyColumns(), types1,
+                        where1, false, tableName1),
+                generator.getKeyMultiplicityFilterSQL(schema2, tableName2, table2.getKeyColumns(), types2,
+                        where2, false, tableName2),
+                generator.getKeyMultiplicityFilterSQL(schema1, tableName1, table1.getKeyColumns(), types1,
+                        where1, true, tableName1),
+                generator.getKeyMultiplicityFilterSQL(schema2, tableName2, table2.getKeyColumns(), types2,
+                        where2, true, tableName2),
+                generator.getKeyMultiplicityFilterSQL(schema2, tableName2, table2.getKeyColumns(), types2,
+                        where2, true, tableName1),
+                generator.getKeyMultiplicityFilterSQL(schema1, tableName1, table1.getKeyColumns(), types1,
+                        where1, true, tableName2));
+    }
+
+    /**
+     * 开放档探针：失败不阻断比对（唯一键校验在开放档不参与正确性保证），
+     * 但必须留下告警，避免"探针没跑成"被静默当成"没有重复键"。
+     */
+    private List<String> probeDuplicateKeys(TableSegment table) {
+        try {
+            return table.getDatabase().findDuplicateKeys(table);
+        } catch (Exception e) {
+            log.warn("JoinDiff 开放档：重复键探针执行失败，按无重复键继续比对（不阻断）: {} - {}",
+                    table.getTablePath(), e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * 整表本地多重集配对（方言不支持键多重性过滤时的开放档回退）：
+     * 结果与 checksum/streaming 逐数字一致，只是不做 SQL 下推。
+     */
+    private void compareWholeTableLocally(TableSegment table1, TableSegment table2,
+            InfoTreeRecorder infoTreeRecorder) {
+        List<Object[]> rows1 = table1.getValues();
+        List<Object[]> rows2 = table2.getValues();
+        List<DiffRow> differences = LocalDiffEngine.findDifferences(
+                rows1, rows2,
+                table1.getKeyColumns(), table1.getExtraColumns(),
+                table2.getKeyColumns(), table2.getExtraColumns(),
+                extractColumnTypes(table1), extractColumnTypes(table2));
+        long sourceMissingDelta = 0;
+        long targetMissingDelta = 0;
+        long mismatchDelta = 0;
+        for (DiffRow row : differences) {
+            if (row.getOperation() == DiffOperation.SOURCE_MISSING) {
+                sourceMissingCount.incrementAndGet();
+                sourceMissingDelta++;
+            } else if (row.getOperation() == DiffOperation.TARGET_MISSING) {
+                targetMissingCount.incrementAndGet();
+                targetMissingDelta++;
+            } else if (row.getOperation() == DiffOperation.MISMATCH) {
+                mismatchCount.incrementAndGet();
+                mismatchDelta++;
+            }
+            emitDiffRow(row);
+        }
+        infoTreeRecorder.addDiffCounts("joindiff-local-only", differences.size(),
+                sourceMissingDelta, targetMissingDelta, mismatchDelta);
+        log.info("JoinDiff 开放档（方言不支持过滤器）：整表本地多重集配对 {} 行 vs {} 行 → {} 条差异",
+                rows1.size(), rows2.size(), differences.size());
+    }
+
+    /**
+     * 重复键子集：拉取两侧行做多重集配对（值相等的行抵消 → 剩余按签名排序配对 → 多余行 SM/TM），
+     * 与 checksum/streaming 共用 {@link LocalDiffEngine}，保证跨计划结果逐数字一致。
+     */
+    private void compareDuplicateKeyRows(DupKeySplit split, TableSegment table1, TableSegment table2,
+            InfoTreeRecorder infoTreeRecorder) {
+        // 谓词含 EXISTS/子查询，属引擎构造（用户 filter 已在 segment.buildWhereClause 内校验过），
+        // 因此走 querySegmentWithPredicate 而不是塞进 segment 的自定义 where。
+        List<Object[]> rows1 = table1.getDatabase().querySegmentWithPredicate(
+                table1, split.dupFetchWhere(table1, table2, true));
+        List<Object[]> rows2 = table2.getDatabase().querySegmentWithPredicate(
+                table2, split.dupFetchWhere(table1, table2, false));
+        List<DiffRow> differences = LocalDiffEngine.findDifferences(
+                rows1, rows2,
+                table1.getKeyColumns(), table1.getExtraColumns(),
+                table2.getKeyColumns(), table2.getExtraColumns(),
+                extractColumnTypes(table1), extractColumnTypes(table2));
+        long sourceMissingDelta = 0;
+        long targetMissingDelta = 0;
+        long mismatchDelta = 0;
+        for (DiffRow row : differences) {
+            if (row.getOperation() == DiffOperation.SOURCE_MISSING) {
+                sourceMissingCount.incrementAndGet();
+                sourceMissingDelta++;
+            } else if (row.getOperation() == DiffOperation.TARGET_MISSING) {
+                targetMissingCount.incrementAndGet();
+                targetMissingDelta++;
+            } else if (row.getOperation() == DiffOperation.MISMATCH) {
+                mismatchCount.incrementAndGet();
+                mismatchDelta++;
+            }
+            emitDiffRow(row);
+        }
+        infoTreeRecorder.addDiffCounts("joindiff-dup-keys", differences.size(),
+                sourceMissingDelta, targetMissingDelta, mismatchDelta);
+        log.info("JoinDiff 开放档：重复键子集 {} 行 vs {} 行 → {} 条差异（多重集配对）",
+                rows1.size(), rows2.size(), differences.size());
+    }
+
+    /**
+     * 开放档下重复键的划分谓词。
+     */
+    private static final class DupKeySplit {
+        private final boolean duplicates;
+        /** 方言不支持键多重性过滤器：整表走本地多重集配对（不做 SQL join）。 */
+        private final boolean localOnly;
+        private final String where1;
+        private final String where2;
+        /** 本侧键唯一 / 本侧键重复（外层限定=本侧表名）。 */
+        private final String unique1;
+        private final String unique2;
+        private final String dup1;
+        private final String dup2;
+        /** 对侧键重复，但外层限定=本侧表名（用于过滤本侧行）。 */
+        private final String otherDupFor1;
+        private final String otherDupFor2;
+
+        private DupKeySplit(boolean duplicates, boolean localOnly, String where1, String where2,
+                String unique1, String unique2, String dup1, String dup2,
+                String otherDupFor1, String otherDupFor2) {
+            this.duplicates = duplicates;
+            this.localOnly = localOnly;
+            this.where1 = where1;
+            this.where2 = where2;
+            this.unique1 = unique1;
+            this.unique2 = unique2;
+            this.dup1 = dup1;
+            this.dup2 = dup2;
+            this.otherDupFor1 = otherDupFor1;
+            this.otherDupFor2 = otherDupFor2;
+        }
+
+        private static DupKeySplit none() {
+            return new DupKeySplit(false, false, null, null, null, null, null, null, null, null);
+        }
+
+        /** 方言不支持过滤器时的划分（整表本地配对）。 */
+        private static DupKeySplit localOnlySplit() {
+            return new DupKeySplit(true, true, null, null, null, null, null, null, null, null);
+        }
+
+        private boolean hasDuplicates() {
+            return duplicates;
+        }
+
+        private boolean localOnly() {
+            return localOnly;
+        }
+
+        /** join 的 where：本侧键唯一 且 对侧键不重复（对侧重复的键由多重集配对统一处理）。 */
+        private String joinWhere(TableSegment table1, TableSegment table2, boolean side1) {
+            if (localOnly) {
+                return side1 ? table1.buildWhereClause() : table2.buildWhereClause();
+            }
+            if (!duplicates) {
+                return side1 ? table1.buildWhereClause() : table2.buildWhereClause();
+            }
+            String base = side1 ? where1 : where2;
+            String selfUnique = side1 ? unique1 : unique2;
+            String otherDup = side1 ? otherDupFor1 : otherDupFor2;
+            return combine(base, selfUnique, "NOT (" + otherDup + ")");
+        }
+
+        /** 多重集配对的行范围：本侧键重复 或 对侧键重复（对侧重复的键需要本侧行一起配对）。 */
+        private String dupFetchWhere(TableSegment table1, TableSegment table2, boolean side1) {
+            String base = side1 ? where1 : where2;
+            String selfDup = side1 ? dup1 : dup2;
+            String otherDup = side1 ? otherDupFor1 : otherDupFor2;
+            return combine(base, "(" + selfDup + " OR " + otherDup + ")");
+        }
+
+        private static String combine(String... parts) {
+            StringBuilder sb = new StringBuilder();
+            for (String part : parts) {
+                if (part == null || part.trim().isEmpty()) {
+                    continue;
+                }
+                if (sb.length() > 0) {
+                    sb.append(" AND ");
+                }
+                sb.append("(").append(part).append(")");
+            }
+            return sb.toString();
+        }
+    }
+
+    /**
      * Build the main join query plan.
      */
     private JoinQueryPlan buildJoinQueryPlan(TableSegment table1, TableSegment table2,
@@ -191,23 +452,46 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
 
         var generator = table1.getDatabase().getSqlQueryGenerator();
 
+        // 比较列必须按方言归一化口径比较（与 checksum/local 路径一致），否则会出现
+        // "窗口内差异被报出（多报）+ 库内排序规则差异被吸收（漏报）"的双向偏差。
+        Map<String, DataType> columnTypes1 = extractColumnTypes(table1);
+        Map<String, DataType> columnTypes2 = extractColumnTypes(table2);
+
         String mainQuery = generator.getJoinDiffDetailSQL(
                 schema1, tableName1, alias1,
-                keyColumns1, compareColumns1, relevantColumns1, where1,
+                keyColumns1, compareColumns1, relevantColumns1, where1, columnTypes1,
                 schema2, tableName2, alias2,
-                keyColumns2, compareColumns2, relevantColumns2, where2);
+                keyColumns2, compareColumns2, relevantColumns2, where2, columnTypes2);
 
         log.debug("Main join query: {}", mainQuery);
 
         String countQuery = generator.getJoinDiffStatsSQL(
                 schema1, tableName1, alias1,
-                keyColumns1, compareColumns1, where1,
+                keyColumns1, compareColumns1, where1, columnTypes1,
                 schema2, tableName2, alias2,
-                keyColumns2, compareColumns2, where2);
+                keyColumns2, compareColumns2, where2, columnTypes2);
 
         return new JoinQueryPlan(mainQuery, countQuery,
                 keyColumns1, keyColumns2, relevantColumns1, relevantColumns2,
                 compareColumns1, compareColumns2);
+    }
+
+    /**
+     * 取段内相关列的归一化类型；schema 不可用时返回空表（比较退化为原始列值）。
+     */
+    private Map<String, DataType> extractColumnTypes(TableSegment segment) {
+        Map<String, DataType> types = new HashMap<>();
+        Optional<TableSchema> schema = segment.getSchema();
+        if (!schema.isPresent()) {
+            return types;
+        }
+        for (String column : segment.getRelevantColumns()) {
+            DataType type = schema.get().getColumnType(column);
+            if (type != null) {
+                types.put(column, type);
+            }
+        }
+        return types;
     }
 
     /**
@@ -226,25 +510,6 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
     /**
      * Validate unique key constraints.
      */
-    private CompletableFuture<Void> performKeyValidation(TableSegment table1, TableSegment table2) {
-        return CompletableFuture.runAsync(() -> {
-            log.debug("Validating unique keys for tables {} and {}",
-                    table1.getTablePath(), table2.getTablePath());
-
-            validateTableUniqueKeys(table1);
-            validateTableUniqueKeys(table2);
-        }, executorProvider.getIoExecutor());
-    }
-
-    /**
-     * Validate unique keys for a single table.
-     */
-    private void validateTableUniqueKeys(TableSegment table) {
-        // This would implement key validation logic
-        // For now, just log the validation
-        log.debug("Key validation for table: {}", table.getTablePath());
-    }
-
     /**
      * Collect statistics.
      */
@@ -439,8 +704,9 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
             TableSegment table1, TableSegment table2, int level) {
         String segmentAlias1 = "t1_l" + level;
         String segmentAlias2 = "t2_l" + level;
+        DupKeySplit split = activeSplit;
         return buildJoinQueryPlan(table1, table2, segmentAlias1, segmentAlias2,
-                table1.buildWhereClause(), table2.buildWhereClause());
+                split.joinWhere(table1, table2, true), split.joinWhere(table1, table2, false));
     }
 
     /**
@@ -572,7 +838,7 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
         }
 
         public static JoinDifferOptions defaultOptions() {
-            return new JoinDifferOptions(true);
+            return new JoinDifferOptions(false);
         }
 
     }

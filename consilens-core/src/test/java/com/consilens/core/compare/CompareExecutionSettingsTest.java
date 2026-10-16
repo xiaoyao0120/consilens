@@ -26,7 +26,8 @@ class CompareExecutionSettingsTest {
         assertFalse(settings.isEnableProfiling());
         assertEquals(ChecksumAlgorithm.CONCAT, settings.getChecksumAlgorithm());
         assertEquals(LocalCompareMode.FULL, settings.getLocalCompareMode());
-        assertTrue(settings.isValidateUniqueKeys());
+        // 默认开放档：重复键走多重集配对；严格档（命中重复键即失败）需显式开启
+        assertFalse(settings.isValidateUniqueKeys());
         assertEquals(1_000_000L, settings.getMaxDifferences());
         assertNotNull(settings.getConcurrencyConfig());
     }

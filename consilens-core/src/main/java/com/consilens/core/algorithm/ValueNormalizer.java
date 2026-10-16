@@ -23,6 +23,11 @@ import java.util.Date;
 @Slf4j
 public class ValueNormalizer {
 
+    /** JSON 规范形用：键排序 + 紧凑分隔符（与各方言 SQL 侧口径一致）。 */
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper()
+                    .configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
+
     // Standard date/time formatters (thread-safe)
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
@@ -81,6 +86,7 @@ public class ValueNormalizer {
 
                 case DATETIME:
                 case TIMESTAMP:
+                case TIMESTAMP_WITH_TIMEZONE:
                     return normalizeDateTime(value);
 
                 case BOOLEAN:
@@ -93,6 +99,16 @@ public class ValueNormalizer {
                 case LONGBLOB:
                     // For binary types, return a consistent representation
                     return normalizeBinary(value);
+
+                case JSON:
+                case JSONB:
+                    // 本地路径的 JSON 规范化：解析后键排序 + 紧凑序列化（设计 §2.5）。
+                    // 缺失会让"仅键序/空格不同"在跨源本地比对时被误报。
+                    return normalizeJson(value);
+
+                case UUID:
+                    // 统一小写：SQL Server 的 UNIQUEIDENTIFIER 读出为大写，文本形态的源为小写
+                    return value == null ? "" : value.toString().trim().toLowerCase();
 
                 default:
                     // Fallback: convert to string and trim
@@ -200,6 +216,13 @@ public class ValueNormalizer {
                 if (str.matches("\\d{4}-\\d{2}-\\d{2}")) {
                     return str;
                 }
+                // 带时间部分的日期串（Oracle DATE 经 getString 形如 "2026-01-31 00:00:00"）：
+                // 直接 LocalDate.parse 会失败并退化成 1970-01-01，两侧同值 → 日期差异被漏报。
+                java.util.regex.Matcher datePrefix = java.util.regex.Pattern
+                        .compile("^(\\d{4}-\\d{2}-\\d{2})[ T]").matcher(str);
+                if (datePrefix.find()) {
+                    return datePrefix.group(1);
+                }
                 // Otherwise try to parse and reformat
                 LocalDate date = LocalDate.parse(str);
                 return date.format(DATE_FORMATTER);
@@ -277,6 +300,27 @@ public class ValueNormalizer {
                 if (str.matches("\\d{4}-\\d{2}-\\d{2}")) {
                     return str + " 00:00:00";
                 }
+
+                // Handle trailing zone name, e.g. Trino/Presto getString() on
+                // TIMESTAMP WITH TIME ZONE: "2026-04-30 16:37:34 UTC". Convert
+                // the instant to the canonical UTC wall clock so dialects that
+                // render zone suffixes stay consistent with plain wall-clock
+                // sources.
+                java.util.regex.Matcher zoned = java.util.regex.Pattern
+                        .compile("^(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2})(?:\\.\\d+)? ([A-Za-z/_0-9+\\-:]+)$")
+                        .matcher(str);
+                if (zoned.matches()) {
+                    try {
+                        LocalDateTime local = LocalDateTime.parse(zoned.group(1), DATETIME_FORMATTER);
+                        // Oracle 驱动把偏移渲染成 "+0:00"（单数字小时），ZoneId.of 只认 "+00:00"
+                        String zone = zoned.group(2).replaceAll("^([+-])(\\d):", "$10$2:");
+                        return local.atZone(java.time.ZoneId.of(zone))
+                                .withZoneSameInstant(java.time.ZoneOffset.UTC)
+                                .toLocalDateTime().format(DATETIME_FORMATTER);
+                    } catch (java.time.DateTimeException ignore) {
+                        // ZoneRulesException is a subclass; not a resolvable zone id either
+                    }
+                }
                 
                 // Handle ISO 8601 format with timezone
                 if (str.contains("T")) {
@@ -326,18 +370,45 @@ public class ValueNormalizer {
     }
 
     /**
+     * Normalize JSON values: canonical form (sorted keys, compact separators).
+     */
+    private static String normalizeJson(Object value) {
+        if (value == null) {
+            return "";
+        }
+        String text = value.toString().trim();
+        if (text.isEmpty()) {
+            return "";
+        }
+        try {
+            Object parsed = JSON_MAPPER.readValue(text, Object.class);
+            return JSON_MAPPER.writeValueAsString(parsed);
+        } catch (Exception e) {
+            log.debug("Failed to canonicalize JSON value: {}", e.getMessage());
+            return text;
+        }
+    }
+
+    /**
      * Normalize binary values: hexadecimal representation.
      */
     private static String normalizeBinary(Object value) {
+        // 大写十六进制：与 DB 侧 HEX()（MySQL/Doris）及 RAWTOHEX（Oracle）等
+        // 校验和路径的大写渲染保持一致；本地取数路径与 SQL 校验和路径必须产出
+        // 同样的规范形式，否则同一行会因大小写差异被误报。
         if (value instanceof byte[]) {
             byte[] bytes = (byte[]) value;
             StringBuilder hex = new StringBuilder(bytes.length * 2);
             for (byte b : bytes) {
-                hex.append(String.format("%02x", b));
+                hex.append(String.format("%02X", b));
             }
             return hex.toString();
         }
-        // Fallback to string representation
+        // 二进制类型列读出的字符串值是引擎的 hex 渲染（如 Doris VARBINARY→
+        // 小写 hex 文本）。统一大写，与 SQL 校验和路径的 HEX()/RAWTOHEX() 一致。
+        if (value instanceof String) {
+            return value.toString().trim().toUpperCase();
+        }
         return value.toString();
     }
 }

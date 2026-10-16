@@ -20,6 +20,14 @@ import java.util.Optional;
  * Combines the best features from all modules.
  */
 public interface DatabaseAdapter {
+    /**
+     * 唯一键探针：返回该表按键分组后 count>1 的明细文本（形如 "键值 => n 行"）。
+     * 非关系型适配器默认不支持（返回空）。
+     */
+    default java.util.List<String> findDuplicateKeys(com.consilens.core.segment.TableSegment segment) {
+        return java.util.List.of();
+    }
+
 
     /**
      * Get the database name.
@@ -65,6 +73,15 @@ public interface DatabaseAdapter {
      * Query rows from a table segment.
      */
     List<Object[]> querySegment(TableSegment segment);
+
+    /**
+     * 查询行，并在段的 where 之外再叠加一个**引擎生成的**谓词（如开放档 join 的"键重复"过滤器）。
+     * 与 {@link #querySegment(TableSegment)} 同形（列归一化、LOB 物化一致），仅多一个谓词。
+     */
+    default List<Object[]> querySegmentWithPredicate(TableSegment segment, String extraPredicate) {
+        throw new UnsupportedOperationException(
+                "querySegmentWithPredicate is not implemented for " + getClass().getSimpleName());
+    }
 
     /**
      * Query row hashes from a table segment (primary key + row hash only).

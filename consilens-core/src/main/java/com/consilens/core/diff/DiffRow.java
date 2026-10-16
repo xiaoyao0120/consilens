@@ -20,7 +20,7 @@ import java.util.Optional;
 @Getter
 @EqualsAndHashCode
 @ToString
-@Builder
+@Builder(toBuilder = true)
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 public class DiffRow {
 
@@ -148,6 +148,19 @@ public class DiffRow {
                 .columnNames2(columnNames2)
                 .metadata(metadata)
                 .build();
+    }
+
+    /**
+     * 附加额外元数据（重复键场景的 occurrence / keyMultiplicity）。
+     */
+    public static DiffRow withExtraMetadata(DiffRow row, java.util.Map<String, Object> extra) {
+        if (row == null || extra == null || extra.isEmpty()) {
+            return row;
+        }
+        java.util.Map<String, Object> merged = new java.util.HashMap<>(
+                row.getMetadata() != null ? row.getMetadata() : java.util.Map.of());
+        merged.putAll(extra);
+        return row.toBuilder().metadata(merged).build();
     }
 
     /**

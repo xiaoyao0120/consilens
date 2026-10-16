@@ -33,10 +33,17 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Slf4j
 public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
+    /** 已上报过的 (操作, 主键) 身份串，用于跨"主扫描/尾部补扫"去重。 */
+    private final Set<String> reportedRowKeys = ConcurrentHashMap.newKeySet();
+
 
     private final ChecksumCache checksumCache;
     private final PerformanceMonitor performanceMonitor;
     private final AtomicLong sourceMissingCount = new AtomicLong(0);
+    // 最近一次 Initial bounds（尾扫用）：每个 diff 任务新建 ChecksumDiffer 实例
+    private ChecksumResult lastBounds1;
+    private ChecksumResult lastBounds2;
+    private InfoTreeRecorder tailInfoRecorder;
     private final AtomicLong targetMissingCount = new AtomicLong(0);
     private final AtomicLong mismatchCount = new AtomicLong(0);
     private final ProgressReporter progressReporter;
@@ -306,6 +313,14 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         }
 
         if (!table1.isBounded() || !table2.isBounded()) {
+            if (!keyOrderingCompatible(table1, table2)) {
+                // 两侧键列排序语义不同（如一侧 INT、另一侧 VARCHAR）时，任何区间谓词在两侧的
+                // 含义都不一致：分段边界不能跨侧复用，"> 对端 maxKey" 式尾扫也会把大量行误判
+                // 为单侧缺失。此类形态直接整表按归一化键做哈希比较。
+                log.warn("Key ordering differs between {} and {}; comparing whole tables by normalized keys "
+                        + "instead of range predicates", table1.getDisplayName(), table2.getDisplayName());
+                return performLocalComparison(table1, table2, infoTreeRecorder, parentSegmentId);
+            }
             log.debug("Creating initial bounds for unbounded segments at level {}", level);
             return createInitialBoundsAndBisection(table1, table2, infoTreeRecorder, level, bisectionFactor, parentSegmentId);
         }
@@ -342,14 +357,19 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         // Choose optimal segmentation strategy
         TableSegment largerTable = size1 >= size2 ? table1 : table2;
         TableSegment smallerTable = largerTable == table1 ? table2 : table1;
+        // 分段基座取两侧键范围的并集：只按较大表的键空间分段时，较小表中落在该空间之外的行
+        // 不属于任何分段（分段边界来自较大表，较小表的越界行永远不会被访问到），此前只能靠
+        // 事后的尾扫补报。以并集为基座后，这些行落入"一侧有行、另一侧无行"的段，由常规段
+        // 比较直接给出单侧缺失；尾扫（等值极值探测）退化为排序规则差异的兜底。
+        TableSegment segmentationBase = withUnionKeySpace(largerTable, table1, table2);
 
-        log.debug("Larger table: {}, Smaller table: {}", 
+        log.debug("Larger table: {}, Smaller table: {}",
                 largerTable.getTablePath(), smallerTable.getTablePath());
 
         // Create a dedicated segmenter for the larger table to avoid database adapter confusion
         TableSegmenter largerTableSegmenter = getOrCreateSegmenter(largerTable);
 
-        return largerTableSegmenter.createOptimalSegments(largerTable, bisectionFactor, config.getBisectionThreshold())
+        return largerTableSegmenter.createOptimalSegments(segmentationBase, bisectionFactor, config.getBisectionThreshold())
                 .thenCompose(largerSegments -> {
                     // Log the segments created
                     log.debug("Created {} segments from larger table", largerSegments.size());
@@ -404,6 +424,9 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                 log.info("Initial bounds established - Table2: count={}, minKey={}, maxKey={}", 
                         bounds2.getCount(), bounds2.getMinKey(), bounds2.getMaxKey());
 
+                lastBounds1 = bounds1;
+                lastBounds2 = bounds2;
+                tailInfoRecorder = infoTreeRecorder;
                 return new InitialBounds(bounds1, bounds2, maxRows);
             } catch (Exception e) {
                 throw new RuntimeException("Failed to get initial bounds", e);
@@ -451,6 +474,47 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                 .maxKey(Optional.of(bounds.getMaxKey()))
                 .upperBoundInclusive(true)
                 .build();
+    }
+
+    /**
+     * 把分段基座的键范围扩大到两侧的并集，保留该表的连接与过滤条件。
+     * 一侧探测不到范围（空表）时沿用另一侧；两侧都没有时保持原样。
+     */
+    private TableSegment withUnionKeySpace(TableSegment segment, TableSegment table1, TableSegment table2) {
+        Optional<List<Object>> min = unionBound(table1.getMinKey(), table2.getMinKey(), true);
+        Optional<List<Object>> max = unionBound(table1.getMaxKey(), table2.getMaxKey(), false);
+        if (min.isEmpty() && max.isEmpty()) {
+            return segment;
+        }
+        TableSegment.TableSegmentBuilder builder = segment.toBuilder();
+        min.ifPresent(bounds -> builder.minKey(Optional.of(bounds)));
+        max.ifPresent(bounds -> builder.maxKey(Optional.of(bounds)));
+        return builder.build();
+    }
+
+    /**
+     * 两侧边界取并集意义上的"外侧"：下界取更小者，上界取更大者。
+     * 任一侧没有可用边界时直接取另一侧（空表侧不贡献范围）。
+     */
+    private Optional<List<Object>> unionBound(Optional<List<Object>> left, Optional<List<Object>> right,
+                                             boolean takeMin) {
+        Optional<List<Object>> leftBound = usable(left);
+        Optional<List<Object>> rightBound = usable(right);
+        if (leftBound.isEmpty()) {
+            return rightBound;
+        }
+        if (rightBound.isEmpty()) {
+            return leftBound;
+        }
+        int comparison = compareKeys(leftBound.get(), rightBound.get());
+        return (takeMin ? comparison <= 0 : comparison >= 0) ? leftBound : rightBound;
+    }
+
+    private Optional<List<Object>> usable(Optional<List<Object>> bounds) {
+        if (bounds == null || bounds.isEmpty() || bounds.get() == null || bounds.get().isEmpty()) {
+            return Optional.empty();
+        }
+        return bounds;
     }
 
     private RuntimeException propagateAsyncFailure(Throwable error) {
@@ -944,17 +1008,6 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     }
 
     /**
-     * Combine multiple sets of keys into one.
-     */
-    private Set<List<Object>> combineKeys(Set<List<Object>>... keySets) {
-        Set<List<Object>> combined = new HashSet<>();
-        for (Set<List<Object>> keySet : keySets) {
-            combined.addAll(keySet);
-        }
-        return combined;
-    }
-
-    /**
      * Create a DiffRow from row data.
      * 
      * BUGFIX: Include ALL columns (key + extra) in sourceValues/targetValues and columnNames
@@ -1054,6 +1107,67 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     /**
      * Extract column types from table segment schema.
      */
+    /**
+     * 两侧键列的排序语义是否可比。
+     *
+     * <p>同一逻辑键在两侧可能是不同族类型（一侧 INT、另一侧 VARCHAR）。此时区间谓词的含义
+     * 不一致：分段边界跨侧复用、"&gt; 对端 maxKey" 尾扫都会按各自的排序解释，把区间内的正常行
+     * 误判为单侧缺失（dq_cmp_typediff_* 场景实测 86/200）。检测到该形态时应退化为整表按
+     * 归一化键比较。
+     */
+    private boolean keyOrderingCompatible(TableSegment table1, TableSegment table2) {
+        List<String> keys1 = table1.getKeyColumns();
+        List<String> keys2 = table2.getKeyColumns();
+        if (keys1 == null || keys2 == null || keys1.isEmpty() || keys1.size() != keys2.size()) {
+            return false;
+        }
+        Map<String, DataType> types1 = extractColumnTypes(table1);
+        Map<String, DataType> types2 = extractColumnTypes(table2);
+        for (int index = 0; index < keys1.size(); index++) {
+            DataType type1 = types1.get(keys1.get(index));
+            DataType type2 = types2.get(keys2.get(index));
+            if (type1 == null || type2 == null) {
+                // 类型未知时保持既有行为，避免影响无法探明 schema 的数据源
+                continue;
+            }
+            if (isNumericKeyType(type1) != isNumericKeyType(type2)
+                    || isCharacterKeyType(type1) != isCharacterKeyType(type2)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isNumericKeyType(DataType dataType) {
+        switch (dataType) {
+            case INTEGER:
+            case BIGINT:
+            case SMALLINT:
+            case TINYINT:
+            case DECIMAL:
+            case NUMERIC:
+            case FLOAT:
+            case DOUBLE:
+            case REAL:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static boolean isCharacterKeyType(DataType dataType) {
+        switch (dataType) {
+            case VARCHAR:
+            case CHAR:
+            case TEXT:
+            case CLOB:
+            case LONGVARCHAR:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private Map<String, DataType> extractColumnTypes(TableSegment segment) {
         Optional<TableSchema> schema = segment.getSchema();
         if (!schema.isPresent()) {
@@ -1316,6 +1430,23 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         if (differences == null || differences.isEmpty()) {
             return;
         }
+        // 主扫描与尾部补扫可能对同一把键各报一次（实测 dq_cmp_edge_* 的 'abc' 被报两次），
+        // 按 (操作, 主键, occurrence) 去重：跨"主扫描/尾部补扫"避免重复计数；
+        // occurrence 必须参与——重复键（同键多行）场景下同键会有多条同类差异，
+        // 只按 (操作, 主键) 去重会把它们吞掉（实测 edge_dup 少了 2 条）。
+        List<DiffRow> unique = new ArrayList<>(differences.size());
+        for (DiffRow row : differences) {
+            Object occurrence = row.getMetadata() == null ? null : row.getMetadata().get("occurrence");
+            String identity = row.getOperation() + "\u0001" + row.getPrimaryKey()
+                    + "\u0001" + (occurrence == null ? "" : occurrence);
+            if (reportedRowKeys.add(identity)) {
+                unique.add(row);
+            }
+        }
+        if (unique.isEmpty()) {
+            return;
+        }
+        differences = unique;
         ensureDiffLimit(differences.size());
         infoTreeRecorder.markFirstDifference();
 
@@ -1352,10 +1483,233 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     }
 
     /**
+     * Scan rows that fall OUTSIDE the other side's observed key range. Bisection
+     * segments derive from the larger table's key space, so rows beyond the
+     * smaller range's max (or below its min) are never visited by any segment;
+     * they are fetched directly here and emitted as presence differences.
+     *
+     * <p>Two complementary passes, deduplicated by primary key:
+     * <ol>
+     *   <li>Range pass — rows beyond the other side's bound per Java key ordering.
+     *   Catches multi-row leaks when both sides order keys like the JVM does.</li>
+     *   <li>Extreme-key existence pass — the four extreme keys (each side's own
+     *   min/max, as reported by that side) are probed on the opposite side with an
+     *   EQUALITY predicate. Equality is immune to database collation ordering
+     *   (e.g. MySQL utf8mb4_0900_ai_ci / SQL Server Windows collations order
+     *   {@code '_'} before digits, which silently hides a tail row from every
+     *   ordering-based range predicate).</li>
+     * </ol>
+     */
+    private void scanAndStoreTailDifferences(TableSegment table1, TableSegment table2,
+                                             InfoTreeRecorder infoTreeRecorder,
+                                             ChecksumResult bounds1, ChecksumResult bounds2,
+                                             TableSegment largerTable) {
+        try {
+            if (bounds1 == null || bounds2 == null
+                    || bounds1.getMinKey() == null || bounds1.getMaxKey() == null
+                    || bounds2.getMinKey() == null || bounds2.getMaxKey() == null) {
+                return;
+            }
+
+            // Only the side that is NOT the segmentation base (the smaller table)
+            // can have rows outside the base's key space — those are never visited
+            // by any segment. Rows of the base side are fully covered already and
+            // must not be counted twice.
+            boolean baseIsTable1 = largerTable == table1;
+            Set<List<Object>> emittedKeys = new HashSet<>();
+
+            // 两侧键列排序语义不同（INT vs VARCHAR 等）时，"> 对端 maxKey" 在另一端按不同
+            // 排序解释，会把区间内的正常行误判为单侧缺失；此分支只保留等值极值兜底。
+            boolean orderingCompatible = keyOrderingCompatible(table1, table2);
+            if (!orderingCompatible) {
+                log.warn("Skipping range-based tail scan for {} vs {}: key orderings differ",
+                        table1.getDisplayName(), table2.getDisplayName());
+            }
+
+            // 区间尾扫只在两侧键序可比时进行；不可比时只保留等值极值探测（见下方 backstop）
+            if (!baseIsTable1) {
+                if (orderingCompatible && compareKeys(bounds1.getMaxKey(), bounds2.getMaxKey()) > 0) {
+                    // table1 is the smaller side; rows of table1 beyond table2's range leak
+                    appendTailRows(table1, bounds2.getMaxKey(), null, DiffOperation.TARGET_MISSING,
+                            table1, infoTreeRecorder, "tail-beyond-target-max", emittedKeys);
+                }
+                if (orderingCompatible && compareKeys(bounds1.getMinKey(), bounds2.getMinKey()) < 0) {
+                    appendTailRows(table1, null, bounds2.getMinKey(), DiffOperation.TARGET_MISSING,
+                            table1, infoTreeRecorder, "tail-below-target-min", emittedKeys);
+                }
+            } else {
+                if (orderingCompatible && compareKeys(bounds2.getMaxKey(), bounds1.getMaxKey()) > 0) {
+                    // table2 is the smaller side; rows of table2 beyond table1's range leak
+                    appendTailRows(table2, bounds1.getMaxKey(), null, DiffOperation.SOURCE_MISSING,
+                            table2, infoTreeRecorder, "tail-beyond-source-max", emittedKeys);
+                }
+                if (orderingCompatible && compareKeys(bounds2.getMinKey(), bounds1.getMinKey()) < 0) {
+                    appendTailRows(table2, null, bounds1.getMinKey(), DiffOperation.SOURCE_MISSING,
+                            table2, infoTreeRecorder, "tail-below-source-min", emittedKeys);
+                }
+            }
+
+            // Collation-robust backstop: probe each side's own extreme keys on the
+            // opposite side with equality. Only runs when the Java-ordering view of
+            // the two extremes differs (equal extremes are already covered by the
+            // main scan) and the key was not emitted by the range pass above.
+            if (!baseIsTable1) {
+                checkExtremeKeyOnOtherSide(bounds1.getMaxKey(), bounds2.getMaxKey(), table1, table2,
+                        DiffOperation.TARGET_MISSING, infoTreeRecorder, emittedKeys, "tail-extreme-max");
+                checkExtremeKeyOnOtherSide(bounds1.getMinKey(), bounds2.getMinKey(), table1, table2,
+                        DiffOperation.TARGET_MISSING, infoTreeRecorder, emittedKeys, "tail-extreme-min");
+            } else {
+                checkExtremeKeyOnOtherSide(bounds2.getMaxKey(), bounds1.getMaxKey(), table2, table1,
+                        DiffOperation.SOURCE_MISSING, infoTreeRecorder, emittedKeys, "tail-extreme-max");
+                checkExtremeKeyOnOtherSide(bounds2.getMinKey(), bounds1.getMinKey(), table2, table1,
+                        DiffOperation.SOURCE_MISSING, infoTreeRecorder, emittedKeys, "tail-extreme-min");
+            }
+        } catch (Exception e) {
+            log.warn("Tail difference scan failed; presence diffs beyond the compared range may be missed", e);
+        }
+    }
+
+    /**
+     * Verify that {@code extremeKey} (an extreme of {@code ownerTable}) also exists
+     * on {@code otherTable}. If not, emit the owner's row as a presence difference.
+     * Skipped when the other side reports the same extreme key (covered by the main
+     * scan) or the key was already emitted by the range pass.
+     */
+    private void checkExtremeKeyOnOtherSide(List<Object> extremeKey, List<Object> otherExtremeKey,
+                                            TableSegment ownerTable, TableSegment otherTable,
+                                            DiffOperation operation, InfoTreeRecorder infoTreeRecorder,
+                                            Set<List<Object>> emittedKeys, String segmentId) {
+        try {
+            if (extremeKey == null || extremeKey.isEmpty()
+                    || compareKeys(extremeKey, otherExtremeKey) == 0
+                    || emittedKeys.contains(extremeKey)) {
+                return;
+            }
+            List<Object[]> hits = otherTable.getValuesByKeys(Collections.singleton(extremeKey));
+            if (!hits.isEmpty()) {
+                return;
+            }
+            List<Object[]> ownerRows = ownerTable.getValuesByKeys(Collections.singleton(extremeKey));
+            if (ownerRows.isEmpty()) {
+                return;
+            }
+            int keyCount = ownerTable.getKeyColumns().size();
+            List<Object> pk = new ArrayList<>(Arrays.asList(ownerRows.get(0)).subList(0, keyCount));
+            List<Object> values = new ArrayList<>(Arrays.asList(ownerRows.get(0)));
+            List<String> columnNames = concatNames(ownerTable.getKeyColumns(), ownerTable.getExtraColumns());
+            DiffRow diffRow = operation == DiffOperation.SOURCE_MISSING
+                    ? DiffRow.added(pk, values, columnNames)
+                    : DiffRow.removed(pk, values, columnNames);
+            log.info("Tail scan [{}]: extreme key {} missing on the opposite side (collation-order backstop)",
+                    segmentId, pk);
+            storeDifferences(infoTreeRecorder, Collections.singletonList(diffRow), segmentId);
+            emittedKeys.add(extremeKey);
+        } catch (Exception e) {
+            log.warn("Tail extreme-key check [{}] failed; diff may be missed", segmentId, e);
+        }
+    }
+
+    /**
+     * Fetch rows of `scanTable` within [minKey, maxKey] (null = unbounded side),
+     * drop rows equal to the adjacent-side boundary key, and emit them as
+     * presence differences attributed to `ownerTable`'s columns.
+     * Emitted primary keys are added to {@code emittedKeys} for deduplication.
+     */
+    private void appendTailRows(TableSegment scanTable, List<Object> minKey, List<Object> maxKey,
+                                DiffOperation operation, TableSegment ownerTable,
+                                InfoTreeRecorder infoTreeRecorder, String segmentId,
+                                Set<List<Object>> emittedKeys) throws Exception {
+        TableSegment bounded = scanTable.toBuilder()
+                .minKey(Optional.ofNullable(minKey))
+                .maxKey(Optional.ofNullable(maxKey))
+                .upperBoundInclusive(true)
+                .build();
+        // 尾扫是"超出一侧键范围"行的唯一防线，取数失败会导致静默漏报（实测 ClickHouse
+        // QUERY_WAS_CANCELLED 一次即少 1 条 SM）。瞬时失败（查询被取消/超时）重试几次再放弃。
+        List<Object[]> rows = null;
+        RuntimeException lastError = null;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                rows = bounded.getValues();
+                break;
+            } catch (RuntimeException e) {
+                lastError = e;
+                log.warn("Tail scan [{}] fetch attempt {}/3 failed: {}", segmentId, attempt, e.getMessage());
+                try {
+                    Thread.sleep(500L * attempt);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        if (rows == null) {
+            throw lastError != null ? lastError : new IllegalStateException("tail scan fetch failed");
+        }
+        List<String> columnNames = concatNames(ownerTable.getKeyColumns(), ownerTable.getExtraColumns());
+        int keyCount = ownerTable.getKeyColumns().size();
+        List<Object> boundary = minKey != null ? minKey : maxKey;
+
+        List<DiffRow> diffRows = new ArrayList<>();
+        for (Object[] row : rows) {
+            List<Object> pk = new ArrayList<>(Arrays.asList(row).subList(0, keyCount));
+            // drop the shared boundary row itself (already covered by the main scan)
+            if (compareKeys(pk, boundary) == 0) {
+                continue;
+            }
+            List<Object> values = new ArrayList<>(Arrays.asList(row));
+            DiffRow diffRow = operation == DiffOperation.SOURCE_MISSING
+                    ? DiffRow.added(pk, values, columnNames)
+                    : DiffRow.removed(pk, values, columnNames);
+            diffRows.add(diffRow);
+            emittedKeys.add(pk);
+        }
+        if (!diffRows.isEmpty()) {
+            log.info("Tail scan [{}]: {} presence-only rows outside the other side's key range",
+                    segmentId, diffRows.size());
+            storeDifferences(infoTreeRecorder, diffRows, segmentId);
+        }
+    }
+
+    private List<String> concatNames(List<String> keyColumns, List<String> extraColumns) {
+        List<String> names = new ArrayList<>();
+        if (keyColumns != null) names.addAll(keyColumns);
+        if (extraColumns != null) names.addAll(extraColumns);
+        return names;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private int compareKeys(List<Object> ka, List<Object> kb) {
+        int n = Math.min(ka.size(), kb.size());
+        for (int i = 0; i < n; i++) {
+            Object va = ka.get(i);
+            Object vb = kb.get(i);
+            if (va == null && vb == null) continue;
+            if (va == null) return -1;
+            if (vb == null) return 1;
+            int cmp;
+            if (va.getClass() == vb.getClass() && va instanceof Comparable) {
+                cmp = ((Comparable) va).compareTo(vb);
+            } else {
+                cmp = String.valueOf(va).compareTo(String.valueOf(vb));
+            }
+            if (cmp != 0) return cmp;
+        }
+        return Integer.compare(ka.size(), kb.size());
+    }
+
+    /**
      * Create final diff result.
      */
     private DiffResult createDiffResult(TableSegment table1, TableSegment table2, Void result, long sourceRowCount,
             long targetRowCount, long durationMs) {
+        // 所有 main-flow 分支的必经点：在此统一补扫"超出对端键范围"的行，
+        // 保证任何分段策略下尾部行差异都不会漏检。
+        if (lastBounds1 != null && lastBounds2 != null && tailInfoRecorder != null) {
+            scanAndStoreTailDifferences(table1, table2, tailInfoRecorder, lastBounds1, lastBounds2,
+                    lastBounds1.getCount() >= lastBounds2.getCount() ? table1 : table2);
+        }
+
         long sourceMissing = sourceMissingCount.get();
         long targetMissing = targetMissingCount.get();
         long mismatched = mismatchCount.get();
@@ -1384,7 +1738,10 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                 .sourceTablePath(table1.getTablePath())
                 .targetTablePath(table2.getTablePath())
                 .completedAt(Instant.now())
-                .metadata(new HashMap<>())
+                .metadata(new HashMap<>(Map.of(
+                        // 实际执行的校验和算法（可能已被 ChecksumPlanExecutor 按方言能力降级），
+                        // 随 artifact metadata 暴露到 diff-report，供测试与运维断言。
+                        "checksumAlgorithm", String.valueOf(config.getChecksumAlgorithm()))))
                 .build();
     }
 
