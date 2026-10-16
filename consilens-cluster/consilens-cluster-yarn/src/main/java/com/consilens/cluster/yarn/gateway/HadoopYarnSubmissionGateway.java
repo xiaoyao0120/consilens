@@ -6,9 +6,9 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.hadoop.yarn.api.records.ApplicationReport;
 import org.apache.hadoop.yarn.api.records.ApplicationSubmissionContext;
 import org.apache.hadoop.yarn.api.records.LocalResource;
-import org.apache.hadoop.yarn.api.records.ApplicationReport;
 import org.apache.hadoop.yarn.api.records.LocalResourceType;
 import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
 import org.apache.hadoop.yarn.api.records.URL;
@@ -124,6 +124,34 @@ public class HadoopYarnSubmissionGateway implements YarnSubmissionGateway {
         } catch (YarnException | IOException | IllegalArgumentException e) {
             return java.util.Optional.empty();
         }
+    }
+
+    @Override
+    public int killByTag(String tag) {
+        int killed = 0;
+        try {
+            // 只拉取可能被 kill 的活跃状态，客户端本地过滤 tags——避免依赖
+            // yarn.resourcemanager.application-tags.enabled 与其索引时序。
+            for (ApplicationReport report : yarnClient.getApplications(
+                    java.util.EnumSet.of(org.apache.hadoop.yarn.api.records.YarnApplicationState.NEW,
+                            org.apache.hadoop.yarn.api.records.YarnApplicationState.NEW_SAVING,
+                            org.apache.hadoop.yarn.api.records.YarnApplicationState.SUBMITTED,
+                            org.apache.hadoop.yarn.api.records.YarnApplicationState.ACCEPTED,
+                            org.apache.hadoop.yarn.api.records.YarnApplicationState.RUNNING))) {
+                if (report.getApplicationTags() == null || !report.getApplicationTags().contains(tag)) {
+                    continue;
+                }
+                try {
+                    yarnClient.killApplication(report.getApplicationId());
+                    killed++;
+                } catch (YarnException | IOException e) {
+                    // Individual kill failures must not abort the cleanup sweep.
+                }
+            }
+        } catch (YarnException | IOException e) {
+            // Sweep is best effort; the subsequent submission validates health.
+        }
+        return killed;
     }
 
     @Override

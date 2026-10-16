@@ -47,6 +47,13 @@ public class YarnSubmissionSpec implements Serializable {
 
     private String queue;
 
+    /**
+     * Optional JVM home used to launch the ApplicationMaster (shell-safe path).
+     * YARN containers inherit the NodeManager's JAVA_HOME, which may be older
+     * than the build target; clusters can point this at an alternate JDK.
+     */
+    private String amJavaHome;
+
     private Integer amMemoryMb;
 
     private Integer amVCores;

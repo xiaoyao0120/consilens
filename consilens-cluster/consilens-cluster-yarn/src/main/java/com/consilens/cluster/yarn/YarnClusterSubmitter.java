@@ -16,6 +16,8 @@ import org.apache.hadoop.yarn.api.records.LocalResource;
 import org.apache.hadoop.yarn.api.records.LocalResourceType;
 import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.net.URI;
@@ -46,6 +48,8 @@ import java.util.regex.Pattern;
  */
 public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
 
+    private static final Logger log = LoggerFactory.getLogger(YarnClusterSubmitter.class);
+
     static final String AM_MAIN_CLASS = "com.consilens.cluster.application.ConsilensApplicationMaster";
     private static final String RUNTIME_ARCHIVE_DESTINATION = "consilens-runtime";
     private static final String RUNTIME_JAR_DESTINATION = "consilens-runtime.jar";
@@ -74,6 +78,7 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
     @Override
     public ClusterSubmission submit(ClusterSubmitRequest request) {
         YarnSubmissionSpec spec = validateAndExtractSpec(request);
+        appendRunTag(spec, request.getSubmissionId());
         int maxAttempts = maxAttemptsOrDefault(request);
         String applicationStagingDir = applicationStagingDir(request.getSubmissionId(), spec);
         YarnSubmissionSpec resolvedSpec = StageResolver.resolve(spec, applicationStagingDir, gateway);
@@ -116,6 +121,28 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
         if (submission != null && submission.getClusterApplicationId() != null) {
             gateway.kill(submission.getClusterApplicationId());
         }
+    }
+
+    @Override
+    public void killStale(ClusterSubmitRequest request) {
+        gateway.killByTag(staleTag(request.getSubmissionId()));
+    }
+
+    /**
+     * Deterministic run tag carrying the submissionId, letting a recovery
+     * restart sweep stale applications of the same logical run.
+     */
+    static String staleTag(String submissionId) {
+        return "consilens-run-" + submissionId;
+    }
+
+    private void appendRunTag(YarnSubmissionSpec spec, String submissionId) {
+        List<String> tags = new ArrayList<>(spec.sanitizedTags());
+        String runTag = staleTag(submissionId);
+        if (!tags.contains(runTag)) {
+            tags.add(runTag);
+        }
+        spec.setTags(tags);
     }
 
     @Override
@@ -171,7 +198,7 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
                 URI.create(spec.getDescriptorUri()), LocalResourceType.FILE));
         localizeReferences(localResources, spec.getFiles());
         localizeReferences(localResources, spec.getJars());
-        localizeHadoopConfiguration(localResources);
+        localizeHadoopConfiguration(localResources, applicationStagingDir);
         List<String> commands = List.of(buildAmCommand(request, spec, descriptorDestination, applicationStagingDir));
         return ContainerLaunchContext.newInstance(localResources, null, commands, null, null, null);
     }
@@ -181,7 +208,7 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
      * sees the same ResourceManager endpoints as the submitter, exactly like
      * Spark ships {@code HADOOP_CONF_DIR} as the {@code __spark_conf__} resource.
      */
-    private void localizeHadoopConfiguration(Map<String, LocalResource> localResources) {
+    private void localizeHadoopConfiguration(Map<String, LocalResource> localResources, String applicationStagingDir) {
         Path confDirectory = resolveHadoopConfDirectory();
         if (confDirectory == null) {
             throw new IllegalStateException("Hadoop configuration directory is required for YARN submission; "
@@ -192,8 +219,22 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
             throw new IllegalStateException("Hadoop configuration directory contains no files: " + confDirectory);
         }
         for (File confFile : confFiles) {
+            // conf 文件优先经 staging 分发：file:// 本地资源只在提交节点存在，
+            // 其他 NodeManager 节点无法读取（多节点集群会直接 FileNotFoundException）。
+            // HADOOP_CONF_DIR 的文件恒为本地文件，直接 stage 即可。
+            // 无 staging 目录（全远端产物且未解析到默认 staging）时退回本地资源：
+            // 单节点可用，多节点需要在参数里给出 stagingDir。
+            if (applicationStagingDir == null) {
+                log.warn("No staging directory resolved; shipping {} as a local resource. "
+                        + "Multi-node clusters need a stagingDir to read Hadoop configuration "
+                        + "on every NodeManager.", confFile);
+                localResources.put(HADOOP_CONF_DESTINATION_PREFIX + confFile.getName(),
+                        gateway.createLocalResource(confFile.toURI(), LocalResourceType.FILE));
+                continue;
+            }
+            URI staged = gateway.stageLocalFile(confFile.toURI(), URI.create(applicationStagingDir));
             localResources.put(HADOOP_CONF_DESTINATION_PREFIX + confFile.getName(), gateway.createLocalResource(
-                    confFile.toURI(), LocalResourceType.FILE));
+                    staged, LocalResourceType.FILE));
         }
     }
 
@@ -212,11 +253,28 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
         return null;
     }
 
+    private static final String JAVA_HOME_PATTERN = "[A-Za-z0-9_./-]+";
+
+    /**
+     * ApplicationMaster JVM home: an explicit {@code amJavaHome} submission
+     * property (validated, shell-safe) or the NodeManager default JAVA_HOME.
+     */
+    private String amJavaHomeOrDefault(String amJavaHome) {
+        if (amJavaHome == null || amJavaHome.isBlank()) {
+            return "$JAVA_HOME";
+        }
+        if (!amJavaHome.matches(JAVA_HOME_PATTERN) || amJavaHome.contains("..")) {
+            throw new IllegalArgumentException("amJavaHome must be an absolute path without shell metacharacters");
+        }
+        return amJavaHome;
+    }
+
     private String buildAmCommand(ClusterSubmitRequest request,
                                   YarnSubmissionSpec spec,
                                   String descriptorDestination,
                                   String applicationStagingDir) {
-        return "$JAVA_HOME/bin/java -server -Xmx" + spec.getAmMemoryMb() + "m -cp \"$PWD:hadoop-conf:"
+        String javaHome = amJavaHomeOrDefault(spec.getAmJavaHome());
+        return javaHome + "/bin/java -server -Xmx" + spec.getAmMemoryMb() + "m -cp \"$PWD:hadoop-conf:"
                 + runtimeClasspath(spec) + "\" " + AM_MAIN_CLASS
                 + " --coordinator-class " + spec.getAmMainClass()
                 + " --descriptor " + descriptorDestination
@@ -242,13 +300,15 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
 
     /**
      * Falls back to the submitting user's HDFS home staging directory when a
-     * local artifact needs staging and no explicit staging URI was provided,
-     * mirroring spark-submit which stages under {@code spark.yarn.stagingDir}
-     * in the user's home by default. All-remote submissions skip staging
-     * entirely.
+     * local artifact <em>or the local Hadoop configuration</em> needs
+     * distribution and no explicit staging URI was provided, mirroring
+     * spark-submit which stages under {@code spark.yarn.stagingDir} in the user's
+     * home by default. Fully remote submissions without a local Hadoop
+     * configuration skip staging entirely.
      */
     private void applyDefaultStaging(YarnSubmissionSpec spec) {
-        if (spec.getStagingUri() != null || !hasLocalArtifacts(spec)) {
+        if (spec.getStagingUri() != null
+                || (!hasLocalArtifacts(spec) && resolveHadoopConfDirectory() == null)) {
             return;
         }
         String defaultBase = gateway.defaultStagingBase();
@@ -386,6 +446,7 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
                     .amMainClass(spec.getAmMainClass())
                     .applicationName(spec.getApplicationName())
                     .queue(spec.getQueue())
+                    .amJavaHome(spec.getAmJavaHome())
                     .amMemoryMb(spec.getAmMemoryMb())
                     .amVCores(spec.getAmVCores())
                     .tags(spec.sanitizedTags())
@@ -420,6 +481,12 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
             URI uri = URI.create(value);
             if (!SubmissionReference.isLocal(uri)) {
                 return value;
+            }
+            if (applicationStagingDir == null) {
+                // 本地产物必须经 staging 分发才能被其他 NodeManager 读到；
+                // 既没显式 stagingDir、默认 staging 也解析不到时只能明确失败。
+                throw new IllegalStateException("Local artifact " + value + " requires a staging directory; "
+                        + "set yarn.stagingDir or ensure the default staging base resolves");
             }
             URI localPath = SubmissionReference.toLocalPath(value).toUri();
             return gateway.stageLocalFile(localPath, URI.create(applicationStagingDir)).toString();

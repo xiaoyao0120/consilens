@@ -27,4 +27,14 @@ public interface ClusterSubmitter {
      */
     default void kill(ClusterSubmission submission) {
     }
+
+    /**
+     * Best-effort sweep of stale applications from a previous attempt of the
+     * same logical submission (recovery restart), locating them through the
+     * same namespace / job name / run tag that {@link #submit(ClusterSubmitRequest)}
+     * would use. The sweep must not fail the new submission; a no-op for
+     * submitters without the capability.
+     */
+    default void killStale(ClusterSubmitRequest request) {
+    }
 }

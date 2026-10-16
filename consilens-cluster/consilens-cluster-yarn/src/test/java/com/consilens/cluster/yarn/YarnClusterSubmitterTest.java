@@ -70,7 +70,7 @@ class YarnClusterSubmitterTest {
         assertEquals(2048, context.getResource().getMemory());
         assertEquals(2, context.getResource().getVirtualCores());
         assertEquals(2, context.getMaxAppAttempts());
-        assertEquals(Set.of("consilens", "compare"), context.getApplicationTags());
+        assertEquals(Set.of("consilens", "compare", "consilens-run-submission-yarn-1"), context.getApplicationTags());
 
         Map<String, LocalResource> localResources = context.getAMContainerSpec().getLocalResources();
         assertTrue(localResources.containsKey("consilens-runtime"));
@@ -270,11 +270,14 @@ class YarnClusterSubmitterTest {
 
         ClusterSubmission submission = new YarnClusterSubmitter(gateway, hadoopConfDirectory).submit(yarnRequest(spec));
 
-        assertEquals(2, gateway.stagedLocals.size());
+        // runtime + descriptor + HADOOP_CONF_DIR 下的 conf 文件都要跨节点分发
+        assertEquals(3, gateway.stagedLocals.size());
         assertTrue(gateway.stagedLocals.get(0).toString().startsWith("file:"));
         assertTrue(gateway.stagedLocals.get(1).toString().startsWith("file:"));
+        assertTrue(gateway.stagedLocals.get(2).toString().endsWith("yarn-site.xml"));
         Map<String, LocalResource> resources = gateway.submittedContext.getAMContainerSpec().getLocalResources();
         assertEquals("hdfs", resources.get("consilens-runtime").getResource().getScheme());
+        assertEquals("hdfs", resources.get("hadoop-conf/yarn-site.xml").getResource().getScheme());
         assertEquals("/apps/staging/consilens/submission-yarn-1/runtime.zip",
                 resources.get("consilens-runtime").getResource().getFile());
         assertEquals("/apps/staging/consilens/submission-yarn-1/descriptor.json",
@@ -282,6 +285,51 @@ class YarnClusterSubmitterTest {
         String command = gateway.submittedContext.getAMContainerSpec().getCommands().get(0);
         assertTrue(command.endsWith("--staging-dir hdfs://namenode/apps/staging/consilens/submission-yarn-1"));
         assertEquals("submission-yarn-1", submission.getSubmissionId());
+    }
+
+    @Test
+    void shouldHonorAmJavaHomeInContainerCommand() {
+        RecordingYarnGateway gateway = new RecordingYarnGateway();
+        YarnSubmissionSpec spec = validYarnSpec();
+        spec.setAmJavaHome("/opt/java/openjdk");
+
+        new YarnClusterSubmitter(gateway, hadoopConfDirectory).submit(yarnRequest(spec));
+
+        String command = gateway.submittedContext.getAMContainerSpec().getCommands().get(0);
+        assertTrue(command.startsWith("/opt/java/openjdk/bin/java -server"), command);
+    }
+
+    /**
+     * 无 staging 目录（默认 staging 也不可用）时不得 NPE：远端产物 + 本地 conf 仍可提交，
+     * conf 文件退回本地资源（单节点可用），多节点需要显式配置 stagingDir。
+     */
+    @Test
+    void shouldFallBackToLocalConfResourcesWithoutStagingDirectory() {
+        RecordingYarnGateway gateway = new RecordingYarnGateway();
+        gateway.defaultStagingAvailable = false;
+
+        new YarnClusterSubmitter(gateway, hadoopConfDirectory).submit(yarnRequest(validYarnSpec()));
+
+        Map<String, LocalResource> resources = gateway.submittedContext.getAMContainerSpec().getLocalResources();
+        assertEquals("file", resources.get("hadoop-conf/yarn-site.xml").getResource().getScheme());
+    }
+
+    /**
+     * 本地产物无法分发时必须明确失败，而不是静默按本地路径提交（其他 NodeManager 读不到）。
+     */
+    @Test
+    void shouldRejectLocalArtifactsWhenNoStagingDirectoryIsAvailable() throws Exception {
+        RecordingYarnGateway gateway = new RecordingYarnGateway();
+        gateway.defaultStagingAvailable = false;
+        Path runtime = temporaryDirectory.resolve("runtime.zip");
+        Files.write(runtime, new byte[]{1});
+        YarnSubmissionSpec spec = validYarnSpec();
+        spec.setRuntimeArchiveUri(runtime.toString());
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> new YarnClusterSubmitter(gateway, hadoopConfDirectory).submit(yarnRequest(spec)));
+
+        assertTrue(error.getMessage().contains("staging directory"), error.getMessage());
     }
 
     @Test
@@ -348,6 +396,27 @@ class YarnClusterSubmitterTest {
                 () -> new YarnClusterSubmitter(gateway, hadoopConfDirectory).submit(yarnRequest(spec)));
 
         assertTrue(error.getMessage().contains("reserved localization name"));
+    }
+
+    @Test
+    void shouldAppendDeterministicRunTagForRecoverySweep() {
+        RecordingYarnGateway gateway = new RecordingYarnGateway();
+        ClusterSubmitRequest request = yarnRequest(validYarnSpec());
+        request.getExecution().setMaxAttempts(null);
+
+        new YarnClusterSubmitter(gateway, hadoopConfDirectory).submit(request);
+
+        Set<String> tags = gateway.submittedContext.getApplicationTags();
+        assertTrue(tags.contains("consilens-run-submission-yarn-1"));
+    }
+
+    @Test
+    void shouldSweepStaleApplicationsByRunTagOfRequestSubmissionId() {
+        RecordingYarnGateway gateway = new RecordingYarnGateway();
+
+        new YarnClusterSubmitter(gateway, hadoopConfDirectory).killStale(yarnRequest(validYarnSpec()));
+
+        assertEquals("consilens-run-submission-yarn-1", gateway.killedTag);
     }
 
     @Test
@@ -427,8 +496,10 @@ class YarnClusterSubmitterTest {
 
         private int createCalls;
         private int submitCalls;
+        private boolean defaultStagingAvailable = true;
         private ApplicationSubmissionContext submittedContext;
         private final List<URI> stagedLocals = new ArrayList<>();
+        private String killedTag;
 
         @Override
         public ApplicationSubmissionContext createSubmissionContext() {
@@ -462,7 +533,13 @@ class YarnClusterSubmitterTest {
 
         @Override
         public String defaultStagingBase() {
-            return "hdfs://namenode/user/root/.consilens/staging";
+            return defaultStagingAvailable ? "hdfs://namenode/user/root/.consilens/staging" : null;
+        }
+
+        @Override
+        public int killByTag(String tag) {
+            killedTag = tag;
+            return 1;
         }
 
         @Override

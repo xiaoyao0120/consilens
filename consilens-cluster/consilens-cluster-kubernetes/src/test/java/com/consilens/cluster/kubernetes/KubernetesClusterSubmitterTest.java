@@ -23,6 +23,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -178,6 +179,35 @@ class KubernetesClusterSubmitterTest {
                 .findFirst().orElseThrow().getValueFrom().getSecretKeyRef().getName());
     }
 
+    @Test
+    void shouldSweepStaleJobFromRequestNamespaceAndJobNameOverride() {
+        RecordingGateway gateway = new RecordingGateway();
+        KubernetesSubmissionSpec spec = validSpec();
+        spec.setNamespace("prod");
+        spec.setJobName("consilens-orders-prod");
+
+        new KubernetesClusterSubmitter(gateway).killStale(kubernetesRequest(spec, 1));
+
+        assertEquals("prod", gateway.deletedNamespace);
+        assertEquals("consilens-orders-prod", gateway.deletedJobName);
+    }
+
+    /**
+     * 清扫用的 namespace/jobName 必须来自提交请求里的 spec：与 submit 使用同一套值，
+     * 不能在这里另写一份推导规则（规则漂移会扫错对象）。缺 spec 时明确拒绝。
+     */
+    @Test
+    void shouldRejectStaleSweepWithoutKubernetesSubmissionSpec() {
+        RecordingGateway gateway = new RecordingGateway();
+        ClusterSubmitRequest request = kubernetesRequest(null, 1);
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> new KubernetesClusterSubmitter(gateway).killStale(request));
+
+        assertTrue(error.getMessage().contains("jobName"), error.getMessage());
+        assertNull(gateway.deletedJobName);
+    }
+
     private KubernetesSubmissionSpec validSpec() {
         return KubernetesSubmissionSpec.builder()
                 .namespace("default")
@@ -217,6 +247,8 @@ class KubernetesClusterSubmitterTest {
         private Job createdJob;
         private int createConfigMapCalls;
         private ConfigMap createdConfigMap;
+        private String deletedNamespace;
+        private String deletedJobName;
 
         @Override
         public Job create(Job job) {
@@ -230,6 +262,12 @@ class KubernetesClusterSubmitterTest {
             createConfigMapCalls++;
             createdConfigMap = configMap;
             return configMap;
+        }
+
+        @Override
+        public void deleteJob(String namespace, String jobName) {
+            deletedNamespace = namespace;
+            deletedJobName = jobName;
         }
 
         @Override

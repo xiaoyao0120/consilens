@@ -60,6 +60,15 @@ public interface YarnSubmissionGateway extends AutoCloseable {
     default void kill(String applicationId) {
     }
 
+    /**
+     * Kills every running application carrying the given tag; returns the
+     * number of kill requests issued. Used for stale-run cleanup after
+     * recovery restarts.
+     */
+    default int killByTag(String tag) {
+        return 0;
+    }
+
     @Override
     void close();
 }

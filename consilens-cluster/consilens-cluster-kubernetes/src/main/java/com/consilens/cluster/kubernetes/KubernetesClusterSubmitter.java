@@ -52,6 +52,7 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
     private static final String RUNTIME_CLASSPATH = "/opt/consilens/runtime/*";
     private static final String DESCRIPTOR_VOLUME = "comparison-descriptor";
     private static final String DEFAULT_DESCRIPTOR_MOUNT_PATH = "/opt/consilens/descriptor";
+    private static final String DEFAULT_NAMESPACE = "default";
     private static final long COMPLETION_POLL_SECONDS = 3;
     private static final Pattern SAFE_SUBMISSION_ID = Pattern.compile("[A-Za-z0-9_-]+");
 
@@ -102,6 +103,23 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
             Thread.currentThread().interrupt();
         }
         return null;
+    }
+
+    @Override
+    public void killStale(ClusterSubmitRequest request) {
+        // 与 submit 同一套 namespace/jobName（由 ClusterSubmitSupport 写入 spec），
+        // 不在此处重新推导：推导规则两处各写一份必然漂移。
+        KubernetesSubmissionSpec spec = request.getKubernetesSubmission();
+        if (spec == null || spec.getJobName() == null || spec.getJobName().isBlank()) {
+            throw new IllegalArgumentException(
+                    "kubernetesSubmission.jobName is required to sweep stale applications");
+        }
+        String namespace = spec.getNamespace() != null && !spec.getNamespace().isBlank()
+                ? spec.getNamespace()
+                : DEFAULT_NAMESPACE;
+        // best-effort：删除即返回，不阻塞新提交（等待删除不计入运行超时窗口；
+        // 且 fabric8 对 404 同样返回空结果，等待只会拖慢每次首次提交）。
+        gateway.deleteJob(namespace, spec.getJobName());
     }
 
     @Override
