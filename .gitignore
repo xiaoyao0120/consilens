@@ -152,3 +152,5 @@ consilens-ui/.vite
 .consilens-server
 .chrome-cdp
 .chrome-headless
+.orchelon
+.consilens-test

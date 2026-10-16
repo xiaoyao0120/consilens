@@ -21,8 +21,9 @@ management:
 consilens:
   server:
     datasource:
-      # Base64 编码的 32 字节 AES 密钥；未配置时数据源密码以明文存储（开发环境）
-      encryption-key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      # Base64 编码的 32 字节 AES 密钥：只从环境变量（如 CONSILENS_DATASOURCE_ENCRYPTION_KEY）
+      # 或部署侧注入，不写进仓库——未配置时数据源密码只能明文存储（仅限开发环境）
+      encryption-key: ${CONSILENS_DATASOURCE_ENCRYPTION_KEY:}
     node:
       node-key:
       heartbeat-interval-seconds: 2
@@ -46,12 +47,14 @@ consilens:
     api:
       max-request-body-bytes: 10485760
     ai:
-      enabled: true
+      # 默认关闭：与 ConsilensServerProperties.Ai.enabled 的默认值（false）保持一致。
+      # 本地开发需要开启时用环境变量或 --consilens.server.ai.enabled=true，
+      # 不要把 key 写进本文件——凭据只走环境变量（api-key-env / secret-key-env）。
+      enabled: false
       backend: deepseek
       model: deepseek-v4-flash
       base-url: https://opencode.ai/zen/go/v1
       api-key-env: DEEPSEEK_API_KEY
-      api-key: sk-7bCMJlJGuYBLBJ9S0R9zTDeJfEuW8ANEqMYlJs3YNIHJFxtV5PeDD7zS4LJ7HHJo
       max-turns: 8
       max-tool-calls: 20
       run-timeout-seconds: 120
@@ -61,7 +64,6 @@ consilens:
       secret-max-reads: 8
       secret-store: encrypted-db
       secret-key-env: CONSILENS_AGENT_SECRET_KEY
-      secret-key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
       max-concurrent-runs: 4
       fail-fast: true
 

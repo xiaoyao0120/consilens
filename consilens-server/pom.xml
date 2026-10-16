@@ -77,6 +77,42 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- 集群提交（yarn/k8s）运行时依赖：cluster-yarn 的 hadoop 依赖为 provided
+             （运行包由 AM 容器提供），server 侧的 YarnClient 提交链路需要自带 -->
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-common</artifactId>
+            <version>${hadoop.version}</version>
+            <scope>runtime</scope>
+            <exclusions>
+                <!-- jsp-api 2.1 自带一份老版 javax.el API，会遮蔽 tomcat-embed-el 的
+                     EL 实现（Hibernate Validator 初始化失败 HV000183）。
+                     Hadoop 仅客户端使用，不需要其 Web UI 的 JSP 支持。 -->
+                <exclusion>
+                    <groupId>javax.servlet.jsp</groupId>
+                    <artifactId>jsp-api</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-hdfs-client</artifactId>
+            <version>${hadoop.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-yarn-api</artifactId>
+            <version>${hadoop.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-yarn-client</artifactId>
+            <version>${hadoop.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
         <dependency>
             <groupId>com.consilens</groupId>
             <artifactId>consilens-agent-api</artifactId>
@@ -194,13 +230,6 @@
             <groupId>com.microsoft.sqlserver</groupId>
             <artifactId>mssql-jdbc</artifactId>
             <version>12.4.2.jre11</version>
-            <scope>runtime</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>io.prestosql</groupId>
-            <artifactId>presto-jdbc</artifactId>
-            <version>350</version>
             <scope>runtime</scope>
         </dependency>
 
