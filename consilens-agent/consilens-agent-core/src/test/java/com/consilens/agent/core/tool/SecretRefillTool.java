@@ -8,14 +8,12 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 import java.util.List;
 
 /**
@@ -33,11 +31,8 @@ public final class SecretRefillTool implements AgentTool<SecretRefillInput, Secr
                 .name("secret_refill")
                 .description("probe that fails and requests a new secret")
                 .riskLevel(ToolRiskLevel.MEDIUM)
-                .executionMode(ToolExecutionMode.SEQUENTIAL)
                 .sideEffect(ToolSideEffect.READ)
-                .timeout(Duration.ofSeconds(10))
                 .idempotent(false)
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 

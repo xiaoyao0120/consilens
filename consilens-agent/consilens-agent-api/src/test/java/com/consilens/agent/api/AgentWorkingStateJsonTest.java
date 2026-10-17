@@ -15,7 +15,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,9 +54,7 @@ class AgentWorkingStateJsonTest {
                         .build())
                 .task(AgentTaskDraftState.builder().name("orders-prod-vs-dw").build())
                 .provisioningPlan(AgentPlanStateRef.builder().status(AgentPlanStatus.DRAFT).build())
-                .confirmedAssumptions(List.of("amount 类型兼容"))
                 .resourceVersions(Map.of("datasourceSchema", "1"))
-                .lastCompletedStep("PROBE_SOURCE")
                 .build();
     }
 
@@ -75,34 +72,27 @@ class AgentWorkingStateJsonTest {
         assertEquals("prod-db", restored.getSource().getNonSecretParams().get("host").getValue());
         assertEquals(SlotSource.SYSTEM_DEFAULT, restored.getSource().getNonSecretParams().get("port").getSource());
         assertEquals(original.getComparison().getKeys(), restored.getComparison().getKeys());
-        assertEquals(original.getConfirmedAssumptions(), restored.getConfirmedAssumptions());
         assertEquals(original.getResourceVersions(), restored.getResourceVersions());
     }
 
     @Test
     void builderDefensivelyCopiesCollections() {
-        List<String> assumptions = new ArrayList<>();
-        assumptions.add("a");
         Map<String, String> versions = new LinkedHashMap<>();
         versions.put("k", "v");
 
         AgentWorkingState state = AgentWorkingState.builder()
-                .confirmedAssumptions(assumptions)
                 .resourceVersions(versions)
                 .build();
 
-        assumptions.add("mutated");
         versions.put("k2", "v2");
 
-        assertEquals(1, state.getConfirmedAssumptions().size());
         assertEquals(1, state.getResourceVersions().size());
-        assertThrows(UnsupportedOperationException.class, () -> state.getConfirmedAssumptions().add("x"));
         assertThrows(UnsupportedOperationException.class, () -> state.getResourceVersions().put("y", "z"));
     }
 
     @Test
     void toBuilderPreservesStateAndAllowsStageChange() {
-        AgentWorkingState state = sample().withStage(AgentWorkflowStage.PLAN_READY);
+        AgentWorkingState state = sample().toBuilder().stage(AgentWorkflowStage.PLAN_READY).build();
         assertEquals(AgentWorkflowStage.PLAN_READY, state.getStage());
         assertEquals("obj_uuid", state.getObjectiveId());
         assertEquals("draft_source", state.getSource().getDraftId());

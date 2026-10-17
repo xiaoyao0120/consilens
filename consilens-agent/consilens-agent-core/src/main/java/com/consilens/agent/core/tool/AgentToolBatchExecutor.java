@@ -5,25 +5,17 @@ import com.consilens.agent.api.state.AgentWorkingState;
 import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolSideEffect;
 import com.consilens.agent.core.state.AgentStateInvariantValidator;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Executes a prepared tool batch in model source order. Reads may run
- * concurrently once enabled; writes always run sequentially. Typed reducers
- * thread the working state through the batch, and every reduce passes the
- * invariant validator before the next tool executes.
+ * Executes a prepared tool batch sequentially in model source order. Typed
+ * reducers thread the working state through the batch, and every reduce passes
+ * the invariant validator before the next tool executes.
  */
 public final class AgentToolBatchExecutor {
-
-    private final boolean parallelReadsEnabled;
-
-    public AgentToolBatchExecutor(boolean parallelReadsEnabled) {
-        this.parallelReadsEnabled = parallelReadsEnabled;
-    }
 
     public List<AgentToolExecutionResult> execute(List<PreparedToolCall> batch,
                                                   AgentWorkingState initialState,
@@ -31,16 +23,8 @@ public final class AgentToolBatchExecutor {
                                                   AgentCancellationToken cancellationToken) {
         AgentWorkingState state = initialState;
         List<AgentToolExecutionResult> results = new ArrayList<>(batch.size());
-        boolean sequential = !parallelReadsEnabled || batch.stream().anyMatch(this::isWrite);
-        if (sequential) {
-            for (PreparedToolCall prepared : batch) {
-                state = executeOne(prepared, state, context, results);
-            }
-        } else {
-            // Reserved for WP-10 read parallelism; keeps source order on write.
-            for (PreparedToolCall prepared : batch) {
-                state = executeOne(prepared, state, context, results);
-            }
+        for (PreparedToolCall prepared : batch) {
+            state = executeOne(prepared, state, context, results);
         }
         return results;
     }
@@ -85,9 +69,5 @@ public final class AgentToolBatchExecutor {
                 .stateChanged(stateChanged)
                 .build());
         return nextState;
-    }
-
-    private boolean isWrite(PreparedToolCall prepared) {
-        return prepared.getTool().descriptor().getSideEffect() != ToolSideEffect.READ;
     }
 }

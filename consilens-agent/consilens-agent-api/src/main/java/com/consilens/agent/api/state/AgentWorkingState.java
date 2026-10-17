@@ -25,10 +25,8 @@ public final class AgentWorkingState {
     private final AgentComparisonDraft comparison;
     private final AgentTaskDraftState task;
     private final AgentPlanStateRef provisioningPlan;
-    private final List<String> confirmedAssumptions;
     private final List<String> unresolvedQuestions;
     private final Map<String, String> resourceVersions;
-    private final String lastCompletedStep;
 
     @JsonCreator
     public AgentWorkingState(
@@ -41,10 +39,8 @@ public final class AgentWorkingState {
             @JsonProperty("comparison") AgentComparisonDraft comparison,
             @JsonProperty("task") AgentTaskDraftState task,
             @JsonProperty("provisioningPlan") AgentPlanStateRef provisioningPlan,
-            @JsonProperty("confirmedAssumptions") List<String> confirmedAssumptions,
             @JsonProperty("unresolvedQuestions") List<String> unresolvedQuestions,
-            @JsonProperty("resourceVersions") Map<String, String> resourceVersions,
-            @JsonProperty("lastCompletedStep") String lastCompletedStep) {
+            @JsonProperty("resourceVersions") Map<String, String> resourceVersions) {
         this.schemaVersion = schemaVersion;
         this.objectiveId = objectiveId;
         this.objective = objective;
@@ -54,10 +50,8 @@ public final class AgentWorkingState {
         this.comparison = comparison;
         this.task = task;
         this.provisioningPlan = provisioningPlan;
-        this.confirmedAssumptions = copyList(confirmedAssumptions);
         this.unresolvedQuestions = copyList(unresolvedQuestions);
         this.resourceVersions = copyMap(resourceVersions);
-        this.lastCompletedStep = lastCompletedStep;
     }
 
     public int getSchemaVersion() {
@@ -96,24 +90,12 @@ public final class AgentWorkingState {
         return provisioningPlan;
     }
 
-    public List<String> getConfirmedAssumptions() {
-        return Collections.unmodifiableList(confirmedAssumptions);
-    }
-
     public List<String> getUnresolvedQuestions() {
         return Collections.unmodifiableList(unresolvedQuestions);
     }
 
     public Map<String, String> getResourceVersions() {
         return Collections.unmodifiableMap(resourceVersions);
-    }
-
-    public String getLastCompletedStep() {
-        return lastCompletedStep;
-    }
-
-    public AgentWorkingState withStage(AgentWorkflowStage nextStage) {
-        return toBuilder().stage(nextStage).build();
     }
 
     public Builder toBuilder() {
@@ -146,10 +128,8 @@ public final class AgentWorkingState {
         private AgentComparisonDraft comparison;
         private AgentTaskDraftState task;
         private AgentPlanStateRef provisioningPlan;
-        private List<String> confirmedAssumptions = new ArrayList<>();
         private List<String> unresolvedQuestions = new ArrayList<>();
         private Map<String, String> resourceVersions = new LinkedHashMap<>();
-        private String lastCompletedStep;
 
         public Builder() {
         }
@@ -164,10 +144,8 @@ public final class AgentWorkingState {
             this.comparison = state.comparison;
             this.task = state.task;
             this.provisioningPlan = state.provisioningPlan;
-            this.confirmedAssumptions = new ArrayList<>(state.confirmedAssumptions);
             this.unresolvedQuestions = new ArrayList<>(state.unresolvedQuestions);
             this.resourceVersions = new LinkedHashMap<>(state.resourceVersions);
-            this.lastCompletedStep = state.lastCompletedStep;
         }
 
         public Builder schemaVersion(int value) {
@@ -215,11 +193,6 @@ public final class AgentWorkingState {
             return this;
         }
 
-        public Builder confirmedAssumptions(List<String> values) {
-            this.confirmedAssumptions = values == null ? new ArrayList<>() : new ArrayList<>(values);
-            return this;
-        }
-
         public Builder unresolvedQuestions(List<String> values) {
             this.unresolvedQuestions = values == null ? new ArrayList<>() : new ArrayList<>(values);
             return this;
@@ -227,11 +200,6 @@ public final class AgentWorkingState {
 
         public Builder resourceVersions(Map<String, String> values) {
             this.resourceVersions = values == null ? new LinkedHashMap<>() : new LinkedHashMap<>(values);
-            return this;
-        }
-
-        public Builder lastCompletedStep(String value) {
-            this.lastCompletedStep = value;
             return this;
         }
 
@@ -246,10 +214,8 @@ public final class AgentWorkingState {
                     comparison,
                     task,
                     provisioningPlan,
-                    confirmedAssumptions,
                     unresolvedQuestions,
-                    resourceVersions,
-                    lastCompletedStep);
+                    resourceVersions);
         }
     }
 }

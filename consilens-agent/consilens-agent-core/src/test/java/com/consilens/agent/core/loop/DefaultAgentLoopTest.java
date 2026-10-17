@@ -86,7 +86,8 @@ class DefaultAgentLoopTest {
     private AgentLoopResult run(String requestId, String userText, AgentModelResponse... script) {
         model = new TestAgentModelClient(script);
         loop = new DefaultAgentLoop(persistence, model, registry,
-                new AgentContextAssembler("test", 50), AgentRunConfig.defaults());
+                new AgentContextAssembler("test", 50), AgentRunConfig.defaults(),
+                com.consilens.agent.api.tool.AgentSecretResolver.NOOP);
         appendUserMessage(requestId, userText);
         return loop.run(AgentLoopRequest.builder()
                 .sessionId("s1")
@@ -96,7 +97,6 @@ class DefaultAgentLoopTest {
                 .workerId("worker")
                 .objectiveId("obj-1")
                 .objective("test objective")
-                .trigger(AgentRunTrigger.USER_MESSAGE)
                 .build(), AgentCancellationToken.NEVER_CANCELLED);
     }
 
@@ -141,8 +141,8 @@ class DefaultAgentLoopTest {
         assertTrue(AgentEventSequenceValidator.validate(allEvents()).isEmpty());
 
         AgentWorkingState state = persistence.latestSnapshot("s1").orElseThrow().getWorkingState();
-        assertTrue(state.getConfirmedAssumptions().contains("echo:hello"));
-        assertEquals("ECHO", state.getLastCompletedStep());
+        assertEquals(com.consilens.agent.api.state.AgentWorkflowStage.COLLECTING_DATASOURCES,
+                state.getStage());
     }
 
     @Test
@@ -206,7 +206,8 @@ class DefaultAgentLoopTest {
     void cancellationStopsTheRunWithoutModelCalls() {
         TestAgentModelClient unused = new TestAgentModelClient(text("unused"));
         loop = new DefaultAgentLoop(persistence, unused, registry,
-                new AgentContextAssembler("test", 50), AgentRunConfig.defaults());
+                new AgentContextAssembler("test", 50), AgentRunConfig.defaults(),
+                com.consilens.agent.api.tool.AgentSecretResolver.NOOP);
         AtomicBoolean cancelled = new AtomicBoolean(true);
         appendUserMessage("m7", "please stop");
 
@@ -249,7 +250,8 @@ class DefaultAgentLoopTest {
         long eventsBefore = allEvents().size();
         TestAgentModelClient fresh = new TestAgentModelClient(text("ignored"));
         loop = new DefaultAgentLoop(persistence, fresh, registry,
-                new AgentContextAssembler("test", 50), AgentRunConfig.defaults());
+                new AgentContextAssembler("test", 50), AgentRunConfig.defaults(),
+                com.consilens.agent.api.tool.AgentSecretResolver.NOOP);
         AgentLoopResult duplicate = loop.run(AgentLoopRequest.builder()
                 .sessionId("s1")
                 .runId("run-m9-again")
@@ -271,7 +273,8 @@ class DefaultAgentLoopTest {
         appendUserMessage("m10", "hi");
         TestAgentModelClient unused = new TestAgentModelClient(text("unused"));
         loop = new DefaultAgentLoop(persistence, unused, registry,
-                new AgentContextAssembler("test", 50), AgentRunConfig.defaults());
+                new AgentContextAssembler("test", 50), AgentRunConfig.defaults(),
+                com.consilens.agent.api.tool.AgentSecretResolver.NOOP);
 
         AgentLoopResult result = loop.run(AgentLoopRequest.builder()
                 .sessionId("s1")
@@ -349,7 +352,8 @@ class DefaultAgentLoopTest {
     void deadlineExceededTimesOutTheRun() {
         TestAgentModelClient unused = new TestAgentModelClient(text("slow"));
         loop = new DefaultAgentLoop(persistence, unused, registry,
-                new AgentContextAssembler("test", 50), AgentRunConfig.defaults());
+                new AgentContextAssembler("test", 50), AgentRunConfig.defaults(),
+                com.consilens.agent.api.tool.AgentSecretResolver.NOOP);
         appendUserMessage("m12", "hi");
 
         AgentLoopResult result = loop.run(AgentLoopRequest.builder()

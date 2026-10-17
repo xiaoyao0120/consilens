@@ -23,7 +23,7 @@ class AgentStateInvariantValidatorTest {
 
     @Test
     void rejectsIllegalStageJump() {
-        AgentWorkingState next = base().withStage(AgentWorkflowStage.COMPLETED);
+        AgentWorkingState next = base().toBuilder().stage(AgentWorkflowStage.COMPLETED).build();
         assertTrue(AgentStateInvariantValidator.validateTransition(base(), next)
                 .stream().anyMatch(v -> v.contains("illegal stage transition")));
     }

@@ -22,6 +22,7 @@ import com.consilens.agent.api.store.AgentToolCallRecord;
 import com.consilens.agent.api.tool.AgentToolCallStatus;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolOutcome;
+import com.consilens.agent.api.tool.AgentSecretResolver;
 import com.consilens.agent.core.event.AgentEventFactory;
 import com.consilens.agent.core.security.SensitiveValueGuard;
 import com.consilens.agent.core.state.AgentStateMachine;
@@ -57,6 +58,9 @@ public final class DefaultAgentLoop implements AgentLoop {
 
     private static final Logger log = LoggerFactory.getLogger(DefaultAgentLoop.class);
     private static final int SNAPSHOT_EVENT_INTERVAL = 50;
+    private static final String DEFAULT_WORKER_ID = "local-worker";
+    private static final Duration SUSPENSION_TTL = Duration.ofSeconds(600);
+    private static final Duration LEASE_RENEWAL_MARGIN = Duration.ofSeconds(30);
 
     private final AgentPersistence persistence;
     private final AgentModelClient modelClient;
@@ -66,21 +70,24 @@ public final class DefaultAgentLoop implements AgentLoop {
     private final AgentToolBatchExecutor batchExecutor;
     private final AgentStopEvaluator stopEvaluator;
     private final AgentRunConfig config;
+    private final AgentSecretResolver secretResolver;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public DefaultAgentLoop(AgentPersistence persistence,
                             AgentModelClient modelClient,
                             AgentToolRegistry registry,
                             AgentContextAssembler contextAssembler,
-                            AgentRunConfig config) {
+                            AgentRunConfig config,
+                            AgentSecretResolver secretResolver) {
         this.persistence = persistence;
         this.modelClient = modelClient;
         this.registry = registry;
         this.contextAssembler = contextAssembler;
         this.preflight = new AgentToolPreflight(registry, mapper);
-        this.batchExecutor = new AgentToolBatchExecutor(config.isParallelReadsEnabled());
+        this.batchExecutor = new AgentToolBatchExecutor();
         this.stopEvaluator = new AgentStopEvaluator();
         this.config = config;
+        this.secretResolver = secretResolver;
     }
 
     @Override
@@ -123,9 +130,9 @@ public final class DefaultAgentLoop implements AgentLoop {
             }
         }
 
-        String workerId = request.getWorkerId() == null ? "local-worker" : request.getWorkerId();
+        String workerId = request.getWorkerId() == null ? DEFAULT_WORKER_ID : request.getWorkerId();
         Instant now = Instant.now();
-        Duration lease = config.getRunTimeout().plusSeconds(30);
+        Duration lease = config.getRunTimeout().plus(LEASE_RENEWAL_MARGIN);
         if (!persistence.tryAcquireLease(session.getId(), session.getActorId(), workerId, now, now.plus(lease))) {
             log.warn("agent lease busy: sessionId={} worker={}", session.getId(), workerId);
             return result(AgentLoopOutcome.BUSY, session.getStatus(), null, session.getNextSeq(),
@@ -148,7 +155,7 @@ public final class DefaultAgentLoop implements AgentLoop {
         String runId = request.getRunId() == null ? UUID.randomUUID().toString() : request.getRunId();
         String turnId = null;
         long nextSeq = persistence.nextSeq(sessionId);
-        int turnCount = 0;
+        long lastSnapshotNextSeq = nextSeq;
         int toolCallCount = 0;
 
         setSessionStatus(sessionId, AgentSessionStatus.RUNNING);
@@ -168,7 +175,6 @@ public final class DefaultAgentLoop implements AgentLoop {
         List<AgentEvent> events = persistence.listEventsAfter(sessionId, -1, 200);
 
         for (int turn = 1; turn <= config.getMaxTurns(); turn++) {
-            turnCount = turn;
             long turnStarted = System.currentTimeMillis();
             if (cancellationToken.isCancelled()) {
         return finish(sessionId, runId, state, AgentLoopOutcome.CANCELLED,
@@ -339,7 +345,7 @@ public final class DefaultAgentLoop implements AgentLoop {
                 try {
                     DefaultAgentToolContext toolContext = new DefaultAgentToolContext(
                             request.getActorId(), sessionId, runId, turnId, request.getObjectiveId(),
-                            batchState, NoopSecretResolver.INSTANCE, Set.of());
+                            batchState, secretResolver, Set.of());
                     execution = executeOne(prepared.getPrepared(), batchState, toolContext,
                             cancellationToken);
                 } catch (RuntimeException e) {
@@ -397,7 +403,7 @@ public final class DefaultAgentLoop implements AgentLoop {
                     ObjectNode secretPayload = AgentEventFactory.payload();
                     secretPayload.put("secretRequestId", outcome.getSecretRequestId())
                             .put("draftId", outcome.getDraftId() == null ? "" : outcome.getDraftId())
-                            .put("expiresAt", Instant.now().plusSeconds(600).toString());
+                            .put("expiresAt", Instant.now().plus(SUSPENSION_TTL).toString());
                     com.fasterxml.jackson.databind.node.ArrayNode secretFields =
                             secretPayload.putArray("fields");
                     if (outcome.getMissingSlots() != null) {
@@ -418,7 +424,7 @@ public final class DefaultAgentLoop implements AgentLoop {
                     approvalPayload.put("approvalId", outcome.getApprovalId() == null ? "" : outcome.getApprovalId())
                             .put("actionDigest", outcome.getActionDigest() == null ? "" : outcome.getActionDigest())
                             .put("summary", outcome.getApprovalSummary() == null ? "" : outcome.getApprovalSummary())
-                            .put("expiresAt", Instant.now().plusSeconds(600).toString());
+                            .put("expiresAt", Instant.now().plus(SUSPENSION_TTL).toString());
                     nextSeq = append(nextSeq, sessionId, runId, turnId, AgentEventType.APPROVAL_REQUIRED,
                             AgentEventVisibility.USER_VISIBLE, approvalPayload);
                     suspension = suspend(sessionId, runId, state, AgentSessionStatus.WAITING_APPROVAL,
@@ -436,8 +442,13 @@ public final class DefaultAgentLoop implements AgentLoop {
                     AgentEventVisibility.AUDIT_ONLY,
                     AgentEventFactory.payload().put("turnIndex", turn));
             events = persistence.listEventsAfter(sessionId, -1, 200);
-            if (turnCount % SNAPSHOT_EVENT_INTERVAL == 0) {
-                snapshot(sessionId, state, "turn checkpoint", nextSeq);
+            // Snapshot on accumulated event volume, not turn count: default
+            // maxTurns (8) never reached a turn-based 50-interval.
+            long eventsSinceSnapshot = nextSeq - lastSnapshotNextSeq;
+            if (eventsSinceSnapshot >= SNAPSHOT_EVENT_INTERVAL) {
+                snapshot(sessionId, state, "event checkpoint", nextSeq);
+                lastSnapshotNextSeq += (eventsSinceSnapshot / SNAPSHOT_EVENT_INTERVAL)
+                        * SNAPSHOT_EVENT_INTERVAL;
             }
         }
 
@@ -599,7 +610,7 @@ public final class DefaultAgentLoop implements AgentLoop {
     private void renewLease(String sessionId, String workerId) {
         AgentSessionRecord session = persistence.findSession(sessionId).orElseThrow();
         persistence.renewLease(sessionId, workerId, session.getVersion(),
-                Instant.now().plus(config.getRunTimeout().plusSeconds(30)));
+                Instant.now().plus(config.getRunTimeout().plus(LEASE_RENEWAL_MARGIN)));
     }
 
     private void saveToolCall(String sessionId, String runId, String turnId, AgentModelToolCall modelCall,
@@ -699,19 +710,5 @@ public final class DefaultAgentLoop implements AgentLoop {
     }
 
     private static final class NoopListener implements AgentModelEventListener {
-    }
-
-    private enum NoopSecretResolver implements com.consilens.agent.api.tool.AgentSecretResolver {
-        INSTANCE;
-
-        @Override
-        public char[] resolve(String secretRequestId) {
-            return new char[0];
-        }
-
-        @Override
-        public void consume(String secretRequestId) {
-            // no-op for WP-05 loop tests
-        }
     }
 }

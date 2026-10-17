@@ -1,11 +1,9 @@
 package com.consilens.agent.api.tool;
 
-import com.consilens.agent.api.store.AgentResourceRef;
 import lombok.Builder;
 import lombok.Value;
 
 import java.util.List;
-import java.util.Map;
 import java.time.Instant;
 
 /**
@@ -21,8 +19,6 @@ public class AgentToolOutcome<O> {
     String errorCode;
     boolean retryable;
     ToolResultVisibility visibility;
-    List<AgentResourceRef> resourceRefs;
-    Map<String, Object> metrics;
     boolean secretInputRequired;
     String secretRequestId;
     String draftId;
@@ -41,8 +37,6 @@ public class AgentToolOutcome<O> {
                 .structuredData(data)
                 .content(content)
                 .visibility(ToolResultVisibility.MODEL_AND_USER)
-                .resourceRefs(List.of())
-                .metrics(Map.of())
                 .build();
     }
 
@@ -53,8 +47,6 @@ public class AgentToolOutcome<O> {
                 .retryable(retryable)
                 .content(safeMessage)
                 .visibility(ToolResultVisibility.MODEL_AND_USER)
-                .resourceRefs(List.of())
-                .metrics(Map.of())
                 .build();
     }
 }

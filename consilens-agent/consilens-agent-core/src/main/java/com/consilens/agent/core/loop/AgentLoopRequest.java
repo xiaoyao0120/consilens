@@ -15,8 +15,6 @@ public class AgentLoopRequest {
     String workerId;
     String objectiveId;
     String objective;
-    String userText;
-    AgentRunTrigger trigger;
     String resumeFromRunId;
     Instant deadline;
     @Builder.Default

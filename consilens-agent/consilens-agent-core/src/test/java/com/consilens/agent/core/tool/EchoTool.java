@@ -6,14 +6,12 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -31,12 +29,9 @@ public class EchoTool implements AgentTool<EchoInput, EchoOutput> {
                 .name("echo")
                 .description("echoes the given text back")
                 .riskLevel(ToolRiskLevel.LOW)
-                .executionMode(ToolExecutionMode.SEQUENTIAL)
                 .sideEffect(ToolSideEffect.READ)
-                .timeout(Duration.ofSeconds(10))
                 .idempotent(false)
                 .allowedStages(java.util.Set.of())
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 
@@ -66,11 +61,7 @@ public class EchoTool implements AgentTool<EchoInput, EchoOutput> {
 
     @Override
     public AgentWorkingState reduce(AgentWorkingState previous, EchoOutput output) {
-        List<String> assumptions = new ArrayList<>(previous.getConfirmedAssumptions());
-        assumptions.add("echo:" + output.getEchoed());
         return previous.toBuilder()
-                .confirmedAssumptions(assumptions)
-                .lastCompletedStep("ECHO")
                 .stage(AgentWorkflowStage.COLLECTING_DATASOURCES)
                 .build();
     }

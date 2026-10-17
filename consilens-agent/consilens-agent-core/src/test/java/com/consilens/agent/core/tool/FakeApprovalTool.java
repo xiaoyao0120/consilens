@@ -5,14 +5,12 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 
 /**
  * WP-09 fake write tool: requires structured approval before any write would
@@ -29,12 +27,9 @@ public final class FakeApprovalTool implements AgentTool<FakeApprovalInput, Fake
                 .name("fake_write")
                 .description("fake write tool requiring approval")
                 .riskLevel(ToolRiskLevel.HIGH)
-                .executionMode(ToolExecutionMode.SEQUENTIAL)
                 .sideEffect(ToolSideEffect.WRITE)
-                .timeout(Duration.ofSeconds(5))
                 .idempotent(false)
                 .allowedStages(java.util.Set.of())
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 

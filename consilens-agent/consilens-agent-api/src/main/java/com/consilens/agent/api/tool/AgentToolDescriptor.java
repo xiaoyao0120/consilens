@@ -5,7 +5,6 @@ import lombok.Builder;
 import lombok.Value;
 import lombok.With;
 
-import java.time.Duration;
 import java.util.Set;
 
 /**
@@ -19,16 +18,9 @@ public class AgentToolDescriptor {
     String name;
     String description;
     ToolRiskLevel riskLevel;
-    ToolExecutionMode executionMode;
     ToolSideEffect sideEffect;
     String requiredPermission;
-    Duration timeout;
     boolean idempotent;
     @Builder.Default
     Set<AgentWorkflowStage> allowedStages = java.util.Set.of();
-    ToolResultVisibility resultVisibility;
-
-    public boolean isReadOnly() {
-        return sideEffect == ToolSideEffect.READ;
-    }
 }
