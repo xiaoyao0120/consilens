@@ -56,7 +56,6 @@ strategy:
   bisectionFactor: 2
   bisectionThreshold: 100000
   batchSize: 1000
-  enableProfiling: true
 
 result:
   sinks:

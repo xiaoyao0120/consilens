@@ -92,7 +92,6 @@ strategy:
   bisectionFactor: 8
   bisectionThreshold: 8000
   batchSize: 1000
-  enableProfiling: true
 
 result:
   sinks:

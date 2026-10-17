@@ -164,7 +164,6 @@ strategy:
   bisectionFactor: 8
   bisectionThreshold: 5000
   batchSize: 1000
-  enableProfiling: false
 
 result:
   sinks:
