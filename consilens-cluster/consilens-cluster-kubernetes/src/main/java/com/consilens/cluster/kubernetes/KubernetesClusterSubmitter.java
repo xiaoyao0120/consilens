@@ -1,7 +1,11 @@
 package com.consilens.cluster.kubernetes;
 
 import com.consilens.cluster.api.ClusterApplicationResult;
+import com.consilens.cluster.api.ClusterComparisonDescription;
+import com.consilens.cluster.api.ClusterExecutionDescription;
 import com.consilens.cluster.api.ClusterSubmission;
+import com.consilens.cluster.api.ClusterSubmissionContext;
+import com.consilens.cluster.api.ClusterSubmissionParameters;
 import com.consilens.cluster.api.ClusterSubmitRequest;
 import com.consilens.cluster.api.ClusterSubmitter;
 import com.consilens.cluster.api.KubernetesSecretKeyRef;
@@ -33,8 +37,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -49,29 +55,112 @@ import java.util.stream.Collectors;
 public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseable {
 
     private static final String COORDINATOR_NAME = "consilens-coordinator";
-    private static final String RUNTIME_CLASSPATH = "/opt/consilens/runtime/*";
     private static final String DESCRIPTOR_VOLUME = "comparison-descriptor";
-    private static final String DEFAULT_DESCRIPTOR_MOUNT_PATH = "/opt/consilens/descriptor";
-    private static final String DEFAULT_NAMESPACE = "default";
-    private static final long COMPLETION_POLL_SECONDS = 3;
     private static final Pattern SAFE_SUBMISSION_ID = Pattern.compile("[A-Za-z0-9_-]+");
 
-    private final KubernetesSubmissionGateway gateway;
+    /**
+     * Gateway creation is deferred until the first real submission so that
+     * ServiceLoader discovery (which instantiates every provider to read its
+     * platform) does not build a Kubernetes client for an unused backend.
+     */
+    private final Supplier<KubernetesSubmissionGateway> gatewayFactory;
+    private KubernetesSubmissionGateway gateway;
+
+    /**
+     * Poll interval captured from the submitting spec; the interface's
+     * {@link #awaitCompletion} has no request access, so the value is remembered
+     * from the latest {@link #submit} call. Defaults to the historical 3 seconds.
+     */
+    private volatile long completionPollSeconds = KubernetesSubmissionSpec.DEFAULT_COMPLETION_POLL_SECONDS;
 
     public KubernetesClusterSubmitter() {
-        this(new Fabric8KubernetesSubmissionGateway());
+        this(KubernetesClusterSubmitter::defaultGateway);
     }
 
     public KubernetesClusterSubmitter(KubernetesSubmissionGateway gateway) {
-        this.gateway = Objects.requireNonNull(gateway, "gateway");
+        this(supplierOf(gateway));
+    }
+
+    private KubernetesClusterSubmitter(Supplier<KubernetesSubmissionGateway> gatewayFactory) {
+        this.gatewayFactory = Objects.requireNonNull(gatewayFactory, "gatewayFactory");
+    }
+
+    private static KubernetesSubmissionGateway defaultGateway() {
+        return new Fabric8KubernetesSubmissionGateway();
+    }
+
+    private static Supplier<KubernetesSubmissionGateway> supplierOf(KubernetesSubmissionGateway gateway) {
+        Objects.requireNonNull(gateway, "gateway");
+        return () -> gateway;
+    }
+
+    private KubernetesSubmissionGateway gateway() {
+        if (gateway == null) {
+            gateway = Objects.requireNonNull(gatewayFactory.get(), "gateway");
+        }
+        return gateway;
+    }
+
+    @Override
+    public String platform() {
+        return "kubernetes";
+    }
+
+    @Override
+    public boolean descriptorRedactsPasswords() {
+        return true;
+    }
+
+    @Override
+    public ClusterSubmitRequest buildRequest(ClusterSubmissionContext context) {
+        Map<String, Object> params = context.getProperties();
+        String descriptor = context.getDescriptor();
+        String submissionId = context.getSubmissionId();
+        String jobName = ClusterSubmissionParameters.orDefault(
+                params, "jobName", defaultJobName(submissionId));
+        Map<String, KubernetesSecretKeyRef> secretEnv = secretEnvsOf(params.get("secretEnv"));
+        requirePasswordSecret(descriptor, secretEnv, "SOURCE_PASSWORD");
+        requirePasswordSecret(descriptor, secretEnv, "TARGET_PASSWORD");
+        String descriptorReference = "configmap:" + descriptorConfigMapName(jobName);
+        return ClusterSubmitRequest.builder()
+                .submissionId(submissionId)
+                .comparison(ClusterComparisonDescription.builder()
+                        .sourceConfigRef("descriptor:" + descriptorReference)
+                        .targetConfigRef("descriptor:" + descriptorReference)
+                        .build())
+                .execution(ClusterExecutionDescription.builder()
+                        .executionMode(ExecutionMode.KUBERNETES)
+                        .maxAttempts(ClusterSubmissionParameters.positiveInteger(
+                                params.get("maxAppAttempts"), "maxAppAttempts"))
+                        .build())
+                .kubernetesSubmission(KubernetesSubmissionSpec.builder()
+                        .namespace(ClusterSubmissionParameters.orDefault(
+                                params, "namespace", KubernetesSubmissionSpec.DEFAULT_NAMESPACE))
+                        .jobName(jobName)
+                        .image(ClusterSubmissionParameters.required(params, "image", "kubernetes.image"))
+                        .descriptorData(Map.of("comparison.yaml", descriptor))
+                        .descriptorConfigMapName(descriptorConfigMapName(jobName))
+                        .descriptorMountPath(KubernetesSubmissionSpec.DEFAULT_DESCRIPTOR_MOUNT_PATH)
+                        .memoryMiB(ClusterSubmissionParameters.parseMemoryMb(
+                                ClusterSubmissionParameters.orDefault(params, "memory", "1g")))
+                        .cpuMilli(ClusterSubmissionParameters.parseCpuMilli(
+                                ClusterSubmissionParameters.orDefault(params, "cpu", "0.5")))
+                        .serviceAccountName(stringParam(params, "serviceAccount"))
+                        .imagePullSecrets(ClusterSubmissionParameters.splitCsv(
+                                (String) params.get("imagePullSecrets")))
+                        .envs(ClusterSubmissionParameters.stringMap(params.get("envs")))
+                        .secretEnv(secretEnv)
+                        .build())
+                .build();
     }
 
     @Override
     public ClusterSubmission submit(ClusterSubmitRequest request) {
         KubernetesSubmissionSpec spec = validateAndExtractSpec(request);
+        completionPollSeconds = spec.getCompletionPollSeconds();
         int maxAttempts = maxAttemptsOrDefault(request);
         createDescriptorConfigMapIfNeeded(spec);
-        Job created = gateway.create(buildJob(request, spec, maxAttempts));
+        Job created = gateway().create(buildJob(request, spec, maxAttempts));
         return ClusterSubmission.builder()
                 .submissionId(request.getSubmissionId())
                 .executionMode(ExecutionMode.KUBERNETES)
@@ -92,12 +181,12 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         long deadlineNanos = timeout == null ? Long.MAX_VALUE : System.nanoTime() + timeout.toNanos();
         try {
             while (System.nanoTime() < deadlineNanos) {
-                String status = gateway.jobCompletionStatus(namespaceAndJob[0], namespaceAndJob[1]).orElse(null);
+                String status = gateway().jobCompletionStatus(namespaceAndJob[0], namespaceAndJob[1]).orElse(null);
                 if ("Complete".equals(status) || "Failed".equals(status)) {
                     return new ClusterApplicationResult(submission.getClusterApplicationId(),
                             "Complete".equals(status) ? "SUCCEEDED" : "FAILED", null, null);
                 }
-                Thread.sleep(COMPLETION_POLL_SECONDS * 1000L);
+                Thread.sleep(completionPollSeconds * 1000L);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -116,10 +205,10 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         }
         String namespace = spec.getNamespace() != null && !spec.getNamespace().isBlank()
                 ? spec.getNamespace()
-                : DEFAULT_NAMESPACE;
+                : KubernetesSubmissionSpec.DEFAULT_NAMESPACE;
         // best-effort：删除即返回，不阻塞新提交（等待删除不计入运行超时窗口；
         // 且 fabric8 对 404 同样返回空结果，等待只会拖慢每次首次提交）。
-        gateway.deleteJob(namespace, spec.getJobName());
+        gateway().deleteJob(namespace, spec.getJobName());
     }
 
     @Override
@@ -129,13 +218,15 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         }
         String[] namespaceAndJob = submission.getClusterApplicationId().split("/", 2);
         if (namespaceAndJob.length == 2) {
-            gateway.deleteJob(namespaceAndJob[0], namespaceAndJob[1]);
+            gateway().deleteJob(namespaceAndJob[0], namespaceAndJob[1]);
         }
     }
 
     @Override
     public void close() {
-        gateway.close();
+        if (gateway != null) {
+            gateway.close();
+        }
     }
 
     private KubernetesSubmissionSpec validateAndExtractSpec(ClusterSubmitRequest request) {
@@ -159,14 +250,14 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
 
     private Job buildJob(ClusterSubmitRequest request, KubernetesSubmissionSpec spec, int maxAttempts) {
         Map<String, String> labels = new LinkedHashMap<>(spec.sanitizedLabels());
-        labels.put("app.kubernetes.io/name", "consilens");
+        labels.put("app.kubernetes.io/name", applicationLabel(spec));
         labels.put("app.kubernetes.io/instance", spec.getJobName());
 
         Container container = new ContainerBuilder()
                 .withName(COORDINATOR_NAME)
                 .withImage(spec.getImage())
                 .withImagePullPolicy(spec.getImagePullPolicy())
-                .withCommand("java")
+                .withCommand(containerCommand(spec))
                 .withArgs(commandArguments(request, spec))
                 .withEnv(containerEnvironment(spec))
                 .withVolumeMounts(descriptorVolumeMounts(spec))
@@ -213,10 +304,32 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         return List.of(
                 "-Xmx" + spec.getMemoryMiB() + "m",
                 "-cp",
-                RUNTIME_CLASSPATH,
+                runtimeClasspath(spec),
                 spec.getCoordinatorMainClass(),
                 request.getSubmissionId(),
                 descriptorPath(spec));
+    }
+
+    private String runtimeClasspath(KubernetesSubmissionSpec spec) {
+        return isBlank(spec.getRuntimeClasspath())
+                ? KubernetesSubmissionSpec.DEFAULT_RUNTIME_CLASSPATH
+                : spec.getRuntimeClasspath();
+    }
+
+    private String containerCommand(KubernetesSubmissionSpec spec) {
+        return isBlank(spec.getContainerCommand())
+                ? KubernetesSubmissionSpec.DEFAULT_CONTAINER_COMMAND
+                : spec.getContainerCommand();
+    }
+
+    private String applicationLabel(KubernetesSubmissionSpec spec) {
+        return isBlank(spec.getApplicationLabel())
+                ? KubernetesSubmissionSpec.DEFAULT_APPLICATION_LABEL
+                : spec.getApplicationLabel();
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     private String descriptorPath(KubernetesSubmissionSpec spec) {
@@ -228,8 +341,8 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
     }
 
     private String mountPath(KubernetesSubmissionSpec spec) {
-        return spec.getDescriptorMountPath() == null || spec.getDescriptorMountPath().trim().isEmpty()
-                ? DEFAULT_DESCRIPTOR_MOUNT_PATH
+        return isBlank(spec.getDescriptorMountPath())
+                ? KubernetesSubmissionSpec.DEFAULT_DESCRIPTOR_MOUNT_PATH
                 : spec.getDescriptorMountPath();
     }
 
@@ -271,7 +384,7 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
                 .endMetadata()
                 .withData(spec.sanitizedDescriptorData())
                 .build();
-        gateway.createConfigMap(configMap);
+        gateway().createConfigMap(configMap);
     }
 
     private List<EnvVar> containerEnvironment(KubernetesSubmissionSpec spec) {
@@ -301,5 +414,55 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
             throw new IllegalArgumentException("maxAttempts must be positive for Kubernetes submission");
         }
         return maxAttempts;
+    }
+
+    private String defaultJobName(String submissionId) {
+        String suffix = submissionId.toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9-]", "-")
+                .replaceAll("^-+|-+$", "");
+        if (suffix.isEmpty()) {
+            suffix = "run";
+        }
+        return ("consilens-" + suffix)
+                .substring(0, Math.min(52, "consilens-".length() + suffix.length()))
+                .replaceAll("-+$", "");
+    }
+
+    private String descriptorConfigMapName(String jobName) {
+        return (jobName + "-descriptor")
+                .substring(0, Math.min(63, jobName.length() + "-descriptor".length()))
+                .replaceAll("-+$", "");
+    }
+
+    private Map<String, KubernetesSecretKeyRef> secretEnvsOf(Object raw) {
+        if (!(raw instanceof Map)) {
+            return Map.of();
+        }
+        Map<String, KubernetesSecretKeyRef> result = new LinkedHashMap<>();
+        ((Map<?, ?>) raw).forEach((environmentName, reference) -> {
+            if (!(reference instanceof Map)) {
+                throw new IllegalArgumentException("secretEnv." + environmentName + " must be an object");
+            }
+            Map<?, ?> values = (Map<?, ?>) reference;
+            result.put(String.valueOf(environmentName), KubernetesSecretKeyRef.builder()
+                    .secretName(ClusterSubmissionParameters.stringValue(values.get("secretName")))
+                    .secretKey(ClusterSubmissionParameters.stringValue(values.get("secretKey")))
+                    .build());
+        });
+        return result;
+    }
+
+    private void requirePasswordSecret(String descriptor,
+                                       Map<String, KubernetesSecretKeyRef> secretEnv,
+                                       String environmentName) {
+        if (descriptor != null && descriptor.contains("${env." + environmentName + "}")
+                && !secretEnv.containsKey(environmentName)) {
+            throw new IllegalArgumentException("secretEnv." + environmentName
+                    + " is required when the Kubernetes descriptor contains a database password");
+        }
+    }
+
+    private String stringParam(Map<String, Object> params, String key) {
+        return ClusterSubmissionParameters.stringValue(params.get(key));
     }
 }

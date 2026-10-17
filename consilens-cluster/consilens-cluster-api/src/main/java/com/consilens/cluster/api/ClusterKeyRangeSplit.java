@@ -41,10 +41,6 @@ public class ClusterKeyRangeSplit implements Serializable {
                 .build();
     }
 
-    public KeyRangeSplit toSegmentSplit() {
-        return toKeyRangeSplit();
-    }
-
     public KeyRangeSplit toKeyRangeSplit() {
         validateRange(startKey, endKey);
         return KeyRangeSplit.builder()

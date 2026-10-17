@@ -199,7 +199,6 @@ public class LocalSimulatedClusterRuntime {
                         .totalDifferences(sourceMissingCount + targetMissingCount + mismatchCount)
                         .processingTimeMs(processingTimeMs)
                         .unchangedCount(unchangedCount)
-                        .differencePercentage(0.0)
                         .build())
                 .infoTree(Optional.empty())
                 .completedAt(completedAt.equals(Instant.EPOCH) ? Instant.now() : completedAt)

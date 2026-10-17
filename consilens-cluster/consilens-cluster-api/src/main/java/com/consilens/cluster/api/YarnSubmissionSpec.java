@@ -35,6 +35,21 @@ public class YarnSubmissionSpec implements Serializable {
     public static final String DEFAULT_AM_MAIN_CLASS =
             "com.consilens.cluster.application.ClusterComparisonCoordinator";
 
+    /** 默认 YARN 队列，与 YARN 集群的 {@code default} 队列保持一致。 */
+    public static final String DEFAULT_QUEUE = "default";
+
+    /** 默认完成状态轮询间隔（秒），与既有提交器实现保持一致。 */
+    public static final long DEFAULT_COMPLETION_POLL_SECONDS = 3L;
+
+    /** 运行时以单个 jar 分发时使用的本地资源名/类路径名。 */
+    public static final String DEFAULT_RUNTIME_JAR_DESTINATION = "consilens-runtime.jar";
+
+    /** 用于恢复清扫的确定性运行标签前缀。 */
+    public static final String DEFAULT_RUN_TAG_PREFIX = "consilens-run-";
+
+    /** 未显式指定 {@code amJavaHome} 时使用的 NodeManager 默认 JVM 目录。 */
+    public static final String DEFAULT_AM_JAVA_HOME = "$JAVA_HOME";
+
     private String runtimeArchiveUri;
 
     private String descriptorUri;
@@ -45,14 +60,47 @@ public class YarnSubmissionSpec implements Serializable {
 
     private String applicationName;
 
+    /**
+     * YARN 队列；为空时提交器回退到 {@link #DEFAULT_QUEUE}。
+     */
     private String queue;
+
+    /**
+     * 等待应用进入终态的轮询间隔（秒），默认
+     * {@link #DEFAULT_COMPLETION_POLL_SECONDS}。必须为正数。
+     */
+    @Builder.Default
+    private long completionPollSeconds = DEFAULT_COMPLETION_POLL_SECONDS;
+
+    /**
+     * 运行时以 jar 分发时在 AM 工作目录中的名称，默认
+     * {@link #DEFAULT_RUNTIME_JAR_DESTINATION}；为空时提交器使用默认值。
+     */
+    @Builder.Default
+    private String runtimeJarDestination = DEFAULT_RUNTIME_JAR_DESTINATION;
+
+    /**
+     * 恢复清扫所用运行标签的前缀，默认 {@link #DEFAULT_RUN_TAG_PREFIX}；
+     * 为空时提交器使用默认值。完整标签为前缀加 submissionId。
+     */
+    @Builder.Default
+    private String runTagPrefix = DEFAULT_RUN_TAG_PREFIX;
 
     /**
      * Optional JVM home used to launch the ApplicationMaster (shell-safe path).
      * YARN containers inherit the NodeManager's JAVA_HOME, which may be older
      * than the build target; clusters can point this at an alternate JDK.
+     * 为空时回退到 {@link #defaultAmJavaHome}。
      */
     private String amJavaHome;
+
+    /**
+     * 未显式给出 {@link #amJavaHome} 时使用的 JVM 目录，默认
+     * {@link #DEFAULT_AM_JAVA_HOME}（沿用 NodeManager 的 JAVA_HOME）。
+     * 可配置为 {@code $JAVA_HOME} 或镜像内的绝对路径。
+     */
+    @Builder.Default
+    private String defaultAmJavaHome = DEFAULT_AM_JAVA_HOME;
 
     private Integer amMemoryMb;
 
@@ -101,6 +149,9 @@ public class YarnSubmissionSpec implements Serializable {
         }
         if (amVCores == null || amVCores <= 0) {
             throw new IllegalArgumentException("amVCores must be a positive integer for YARN submission");
+        }
+        if (completionPollSeconds <= 0) {
+            throw new IllegalArgumentException("completionPollSeconds must be positive for YARN submission");
         }
         if (tags != null) {
             for (String tag : tags) {

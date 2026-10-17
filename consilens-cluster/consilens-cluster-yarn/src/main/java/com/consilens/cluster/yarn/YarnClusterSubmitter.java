@@ -1,7 +1,11 @@
 package com.consilens.cluster.yarn;
 
 import com.consilens.cluster.api.ClusterApplicationResult;
+import com.consilens.cluster.api.ClusterComparisonDescription;
+import com.consilens.cluster.api.ClusterExecutionDescription;
 import com.consilens.cluster.api.ClusterSubmission;
+import com.consilens.cluster.api.ClusterSubmissionContext;
+import com.consilens.cluster.api.ClusterSubmissionParameters;
 import com.consilens.cluster.api.ClusterSubmitRequest;
 import com.consilens.cluster.api.ClusterSubmitter;
 import com.consilens.cluster.api.SubmissionReference;
@@ -32,6 +36,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 /**
@@ -52,18 +57,28 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
 
     static final String AM_MAIN_CLASS = "com.consilens.cluster.application.ConsilensApplicationMaster";
     private static final String RUNTIME_ARCHIVE_DESTINATION = "consilens-runtime";
-    private static final String RUNTIME_JAR_DESTINATION = "consilens-runtime.jar";
     private static final String DESCRIPTOR_DESTINATION_PREFIX = "submission-descriptor";
     private static final String HADOOP_CONF_DESTINATION_PREFIX = "hadoop-conf/";
-    private static final String DEFAULT_QUEUE = "default";
-    private static final long COMPLETION_POLL_SECONDS = 3;
     private static final Pattern SAFE_SUBMISSION_ID = Pattern.compile("[A-Za-z0-9_-]+");
 
-    private final YarnSubmissionGateway gateway;
+    /**
+     * Gateway creation is deferred until the first real submission so that
+     * ServiceLoader discovery (which instantiates every provider to read its
+     * platform) does not start a YARN client for an unused backend.
+     */
+    private final Supplier<YarnSubmissionGateway> gatewayFactory;
     private final Path hadoopConfDirectory;
+    private YarnSubmissionGateway gateway;
+
+    /**
+     * Poll interval captured from the submitting spec; the interface's
+     * {@link #awaitCompletion} has no request access, so the value is remembered
+     * from the latest {@link #submit} call. Defaults to the historical 3 seconds.
+     */
+    private volatile long completionPollSeconds = YarnSubmissionSpec.DEFAULT_COMPLETION_POLL_SECONDS;
 
     public YarnClusterSubmitter() {
-        this(new HadoopYarnSubmissionGateway(new YarnConfiguration()), null);
+        this(YarnClusterSubmitter::defaultGateway, null);
     }
 
     public YarnClusterSubmitter(YarnSubmissionGateway gateway) {
@@ -71,20 +86,90 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
     }
 
     YarnClusterSubmitter(YarnSubmissionGateway gateway, Path hadoopConfDirectory) {
-        this.gateway = Objects.requireNonNull(gateway, "gateway");
+        this(supplierOf(gateway), hadoopConfDirectory);
+    }
+
+    private YarnClusterSubmitter(Supplier<YarnSubmissionGateway> gatewayFactory,
+                                 Path hadoopConfDirectory) {
+        this.gatewayFactory = Objects.requireNonNull(gatewayFactory, "gatewayFactory");
         this.hadoopConfDirectory = hadoopConfDirectory;
+    }
+
+    private static YarnSubmissionGateway defaultGateway() {
+        return new HadoopYarnSubmissionGateway(new YarnConfiguration());
+    }
+
+    private static Supplier<YarnSubmissionGateway> supplierOf(YarnSubmissionGateway gateway) {
+        Objects.requireNonNull(gateway, "gateway");
+        return () -> gateway;
+    }
+
+    private YarnSubmissionGateway gateway() {
+        if (gateway == null) {
+            gateway = Objects.requireNonNull(gatewayFactory.get(), "gateway");
+        }
+        return gateway;
+    }
+
+    @Override
+    public String platform() {
+        return "yarn";
+    }
+
+    @Override
+    public boolean requiresDescriptorFile() {
+        return true;
+    }
+
+    @Override
+    public ClusterSubmitRequest buildRequest(ClusterSubmissionContext context) {
+        Path descriptorFile = context.getDescriptorFile();
+        if (descriptorFile == null) {
+            throw new IllegalArgumentException("descriptorFile is required for YARN submission");
+        }
+        Map<String, Object> params = context.getProperties();
+        String submissionId = context.getSubmissionId();
+        String descriptorUri = descriptorFile.toAbsolutePath().toString();
+        return ClusterSubmitRequest.builder()
+                .submissionId(submissionId)
+                .comparison(ClusterComparisonDescription.builder()
+                        .sourceConfigRef("descriptor:" + descriptorUri)
+                        .targetConfigRef("descriptor:" + descriptorUri)
+                        .build())
+                .execution(ClusterExecutionDescription.builder()
+                        .executionMode(ExecutionMode.YARN)
+                        .maxAttempts(ClusterSubmissionParameters.positiveInteger(
+                                params.get("maxAppAttempts"), "maxAppAttempts"))
+                        .build())
+                .yarnSubmission(YarnSubmissionSpec.builder()
+                        .runtimeArchiveUri(ClusterSubmissionParameters.required(
+                                params, "archive", "yarn.archive"))
+                        .descriptorUri(descriptorUri)
+                        .stagingUri((String) params.get("stagingDir"))
+                        .applicationName(submissionId)
+                        .queue((String) params.get("queue"))
+                        .amJavaHome((String) params.get("amJavaHome"))
+                        .amMemoryMb(ClusterSubmissionParameters.parseMemoryMb(
+                                ClusterSubmissionParameters.orDefault(params, "amMemory", "1g")))
+                        .amVCores(ClusterSubmissionParameters.intOrDefault(params, "amVCores", 1))
+                        .tags(ClusterSubmissionParameters.splitCsv((String) params.get("tags")))
+                        .files(ClusterSubmissionParameters.splitCsv((String) params.get("files")))
+                        .jars(ClusterSubmissionParameters.splitCsv((String) params.get("jars")))
+                        .build())
+                .build();
     }
 
     @Override
     public ClusterSubmission submit(ClusterSubmitRequest request) {
         YarnSubmissionSpec spec = validateAndExtractSpec(request);
+        completionPollSeconds = spec.getCompletionPollSeconds();
         appendRunTag(spec, request.getSubmissionId());
         int maxAttempts = maxAttemptsOrDefault(request);
         String applicationStagingDir = applicationStagingDir(request.getSubmissionId(), spec);
-        YarnSubmissionSpec resolvedSpec = StageResolver.resolve(spec, applicationStagingDir, gateway);
-        ApplicationSubmissionContext context = gateway.createSubmissionContext();
+        YarnSubmissionSpec resolvedSpec = StageResolver.resolve(spec, applicationStagingDir, gateway());
+        ApplicationSubmissionContext context = gateway().createSubmissionContext();
         mapSubmissionContext(context, request, resolvedSpec, maxAttempts, applicationStagingDir);
-        ApplicationId applicationId = gateway.submit(context);
+        ApplicationId applicationId = gateway().submit(context);
         return ClusterSubmission.builder()
                 .submissionId(request.getSubmissionId())
                 .executionMode(ExecutionMode.YARN)
@@ -102,13 +187,13 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
         long deadlineNanos = timeout == null ? Long.MAX_VALUE : System.nanoTime() + timeout.toNanos();
         try {
             while (System.nanoTime() < deadlineNanos) {
-                String state = gateway.applicationState(applicationId).orElse(null);
+                String state = gateway().applicationState(applicationId).orElse(null);
                 if ("FINISHED".equals(state) || "FAILED".equals(state) || "KILLED".equals(state)) {
-                    String finalStatus = gateway.applicationFinalStatus(applicationId).orElse(state);
+                    String finalStatus = gateway().applicationFinalStatus(applicationId).orElse(state);
                     return new ClusterApplicationResult(applicationId, finalStatus,
-                            gateway.trackingUrl(applicationId).orElse(null), null);
+                            gateway().trackingUrl(applicationId).orElse(null), null);
                 }
-                Thread.sleep(COMPLETION_POLL_SECONDS * 1000L);
+                Thread.sleep(completionPollSeconds * 1000L);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -119,13 +204,24 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
     @Override
     public void kill(ClusterSubmission submission) {
         if (submission != null && submission.getClusterApplicationId() != null) {
-            gateway.kill(submission.getClusterApplicationId());
+            gateway().kill(submission.getClusterApplicationId());
         }
     }
 
     @Override
     public void killStale(ClusterSubmitRequest request) {
-        gateway.killByTag(staleTag(request.getSubmissionId()));
+        if (request == null) {
+            throw new IllegalArgumentException("YARN stale-kill request is required");
+        }
+        String submissionId = request.getSubmissionId();
+        if (submissionId == null || submissionId.trim().isEmpty()) {
+            // 空 submissionId 会拼出 consilens-run-null 这样的标签，误杀其它运行
+            throw new IllegalArgumentException(
+                    "submissionId is required to derive the YARN stale-kill run tag");
+        }
+        YarnSubmissionSpec spec = request.getYarnSubmission();
+        String runTag = spec == null ? staleTag(submissionId) : runTag(spec, submissionId);
+        gateway().killByTag(runTag);
     }
 
     /**
@@ -133,21 +229,33 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
      * restart sweep stale applications of the same logical run.
      */
     static String staleTag(String submissionId) {
-        return "consilens-run-" + submissionId;
+        return YarnSubmissionSpec.DEFAULT_RUN_TAG_PREFIX + submissionId;
     }
 
     private void appendRunTag(YarnSubmissionSpec spec, String submissionId) {
         List<String> tags = new ArrayList<>(spec.sanitizedTags());
-        String runTag = staleTag(submissionId);
+        String runTag = runTag(spec, submissionId);
         if (!tags.contains(runTag)) {
             tags.add(runTag);
         }
         spec.setTags(tags);
     }
 
+    private String runTag(YarnSubmissionSpec spec, String submissionId) {
+        return runTagPrefix(spec) + submissionId;
+    }
+
+    private String runTagPrefix(YarnSubmissionSpec spec) {
+        return isBlank(spec.getRunTagPrefix())
+                ? YarnSubmissionSpec.DEFAULT_RUN_TAG_PREFIX
+                : spec.getRunTagPrefix();
+    }
+
     @Override
     public void close() {
-        gateway.close();
+        if (gateway != null) {
+            gateway.close();
+        }
     }
 
     private YarnSubmissionSpec validateAndExtractSpec(ClusterSubmitRequest request) {
@@ -176,7 +284,7 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
                                       int maxAttempts,
                                       String applicationStagingDir) {
         context.setApplicationName(spec.getApplicationName());
-        context.setQueue(queueOrDefault(spec.getQueue()));
+        context.setQueue(queueOrDefault(spec));
         context.setResource(Resource.newInstance(spec.getAmMemoryMb(), spec.getAmVCores()));
         if (maxAttempts > 0) {
             context.setMaxAppAttempts(maxAttempts);
@@ -190,11 +298,11 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
                                                               YarnSubmissionSpec spec,
                                                               String applicationStagingDir) {
         Map<String, LocalResource> localResources = new LinkedHashMap<>();
-        String runtimeDestination = runtimeDestination(spec.getRuntimeArchiveUri());
-        localResources.put(runtimeDestination, gateway.createLocalResource(
+        String runtimeDestination = runtimeDestination(spec);
+        localResources.put(runtimeDestination, gateway().createLocalResource(
                 URI.create(spec.getRuntimeArchiveUri()), runtimeLocalResourceType(spec.getRuntimeArchiveUri())));
         String descriptorDestination = descriptorDestination(spec);
-        localResources.put(descriptorDestination, gateway.createLocalResource(
+        localResources.put(descriptorDestination, gateway().createLocalResource(
                 URI.create(spec.getDescriptorUri()), LocalResourceType.FILE));
         localizeReferences(localResources, spec.getFiles());
         localizeReferences(localResources, spec.getJars());
@@ -229,11 +337,11 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
                         + "Multi-node clusters need a stagingDir to read Hadoop configuration "
                         + "on every NodeManager.", confFile);
                 localResources.put(HADOOP_CONF_DESTINATION_PREFIX + confFile.getName(),
-                        gateway.createLocalResource(confFile.toURI(), LocalResourceType.FILE));
+                        gateway().createLocalResource(confFile.toURI(), LocalResourceType.FILE));
                 continue;
             }
-            URI staged = gateway.stageLocalFile(confFile.toURI(), URI.create(applicationStagingDir));
-            localResources.put(HADOOP_CONF_DESTINATION_PREFIX + confFile.getName(), gateway.createLocalResource(
+            URI staged = gateway().stageLocalFile(confFile.toURI(), URI.create(applicationStagingDir));
+            localResources.put(HADOOP_CONF_DESTINATION_PREFIX + confFile.getName(), gateway().createLocalResource(
                     staged, LocalResourceType.FILE));
         }
     }
@@ -259,9 +367,10 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
      * ApplicationMaster JVM home: an explicit {@code amJavaHome} submission
      * property (validated, shell-safe) or the NodeManager default JAVA_HOME.
      */
-    private String amJavaHomeOrDefault(String amJavaHome) {
+    private String amJavaHomeOrDefault(YarnSubmissionSpec spec) {
+        String amJavaHome = spec.getAmJavaHome();
         if (amJavaHome == null || amJavaHome.isBlank()) {
-            return "$JAVA_HOME";
+            return defaultAmJavaHomeOrDefault(spec);
         }
         if (!amJavaHome.matches(JAVA_HOME_PATTERN) || amJavaHome.contains("..")) {
             throw new IllegalArgumentException("amJavaHome must be an absolute path without shell metacharacters");
@@ -269,11 +378,24 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
         return amJavaHome;
     }
 
+    private String defaultAmJavaHomeOrDefault(YarnSubmissionSpec spec) {
+        String defaultAmJavaHome = spec.getDefaultAmJavaHome();
+        if (isBlank(defaultAmJavaHome)) {
+            return YarnSubmissionSpec.DEFAULT_AM_JAVA_HOME;
+        }
+        if (!YarnSubmissionSpec.DEFAULT_AM_JAVA_HOME.equals(defaultAmJavaHome)
+                && (!defaultAmJavaHome.matches(JAVA_HOME_PATTERN) || defaultAmJavaHome.contains(".."))) {
+            throw new IllegalArgumentException(
+                    "defaultAmJavaHome must be $JAVA_HOME or an absolute path without shell metacharacters");
+        }
+        return defaultAmJavaHome;
+    }
+
     private String buildAmCommand(ClusterSubmitRequest request,
                                   YarnSubmissionSpec spec,
                                   String descriptorDestination,
                                   String applicationStagingDir) {
-        String javaHome = amJavaHomeOrDefault(spec.getAmJavaHome());
+        String javaHome = amJavaHomeOrDefault(spec);
         return javaHome + "/bin/java -server -Xmx" + spec.getAmMemoryMb() + "m -cp \"$PWD:hadoop-conf:"
                 + runtimeClasspath(spec) + "\" " + AM_MAIN_CLASS
                 + " --coordinator-class " + spec.getAmMainClass()
@@ -311,7 +433,7 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
                 || (!hasLocalArtifacts(spec) && resolveHadoopConfDirectory() == null)) {
             return;
         }
-        String defaultBase = gateway.defaultStagingBase();
+        String defaultBase = gateway().defaultStagingBase();
         if (defaultBase != null) {
             spec.setStagingUri(defaultBase);
         }
@@ -358,7 +480,7 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
             return;
         }
         for (String reference : references) {
-            localResources.put(localizedFileName(reference), gateway.createLocalResource(
+            localResources.put(localizedFileName(reference), gateway().createLocalResource(
                     URI.create(YarnSubmissionSpec.referenceUri(reference)), LocalResourceType.FILE));
         }
     }
@@ -372,8 +494,16 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
         return path.substring(path.lastIndexOf('/') + 1);
     }
 
-    private String runtimeDestination(String runtimeUri) {
-        return isJar(runtimeUri) ? RUNTIME_JAR_DESTINATION : RUNTIME_ARCHIVE_DESTINATION;
+    private String runtimeDestination(YarnSubmissionSpec spec) {
+        return isJar(spec.getRuntimeArchiveUri())
+                ? runtimeJarDestination(spec)
+                : RUNTIME_ARCHIVE_DESTINATION;
+    }
+
+    private String runtimeJarDestination(YarnSubmissionSpec spec) {
+        return isBlank(spec.getRuntimeJarDestination())
+                ? YarnSubmissionSpec.DEFAULT_RUNTIME_JAR_DESTINATION
+                : spec.getRuntimeJarDestination();
     }
 
     private LocalResourceType runtimeLocalResourceType(String runtimeUri) {
@@ -382,7 +512,7 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
 
     private String runtimeClasspath(YarnSubmissionSpec spec) {
         String runtime = isJar(spec.getRuntimeArchiveUri())
-                ? RUNTIME_JAR_DESTINATION : RUNTIME_ARCHIVE_DESTINATION + "/*";
+                ? runtimeJarDestination(spec) : RUNTIME_ARCHIVE_DESTINATION + "/*";
         // User jars are appended after the runtime so runtime classes win,
         // mirroring how spark-submit loads user jars below its own libraries.
         StringBuilder classpath = new StringBuilder(runtime);
@@ -411,8 +541,12 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
         return DESCRIPTOR_DESTINATION_PREFIX + ".json";
     }
 
-    private String queueOrDefault(String queue) {
-        return queue == null || queue.trim().isEmpty() ? DEFAULT_QUEUE : queue;
+    private String queueOrDefault(YarnSubmissionSpec spec) {
+        return isBlank(spec.getQueue()) ? YarnSubmissionSpec.DEFAULT_QUEUE : spec.getQueue();
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     private int maxAttemptsOrDefault(ClusterSubmitRequest request) {
@@ -446,7 +580,11 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
                     .amMainClass(spec.getAmMainClass())
                     .applicationName(spec.getApplicationName())
                     .queue(spec.getQueue())
+                    .completionPollSeconds(spec.getCompletionPollSeconds())
+                    .runtimeJarDestination(spec.getRuntimeJarDestination())
+                    .runTagPrefix(spec.getRunTagPrefix())
                     .amJavaHome(spec.getAmJavaHome())
+                    .defaultAmJavaHome(spec.getDefaultAmJavaHome())
                     .amMemoryMb(spec.getAmMemoryMb())
                     .amVCores(spec.getAmVCores())
                     .tags(spec.sanitizedTags())

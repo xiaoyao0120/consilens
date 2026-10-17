@@ -43,6 +43,25 @@ public class KubernetesSubmissionSpec implements Serializable {
     private static final Pattern SECRET_KEY = Pattern.compile("[A-Za-z0-9._-]+");
     private static final Pattern DESCRIPTOR_FILE_NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]*");
     private static final Set<String> IMAGE_PULL_POLICIES = Set.of("Always", "IfNotPresent", "Never");
+
+    /** 默认协调器运行时类路径，沿用镜像内 {@code /opt/consilens/runtime} 布局。 */
+    public static final String DEFAULT_RUNTIME_CLASSPATH = "/opt/consilens/runtime/*";
+
+    /** 默认 descriptor 挂载目录，沿用既有镜像约定。 */
+    public static final String DEFAULT_DESCRIPTOR_MOUNT_PATH = "/opt/consilens/descriptor";
+
+    /** 默认 Kubernetes namespace，与 kubectl 的默认行为一致。 */
+    public static final String DEFAULT_NAMESPACE = "default";
+
+    /** 默认完成状态轮询间隔（秒），与既有提交器实现保持一致。 */
+    public static final long DEFAULT_COMPLETION_POLL_SECONDS = 3L;
+
+    /** 默认 {@code app.kubernetes.io/name} 标签值。 */
+    public static final String DEFAULT_APPLICATION_LABEL = "consilens";
+
+    /** 默认容器启动命令，依赖镜像内 PATH 中的 JVM。 */
+    public static final String DEFAULT_CONTAINER_COMMAND = "java";
+
     private String namespace;
 
     private String jobName;
@@ -55,7 +74,39 @@ public class KubernetesSubmissionSpec implements Serializable {
 
     private String descriptorConfigMapName;
 
+    /**
+     * descriptor 在容器内的挂载目录。为空时提交器回退到
+     * {@link #DEFAULT_DESCRIPTOR_MOUNT_PATH}（沿用既有镜像约定）。
+     */
     private String descriptorMountPath;
+
+    /**
+     * 协调器容器的运行时类路径。为空时回退到
+     * {@link #DEFAULT_RUNTIME_CLASSPATH}（镜像内 {@code /opt/consilens/runtime}）。
+     */
+    @Builder.Default
+    private String runtimeClasspath = DEFAULT_RUNTIME_CLASSPATH;
+
+    /**
+     * 容器启动命令（可执行文件名）。为空时回退到
+     * {@link #DEFAULT_CONTAINER_COMMAND}（镜像 PATH 中的 {@code java}）。
+     */
+    @Builder.Default
+    private String containerCommand = DEFAULT_CONTAINER_COMMAND;
+
+    /**
+     * 写入 {@code app.kubernetes.io/name} 标签的应用标识，默认
+     * {@link #DEFAULT_APPLICATION_LABEL}；为空时提交器使用默认值。
+     */
+    @Builder.Default
+    private String applicationLabel = DEFAULT_APPLICATION_LABEL;
+
+    /**
+     * 等待 Job 进入终态的轮询间隔（秒），默认
+     * {@link #DEFAULT_COMPLETION_POLL_SECONDS}。必须为正数。
+     */
+    @Builder.Default
+    private long completionPollSeconds = DEFAULT_COMPLETION_POLL_SECONDS;
 
     private String coordinatorMainClass;
 
@@ -101,6 +152,10 @@ public class KubernetesSubmissionSpec implements Serializable {
         }
         if (cpuMilli == null || cpuMilli <= 0) {
             throw new IllegalArgumentException("cpuMilli must be a positive integer for Kubernetes submission");
+        }
+        if (completionPollSeconds <= 0) {
+            throw new IllegalArgumentException(
+                    "completionPollSeconds must be positive for Kubernetes submission");
         }
         if (serviceAccountName != null) {
             requireDnsLabel("serviceAccountName", serviceAccountName);
@@ -206,25 +261,6 @@ public class KubernetesSubmissionSpec implements Serializable {
             });
         } else {
             requireHttpDescriptorUri(descriptorUri);
-        }
-    }
-
-
-
-    private void requireRemoteArtifactUrl(String name, String value) {
-        if (isBlank(value)) {
-            throw new IllegalArgumentException(name + " is required for Kubernetes submission");
-        }
-        try {
-            URI uri = URI.create(value);
-            if (!uri.isAbsolute()) {
-                throw new IllegalArgumentException(name + " must be an absolute remote URL");
-            }
-            if (uri.getUserInfo() != null || uri.getQuery() != null || uri.getFragment() != null) {
-                throw new IllegalArgumentException(name + " must not contain credentials, query parameters, or fragments");
-            }
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException(name + " must be an absolute remote URL", e);
         }
     }
 

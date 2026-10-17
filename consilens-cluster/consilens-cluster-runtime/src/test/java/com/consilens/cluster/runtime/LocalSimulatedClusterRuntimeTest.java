@@ -146,7 +146,6 @@ class LocalSimulatedClusterRuntimeTest {
                         .totalDifferences(mismatchCount)
                         .processingTimeMs(1)
                         .unchangedCount(Math.min(sourceRows, targetRows) - mismatchCount)
-                        .differencePercentage(0.0)
                         .build())
                 .metadata(Map.of())
                 .build();
