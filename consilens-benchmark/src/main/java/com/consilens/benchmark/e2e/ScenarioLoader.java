@@ -16,6 +16,13 @@ import java.util.Map;
  */
 public final class ScenarioLoader {
 
+    /** Kind marker for micro-benchmark results (JMH throughput scenarios). */
+    public static final String KIND_MICRO = "micro";
+    /** Kind marker for end-to-end scenarios loaded from this class. */
+    public static final String KIND_E2E = "e2e";
+
+    private static final String DEFAULT_E2E_DIR = "consilens-benchmark/src/main/resources/e2e";
+
     public static final String E02 = "E02";
     public static final String E03 = "E03";
     public static final String JOIN = "join";
@@ -46,6 +53,12 @@ public final class ScenarioLoader {
     public static Path examplesDir() {
         String override = System.getenv("CONSILENS_EXAMPLES_DIR");
         return Paths.get(override == null || override.trim().isEmpty() ? "examples" : override.trim());
+    }
+
+    /** Directory holding bundled benchmark yaml configs; overridable via {@code CONSILENS_BENCHMARK_E2E_DIR}. */
+    public static Path e2eDir() {
+        String override = System.getenv("CONSILENS_BENCHMARK_E2E_DIR");
+        return Paths.get(override == null || override.trim().isEmpty() ? DEFAULT_E2E_DIR : override.trim());
     }
 
     public List<String> defaultScenarioIds() {
@@ -102,7 +115,7 @@ public final class ScenarioLoader {
     }
 
     private Scenario generatedScenario(String id, String fileName, Map<String, String> dimensions) {
-        return new Scenario(id, Paths.get("consilens-benchmark/src/main/resources/e2e").resolve(fileName),
+        return new Scenario(id, e2eDir().resolve(fileName),
                 Arrays.asList("BENCHMARK_JDBC_URL", "BENCHMARK_DB_USER", "BENCHMARK_DB_PASSWORD"), dimensions);
     }
 
@@ -121,7 +134,7 @@ public final class ScenarioLoader {
         if (override != null && !override.trim().isEmpty()) {
             return Paths.get(override.trim());
         }
-        return Paths.get("consilens-benchmark/src/main/resources/e2e/generated-mysql.yaml");
+        return e2eDir().resolve("generated-mysql.yaml");
     }
 
     private Path generatedPostgresqlConfigPath() {
@@ -129,7 +142,7 @@ public final class ScenarioLoader {
         if (override != null && !override.trim().isEmpty()) {
             return Paths.get(override.trim());
         }
-        return Paths.get("consilens-benchmark/src/main/resources/e2e/generated-postgresql.yaml");
+        return e2eDir().resolve("generated-postgresql.yaml");
     }
 
     /**
@@ -142,6 +155,7 @@ public final class ScenarioLoader {
         private final List<String> requiredEnvVars;
         private final Map<String, String> dimensions;
         private final String unsupportedReason;
+        private final String kind;
 
         public Scenario(String id, Path configPath, List<String> requiredEnvVars) {
             this(id, configPath, requiredEnvVars, Collections.emptyMap());
@@ -159,6 +173,7 @@ public final class ScenarioLoader {
             this.requiredEnvVars = Collections.unmodifiableList(requiredEnvVars);
             this.dimensions = Collections.unmodifiableMap(new LinkedHashMap<>(dimensions));
             this.unsupportedReason = unsupportedReason;
+            this.kind = KIND_E2E;
         }
 
         public static Scenario unsupported(String id, String reason, Map<String, String> dimensions) {
@@ -179,6 +194,11 @@ public final class ScenarioLoader {
 
         public Map<String, String> dimensions() {
             return dimensions;
+        }
+
+        /** Explicit scenario kind ("micro" / "e2e"), used to derive baseline thresholds. */
+        public String kind() {
+            return kind;
         }
 
         public boolean supported() {

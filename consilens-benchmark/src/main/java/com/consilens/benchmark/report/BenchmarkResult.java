@@ -18,6 +18,9 @@ public class BenchmarkResult {
     /** 场景编号，如 M01.100000.noDiff、E02。 */
     private String scenarioId;
 
+    /** 场景类型（"micro" / "e2e"），用于阈值等按类型区分的策略。 */
+    private String kind;
+
     /** 主指标值，如 ops/s 或端到端耗时(ms)。 */
     private double score;
 

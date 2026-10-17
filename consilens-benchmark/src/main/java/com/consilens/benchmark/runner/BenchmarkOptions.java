@@ -316,6 +316,10 @@ public final class BenchmarkOptions {
                 + ", updateBaseline=" + updateBaseline + ", outputDir=" + outputDir
                 + ", baselinePath=" + baselinePath + ", rows=" + rows
                 + ", diffRatios=" + diffRatios + ", forks=" + forks
-                + ", warmup=" + warmupIterations + ", measurement=" + measurementIterations + "}";
+                + ", warmup=" + warmupIterations + ", measurement=" + measurementIterations
+                + ", e2eWarmupRuns=" + e2eWarmupRuns + ", e2eMeasurementRuns=" + e2eMeasurementRuns
+                + ", expectedDifferences=" + expectedDifferences + ", datasetId=" + datasetId
+                + ", keyDistribution=" + keyDistribution + ", differenceType=" + differenceType
+                + ", scenarioConfigs=" + scenarioConfigs + "}";
     }
 }

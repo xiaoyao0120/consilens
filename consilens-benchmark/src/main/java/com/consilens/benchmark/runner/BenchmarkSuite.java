@@ -6,6 +6,7 @@ import com.consilens.benchmark.baseline.BaselineStore;
 import com.consilens.benchmark.baseline.DriftChecker;
 import com.consilens.benchmark.baseline.DriftReport;
 import com.consilens.benchmark.e2e.EndToEndBenchmark;
+import com.consilens.benchmark.e2e.ScenarioLoader;
 import com.consilens.benchmark.micro.LocalDiffEngineBenchmark;
 import com.consilens.benchmark.report.BenchmarkReportGenerator;
 import com.consilens.benchmark.report.BenchmarkResult;
@@ -82,19 +83,21 @@ public final class BenchmarkSuite {
 
         List<BenchmarkResult> results = new ArrayList<>();
         for (RunResult rr : runResults) {
-            String benchmark = rr.getParams().getBenchmark();
             double score = rr.getPrimaryResult().getScore();
             String unit = rr.getPrimaryResult().getScoreUnit();
 
             String scenarioId = resolveScenarioId(rr.getParams().getParam("rows"),
                     rr.getParams().getParam("diffRatio"));
-            String status = score > 0 ? "RUN" : "FAILED";
+            // shouldFailOnError(true) makes JMH throw on benchmark errors, so a returned
+            // RunResult is a successful execution even when throughput is legitimately 0.
+            String status = "RUN";
             Map<String, Double> subMetrics = new TreeMap<>();
             long sampleCount = (long) rr.getPrimaryResult().getStatistics().getN();
             subMetrics.put("sampleCount", (double) sampleCount);
 
             BenchmarkResult result = new BenchmarkResult();
             result.setScenarioId(scenarioId);
+            result.setKind(ScenarioLoader.KIND_MICRO);
             result.setScore(score);
             result.setUnit(unit);
             result.setStatus(status);
@@ -161,7 +164,7 @@ public final class BenchmarkSuite {
             BaselineEntry entry = new BaselineEntry();
             entry.setScore(r.getScore());
             entry.setUnit(r.getUnit());
-            entry.setThreshold(defaultThreshold(r.getScenarioId()));
+            entry.setThreshold(defaultThreshold(r));
             entries.put(r.getScenarioId(), entry);
         }
         Baseline baseline = new Baseline();
@@ -180,9 +183,9 @@ public final class BenchmarkSuite {
         }
     }
 
-    private static double defaultThreshold(String scenarioId) {
-        // 微基准收紧，e2e 放宽
-        return scenarioId.startsWith("M") ? 0.15 : 0.25;
+    private static double defaultThreshold(BenchmarkResult result) {
+        // 微基准收紧，e2e 放宽；由场景显式 kind 决定，而不是从 scenarioId 前缀推断
+        return ScenarioLoader.KIND_MICRO.equals(result.getKind()) ? 0.15 : 0.25;
     }
 
     private static String resolveScenarioId(String rows, String diffRatio) {

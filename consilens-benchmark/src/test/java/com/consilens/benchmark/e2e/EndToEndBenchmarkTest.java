@@ -40,7 +40,8 @@ class EndToEndBenchmarkTest {
                 run(999, 3), run(10, 3), run(20, 3), run(100, 3)));
         EndToEndBenchmark benchmark = new EndToEndBenchmark(
                 cliJar, List.of("TEST"), new ScenarioLoader(),
-                (jar, yaml) -> runs.removeFirst(), 1, 3, id -> 3L, "dataset");
+                (jar, yaml) -> runs.removeFirst(), 1, 3, id -> 3L, "dataset",
+                null, null, Collections.emptyMap());
 
         com.consilens.benchmark.report.BenchmarkResult result = benchmark.runScenario(scenario);
 
@@ -61,7 +62,8 @@ class EndToEndBenchmarkTest {
                 "TEST", config, Collections.emptyList(), Collections.emptyMap());
         EndToEndBenchmark benchmark = new EndToEndBenchmark(
                 cliJar, List.of("TEST"), new ScenarioLoader(),
-                (jar, yaml) -> run(10, 2), 0, 1, id -> 3L, "dataset");
+                (jar, yaml) -> run(10, 2), 0, 1, id -> 3L, "dataset",
+                null, null, Collections.emptyMap());
 
         com.consilens.benchmark.report.BenchmarkResult result = benchmark.runScenario(scenario);
 
@@ -77,7 +79,8 @@ class EndToEndBenchmarkTest {
                 "TEST", config, Collections.emptyList(), Collections.emptyMap());
         EndToEndBenchmark benchmark = new EndToEndBenchmark(
                 cliJar, List.of("TEST"), new ScenarioLoader(),
-                (jar, yaml) -> run(10, 80, 0), 0, 1, id -> 0L, "dataset");
+                (jar, yaml) -> run(10, 80, 0), 0, 1, id -> 0L, "dataset",
+                null, null, Collections.emptyMap());
 
         com.consilens.benchmark.report.BenchmarkResult result = benchmark.runScenario(scenario);
 
@@ -96,7 +99,7 @@ class EndToEndBenchmarkTest {
                 cliJar, List.of("TEST"), new ScenarioLoader(),
                 (jar, yaml) -> {
                     throw new AssertionError("CLI must not run without accuracy contract");
-                }, 0, 1, id -> null, "dataset");
+                }, 0, 1, id -> null, "dataset", null, null, Collections.emptyMap());
 
         com.consilens.benchmark.report.BenchmarkResult result = benchmark.runScenario(scenario);
 

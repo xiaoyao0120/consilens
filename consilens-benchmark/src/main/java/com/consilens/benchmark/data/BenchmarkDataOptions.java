@@ -6,6 +6,27 @@ import java.nio.file.Paths;
 /** 命令行数据生成参数。 */
 public final class BenchmarkDataOptions {
 
+    private static final String DEFAULT_JDBC_URL = "jdbc:h2:mem:benchmark;DB_CLOSE_DELAY=-1";
+    private static final String DEFAULT_USERNAME = "sa";
+    private static final String DEFAULT_PASSWORD = "";
+    private static final String DEFAULT_SOURCE_TABLE = "benchmark_source";
+    private static final String DEFAULT_TARGET_TABLE = "benchmark_target";
+    private static final long DEFAULT_ROWS = 1_000_000L;
+    private static final double DEFAULT_DIFF_RATIO = 0.05;
+    private static final double DEFAULT_SOURCE_MISSING_RATIO = 0.0;
+    private static final double DEFAULT_TARGET_MISSING_RATIO = 0.0;
+    private static final long DEFAULT_SEED = 42L;
+    private static final int DEFAULT_BATCH_SIZE = 5_000;
+    private static final boolean DEFAULT_RESUME = false;
+    private static final Path DEFAULT_REPORT_PATH = Paths.get("target/benchmark/data-report.json");
+    private static final String DEFAULT_KEY_DISTRIBUTION = "continuous";
+
+    /**
+     * Largest sequence whose square still fits in a long; skewed business keys use
+     * {@code sequence * sequence}, so rows must stay within this bound.
+     */
+    static final long MAX_SKEWED_ROWS = 3_037_000_499L;
+
     private final String jdbcUrl;
     private final String username;
     private final String password;
@@ -43,20 +64,20 @@ public final class BenchmarkDataOptions {
     }
 
     public static BenchmarkDataOptions parse(String[] args) {
-        String jdbcUrl = valueFromEnv("BENCHMARK_JDBC_URL", "jdbc:h2:mem:benchmark;DB_CLOSE_DELAY=-1");
-        String username = valueFromEnv("BENCHMARK_DB_USER", "sa");
-        String password = valueFromEnv("BENCHMARK_DB_PASSWORD", "");
-        String sourceTable = "benchmark_source";
-        String targetTable = "benchmark_target";
-        long rows = 1_000_000L;
-        double diffRatio = 0.05;
-        double sourceMissingRatio = 0.0;
-        double targetMissingRatio = 0.0;
-        long seed = 42L;
-        int batchSize = 5_000;
-        boolean resume = false;
-        Path reportPath = Paths.get("target/benchmark/data-report.json");
-        String keyDistribution = "continuous";
+        String jdbcUrl = valueFromEnv("BENCHMARK_JDBC_URL", DEFAULT_JDBC_URL);
+        String username = valueFromEnv("BENCHMARK_DB_USER", DEFAULT_USERNAME);
+        String password = valueFromEnv("BENCHMARK_DB_PASSWORD", DEFAULT_PASSWORD);
+        String sourceTable = DEFAULT_SOURCE_TABLE;
+        String targetTable = DEFAULT_TARGET_TABLE;
+        long rows = DEFAULT_ROWS;
+        double diffRatio = DEFAULT_DIFF_RATIO;
+        double sourceMissingRatio = DEFAULT_SOURCE_MISSING_RATIO;
+        double targetMissingRatio = DEFAULT_TARGET_MISSING_RATIO;
+        long seed = DEFAULT_SEED;
+        int batchSize = DEFAULT_BATCH_SIZE;
+        boolean resume = DEFAULT_RESUME;
+        Path reportPath = DEFAULT_REPORT_PATH;
+        String keyDistribution = DEFAULT_KEY_DISTRIBUTION;
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i];
@@ -129,6 +150,10 @@ public final class BenchmarkDataOptions {
         if (!"continuous".equals(keyDistribution) && !"sparse".equals(keyDistribution)
                 && !"skewed".equals(keyDistribution)) {
             throw new IllegalArgumentException("key-distribution must be continuous, sparse or skewed");
+        }
+        if ("skewed".equals(keyDistribution) && rows > MAX_SKEWED_ROWS) {
+            throw new IllegalArgumentException("rows must be <= " + MAX_SKEWED_ROWS
+                    + " for skewed key distribution (sequence*sequence would overflow)");
         }
     }
 

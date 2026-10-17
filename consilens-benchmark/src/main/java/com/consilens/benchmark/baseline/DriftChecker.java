@@ -6,7 +6,9 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 基于相对阈值的漂移判定。
@@ -23,6 +25,9 @@ import java.util.Map;
  */
 @Slf4j
 public class DriftChecker {
+
+    /** Units whose metric is latency: lower is better. All other units are treated as throughput. */
+    private static final Set<String> LATENCY_UNITS = Set.of("ms", "s/op", "us/op", "ns/op");
 
     public DriftChecker() {
     }
@@ -108,7 +113,6 @@ public class DriftChecker {
     }
 
     private boolean isLatencyUnit(String unit) {
-        return "ms".equalsIgnoreCase(unit) || "s/op".equalsIgnoreCase(unit)
-                || "us/op".equalsIgnoreCase(unit) || "ns/op".equalsIgnoreCase(unit);
+        return unit != null && LATENCY_UNITS.contains(unit.toLowerCase(Locale.ROOT));
     }
 }

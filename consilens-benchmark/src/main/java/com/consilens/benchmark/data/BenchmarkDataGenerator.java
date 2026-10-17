@@ -116,7 +116,9 @@ public final class BenchmarkDataGenerator {
             return sequence * 10L;
         }
         if ("skewed".equals(distribution)) {
-            return sequence * sequence;
+            // sequence <= BenchmarkDataOptions.MAX_SKEWED_ROWS is validated at parse time;
+            // multiplyExact keeps the invariant explicit if this is ever called directly.
+            return Math.multiplyExact(sequence, sequence);
         }
         return sequence;
     }

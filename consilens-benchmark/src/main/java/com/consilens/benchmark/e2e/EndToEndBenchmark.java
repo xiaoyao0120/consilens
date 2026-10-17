@@ -35,22 +35,6 @@ public final class EndToEndBenchmark {
     private final String differenceType;
     private final Map<String, Path> scenarioConfigs;
 
-    public EndToEndBenchmark(List<String> scenarioIds) {
-        this(scenarioIds, 1, 5, id -> null, null, null, null, Collections.emptyMap());
-    }
-
-    public EndToEndBenchmark(List<String> scenarioIds, int warmupRuns, int measurementRuns,
-                             Function<String, Long> expectedDifferences, String datasetId) {
-        this(scenarioIds, warmupRuns, measurementRuns, expectedDifferences, datasetId, null, null);
-    }
-
-    public EndToEndBenchmark(List<String> scenarioIds, int warmupRuns, int measurementRuns,
-                             Function<String, Long> expectedDifferences, String datasetId,
-                             String keyDistribution, String differenceType) {
-        this(scenarioIds, warmupRuns, measurementRuns, expectedDifferences, datasetId,
-                keyDistribution, differenceType, Collections.emptyMap());
-    }
-
     public EndToEndBenchmark(List<String> scenarioIds, int warmupRuns, int measurementRuns,
                              Function<String, Long> expectedDifferences, String datasetId,
                              String keyDistribution, String differenceType,
@@ -58,21 +42,6 @@ public final class EndToEndBenchmark {
         this(defaultCliJar(), scenarioIds, new ScenarioLoader(),
                 new CliProcessRunner(DEFAULT_TIMEOUT)::run, warmupRuns, measurementRuns,
                 expectedDifferences, datasetId, keyDistribution, differenceType, scenarioConfigs);
-    }
-
-    EndToEndBenchmark(Path cliJar, List<String> scenarioIds, ScenarioLoader loader,
-                      CliExecutor executor, int warmupRuns, int measurementRuns,
-                      Function<String, Long> expectedDifferences, String datasetId) {
-        this(cliJar, scenarioIds, loader, executor, warmupRuns, measurementRuns,
-                expectedDifferences, datasetId, null, null, Collections.emptyMap());
-    }
-
-    EndToEndBenchmark(Path cliJar, List<String> scenarioIds, ScenarioLoader loader,
-                      CliExecutor executor, int warmupRuns, int measurementRuns,
-                      Function<String, Long> expectedDifferences, String datasetId,
-                      String keyDistribution, String differenceType) {
-        this(cliJar, scenarioIds, loader, executor, warmupRuns, measurementRuns,
-                expectedDifferences, datasetId, keyDistribution, differenceType, Collections.emptyMap());
     }
 
     EndToEndBenchmark(Path cliJar, List<String> scenarioIds, ScenarioLoader loader,
@@ -186,6 +155,7 @@ public final class EndToEndBenchmark {
         metrics.put("accuracy", 1.0);
 
         BenchmarkResult result = baseResult(resultScenarioId(scenario.id()), "RUN", null);
+        result.setKind(scenario.kind());
         result.setScore(p95);
         result.setDurationMs(p50);
         result.setSubMetrics(metrics);
@@ -294,6 +264,7 @@ public final class EndToEndBenchmark {
 
     private static BenchmarkResult unsupported(Scenario scenario) {
         BenchmarkResult result = baseResult(scenario.id(), "UNSUPPORTED", scenario.unsupportedReason());
+        result.setKind(scenario.kind());
         result.setDimensions(scenario.dimensions());
         return result;
     }

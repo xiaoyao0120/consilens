@@ -66,6 +66,7 @@ class BenchmarkSuiteTest {
         });
         BenchmarkResult run = new BenchmarkResult();
         run.setScenarioId("G01.dataset");
+        run.setKind(com.consilens.benchmark.e2e.ScenarioLoader.KIND_E2E);
         run.setStatus("RUN");
         run.setScore(100);
         run.setUnit("ms");
