@@ -21,12 +21,6 @@
             <artifactId>consilens-core</artifactId>
         </dependency>
 
-        <!-- e2e 资源采集与报告风格复用 -->
-        <dependency>
-            <groupId>com.consilens</groupId>
-            <artifactId>consilens-performance</artifactId>
-        </dependency>
-
         <!-- JMH 微基准框架 -->
         <dependency>
             <groupId>org.openjdk.jmh</groupId>

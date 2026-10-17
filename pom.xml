@@ -74,7 +74,6 @@
         <module>consilens-cluster</module>
         <module>consilens-core</module>
         <module>consilens-sink</module>
-        <module>consilens-performance</module>
         <module>consilens-cli</module>
         <module>consilens-ui</module>
         <module>consilens-server</module>
@@ -125,25 +124,7 @@
                 <version>${project.version}</version>
             </dependency>
 
-            <dependency>
-                <groupId>com.consilens</groupId>
-                <artifactId>consilens-performance</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
             <!-- Performance monitoring dependencies -->
-            <dependency>
-                <groupId>org.hdrhistogram</groupId>
-                <artifactId>HdrHistogram</artifactId>
-                <version>2.1.12</version>
-            </dependency>
-
-            <dependency>
-                <groupId>org.latencyutils</groupId>
-                <artifactId>LatencyUtils</artifactId>
-                <version>2.0.3</version>
-            </dependency>
-
             <dependency>
                 <groupId>io.micrometer</groupId>
                 <artifactId>micrometer-observation</artifactId>

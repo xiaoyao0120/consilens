@@ -14,7 +14,6 @@ on:
       - 'consilens-connector/**'
       - 'consilens-core/**'
       - 'consilens-mcp/**'
-      - 'consilens-performance/**'
       - 'consilens-server/**'
       - 'consilens-sink/**'
       - 'consilens-spi/**'
