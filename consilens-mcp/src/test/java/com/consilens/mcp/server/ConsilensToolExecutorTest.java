@@ -1,6 +1,7 @@
 package com.consilens.mcp.server;
 
 import com.consilens.mcp.ConsilensJson;
+import com.consilens.mcp.catalog.ConsilensMcpCatalog;
 import com.consilens.mcp.client.ConsilensServerClient;
 import io.modelcontextprotocol.json.jackson2.JacksonMcpJsonMapper;
 import okhttp3.mockwebserver.MockResponse;
@@ -21,6 +22,7 @@ class ConsilensToolExecutorTest {
             JacksonMcpJsonMapper jsonMapper = new JacksonMcpJsonMapper(ConsilensJson.objectMapper());
             ConsilensToolExecutor executor = new ConsilensToolExecutor(
                     new ConsilensServerClient(URI.create(server.url("/").toString()), null, jsonMapper),
+                    new ConsilensMcpCatalog(),
                     jsonMapper);
 
             var result = executor.execute("consilens.run.diff", Map.of("configArtifactId", "config-1"));
@@ -46,6 +48,7 @@ class ConsilensToolExecutorTest {
             JacksonMcpJsonMapper jsonMapper = new JacksonMcpJsonMapper(ConsilensJson.objectMapper());
             ConsilensToolExecutor executor = new ConsilensToolExecutor(
                     new ConsilensServerClient(URI.create(server.url("/").toString()), null, jsonMapper),
+                    new ConsilensMcpCatalog(),
                     jsonMapper);
 
             var result = executor.execute("consilens.run.diff", Map.of(

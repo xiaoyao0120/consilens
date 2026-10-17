@@ -18,7 +18,7 @@ class ConsilensMcpApplicationConfigTest {
 
     @Test
     void shouldParseRuntimeTimeoutsAndServerPrefix() {
-        ConsilensMcpApplication.McpRuntimeConfig config = ConsilensMcpApplication.McpRuntimeConfig.parse(new String[]{
+        McpRuntimeConfig config = McpRuntimeConfig.parse(new String[]{
                 "--transport", "http",
                 "--server-url", "http://127.0.0.1:8080/consilens/",
                 "--http-host", "0.0.0.0",
@@ -30,7 +30,7 @@ class ConsilensMcpApplicationConfigTest {
                 "--allowed-origins", "https://app.example.com,http://127.0.0.1:*"
         });
 
-        assertThat(config.transport()).isEqualTo(ConsilensMcpApplication.McpRuntimeConfig.Transport.HTTP);
+        assertThat(config.transport()).isEqualTo(McpRuntimeConfig.Transport.HTTP);
         assertThat(config.serverBaseUri()).isEqualTo(URI.create("http://127.0.0.1:8080/consilens/"));
         assertThat(config.httpHost()).isEqualTo("0.0.0.0");
         assertThat(config.httpPort()).isEqualTo(18090);
@@ -43,22 +43,22 @@ class ConsilensMcpApplicationConfigTest {
 
     @Test
     void shouldRejectInvalidPortAndTimeout() {
-        assertThatThrownBy(() -> ConsilensMcpApplication.McpRuntimeConfig.parse(new String[]{
+        assertThatThrownBy(() -> McpRuntimeConfig.parse(new String[]{
                 "--http-port", "70000"
         })).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("between 1 and 65535");
 
-        assertThatThrownBy(() -> ConsilensMcpApplication.McpRuntimeConfig.parse(new String[]{
+        assertThatThrownBy(() -> McpRuntimeConfig.parse(new String[]{
                 "--request-timeout-ms", "0"
         })).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("positive");
 
-        assertThatThrownBy(() -> ConsilensMcpApplication.McpRuntimeConfig.parse(new String[]{
+        assertThatThrownBy(() -> McpRuntimeConfig.parse(new String[]{
                 "--http-host", ""
         })).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must not be blank");
 
-        assertThatThrownBy(() -> ConsilensMcpApplication.McpRuntimeConfig.parse(new String[]{
+        assertThatThrownBy(() -> McpRuntimeConfig.parse(new String[]{
                 "--allowed-hosts", ","
         })).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must include at least one value");

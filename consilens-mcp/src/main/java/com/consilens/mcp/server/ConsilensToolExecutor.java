@@ -1,5 +1,8 @@
 package com.consilens.mcp.server;
 
+import com.consilens.mcp.McpRuntimeConfig;
+import com.consilens.mcp.catalog.ConsilensMcpCatalog;
+import com.consilens.mcp.catalog.McpToolSpec;
 import com.consilens.mcp.client.ConsilensServerClient;
 import com.consilens.mcp.client.ConsilensServerException;
 import io.modelcontextprotocol.json.McpJsonMapper;
@@ -13,14 +16,20 @@ import java.util.Map;
 
 public class ConsilensToolExecutor {
 
-    private static final Duration RUN_POLL_TIMEOUT = Duration.ofSeconds(120);
-    private static final Duration RUN_POLL_INTERVAL = Duration.ofSeconds(1);
+    private static final String RUN_TASK_PATH = "/v1/tasks/execute";
+    private static final String ARTIFACT_PATH = "/v1/artifacts/{artifactId}";
+    private static final Duration RUN_POLL_TIMEOUT = McpRuntimeConfig.RUN_POLL_TIMEOUT;
+    private static final Duration RUN_POLL_INTERVAL = McpRuntimeConfig.RUN_POLL_INTERVAL;
 
     private final ConsilensServerClient client;
+    private final ConsilensMcpCatalog catalog;
     private final McpJsonMapper jsonMapper;
 
-    public ConsilensToolExecutor(ConsilensServerClient client, McpJsonMapper jsonMapper) {
+    public ConsilensToolExecutor(ConsilensServerClient client,
+                                 ConsilensMcpCatalog catalog,
+                                 McpJsonMapper jsonMapper) {
         this.client = client;
+        this.catalog = catalog;
         this.jsonMapper = jsonMapper;
     }
 
@@ -34,21 +43,34 @@ public class ConsilensToolExecutor {
     }
 
     private Map<String, Object> doExecute(String name, Map<String, Object> arguments) {
-        return switch (name) {
-            case "consilens.plan.config" -> client.post("/v1/plan", arguments);
-            case "consilens.validate.config" -> client.post("/v1/validate", arguments);
-            case "consilens.run.diff" -> runDiff(arguments);
-            case "consilens.diagnose.diff" -> client.post("/v1/diagnose", arguments);
-            case "consilens.repair.config" -> client.post("/v1/repair", arguments);
-            case "consilens.get.artifact" -> getArtifact(arguments);
-            default -> throw new IllegalArgumentException("Unsupported MCP tool: " + name);
-        };
+        McpToolSpec spec = catalog.findTool(name)
+                .orElseThrow(() -> new IllegalArgumentException("Unsupported MCP tool: " + name));
+        if ("GET".equalsIgnoreCase(spec.httpMethod())) {
+            return get(spec, arguments);
+        }
+        if (RUN_TASK_PATH.equals(spec.httpPath())) {
+            return runDiff(spec, arguments);
+        }
+        return client.post(spec.httpPath(), arguments);
     }
 
-    private Map<String, Object> runDiff(Map<String, Object> arguments) {
+    private Map<String, Object> get(McpToolSpec spec, Map<String, Object> arguments) {
+        if (!ARTIFACT_PATH.equals(spec.httpPath())) {
+            throw new IllegalArgumentException("Unsupported MCP GET tool: " + spec.name());
+        }
+        String artifactId = requireString(arguments, "artifactId");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("artifact", client.getArtifact(artifactId));
+        if (Boolean.TRUE.equals(arguments.get("includeContent"))) {
+            result.put("content", client.getArtifactContent(artifactId));
+        }
+        return result;
+    }
+
+    private Map<String, Object> runDiff(McpToolSpec spec, Map<String, Object> arguments) {
         requireString(arguments, "serialNo");
         requireString(arguments, "configArtifactId");
-        Map<String, Object> accepted = client.post("/v1/tasks/execute", arguments);
+        Map<String, Object> accepted = client.post(spec.httpPath(), arguments);
         Object taskIdValue = accepted.get("taskId");
         if (taskIdValue == null || String.valueOf(taskIdValue).isBlank()) {
             return accepted;
@@ -87,16 +109,6 @@ public class ConsilensToolExecutor {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while waiting for Consilens task completion", exception);
         }
-    }
-
-    private Map<String, Object> getArtifact(Map<String, Object> arguments) {
-        String artifactId = requireString(arguments, "artifactId");
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("artifact", client.getArtifact(artifactId));
-        if (Boolean.TRUE.equals(arguments.get("includeContent"))) {
-            result.put("content", client.getArtifactContent(artifactId));
-        }
-        return result;
     }
 
     private String requireString(Map<String, Object> arguments, String key) {

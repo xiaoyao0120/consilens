@@ -1,5 +1,6 @@
 package com.consilens.mcp.client;
 
+import com.consilens.mcp.McpRuntimeConfig;
 import io.modelcontextprotocol.json.McpJsonMapper;
 
 import java.io.IOException;
@@ -16,8 +17,8 @@ import java.util.UUID;
 
 public class ConsilensServerClient {
 
-    private static final int MAX_RETRY_ATTEMPTS = 3;
-    private static final long INITIAL_RETRY_DELAY_MS = 250L;
+    private static final int MAX_RETRY_ATTEMPTS = McpRuntimeConfig.MAX_RETRY_ATTEMPTS;
+    private static final long INITIAL_RETRY_DELAY_MS = McpRuntimeConfig.INITIAL_RETRY_DELAY_MS;
 
     private final URI serverBaseUri;
     private final String serverApiKey;
@@ -26,7 +27,8 @@ public class ConsilensServerClient {
     private final Duration requestTimeout;
 
     public ConsilensServerClient(URI serverBaseUri, String serverApiKey, McpJsonMapper jsonMapper) {
-        this(serverBaseUri, serverApiKey, jsonMapper, Duration.ofSeconds(10), Duration.ofSeconds(60));
+        this(serverBaseUri, serverApiKey, jsonMapper,
+                McpRuntimeConfig.DEFAULT_CONNECT_TIMEOUT, McpRuntimeConfig.DEFAULT_REQUEST_TIMEOUT);
     }
 
     public ConsilensServerClient(URI serverBaseUri,
@@ -40,7 +42,7 @@ public class ConsilensServerClient {
     }
 
     ConsilensServerClient(URI serverBaseUri, String serverApiKey, McpJsonMapper jsonMapper, HttpClient httpClient) {
-        this(serverBaseUri, serverApiKey, jsonMapper, httpClient, Duration.ofSeconds(60));
+        this(serverBaseUri, serverApiKey, jsonMapper, httpClient, McpRuntimeConfig.DEFAULT_REQUEST_TIMEOUT);
     }
 
     ConsilensServerClient(URI serverBaseUri,

@@ -1,5 +1,6 @@
 package com.consilens.mcp.server;
 
+import com.consilens.mcp.McpRuntimeConfig;
 import com.consilens.mcp.catalog.ConsilensMcpCatalog;
 import com.consilens.mcp.client.ConsilensServerClient;
 import io.modelcontextprotocol.json.McpJsonDefaults;
@@ -17,7 +18,8 @@ public final class ConsilensMcpServerFactory {
     public static <S extends McpServer.SyncSpecification<S>> S configure(S spec,
                                                                          ConsilensMcpCatalog catalog,
                                                                          ConsilensServerClient client) {
-        return configure(spec, catalog, client, McpJsonDefaults.getMapper(), Duration.ofSeconds(60));
+        return configure(spec, catalog, client, McpJsonDefaults.getMapper(),
+                McpRuntimeConfig.DEFAULT_REQUEST_TIMEOUT);
     }
 
     public static <S extends McpServer.SyncSpecification<S>> S configure(S spec,
@@ -25,7 +27,7 @@ public final class ConsilensMcpServerFactory {
                                                                          ConsilensServerClient client,
                                                                          McpJsonMapper jsonMapper,
                                                                          Duration requestTimeout) {
-        ConsilensToolExecutor toolExecutor = new ConsilensToolExecutor(client, jsonMapper);
+        ConsilensToolExecutor toolExecutor = new ConsilensToolExecutor(client, catalog, jsonMapper);
         ConsilensResourceReader resourceReader = new ConsilensResourceReader(client, jsonMapper);
         ConsilensPromptProvider promptProvider = new ConsilensPromptProvider();
 
