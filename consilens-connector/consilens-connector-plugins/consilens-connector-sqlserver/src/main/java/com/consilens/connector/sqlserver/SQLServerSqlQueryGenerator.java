@@ -57,15 +57,6 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
         // SQL Server 2012+ OFFSET...FETCH syntax
         return "OFFSET " + offset + " ROWS FETCH NEXT " + limit + " ROWS ONLY";
     }
-
-    /**
-     * Generate SELECT with TOP for SQL Server.
-     * Note: This is used when offset is 0.
-     */
-    public String getTopClause(long limit) {
-        return "TOP " + limit;
-    }
-
     @Override
     public String getChecksumSQL(String schemaName, String tableName,
             List<String> keyColumns,
@@ -189,24 +180,6 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
 
         return sql.toString();
     }
-
-    @Override
-    public String getFullOuterJoinSQL(String table1, String table2,
-            List<String> joinColumns,
-            String whereClause) {
-        StringBuilder sql = new StringBuilder();
-
-        sql.append("SELECT * FROM ").append(table1)
-                .append(" FULL OUTER JOIN ").append(table2)
-                .append(" ON ").append(buildJoinCondition(table1, table2, joinColumns));
-
-        if (whereClause != null && !whereClause.trim().isEmpty()) {
-            sql.append(" WHERE ").append(whereClause);
-        }
-
-        return sql.toString();
-    }
-
     @Override
     public String getBatchInsertSQL(String tableName, List<String> columns, int batchSize) {
         if (batchSize < 1) {
@@ -233,19 +206,5 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
         }
 
         return sql.toString();
-    }
-
-    private String buildJoinCondition(String table1, String table2, List<String> joinColumns) {
-        StringBuilder condition = new StringBuilder();
-        for (int i = 0; i < joinColumns.size(); i++) {
-            if (i > 0)
-                condition.append(" AND ");
-            condition.append(capabilityProvider.quote(table1)).append(".")
-                    .append(capabilityProvider.quote(joinColumns.get(i)))
-                    .append(" = ")
-                    .append(capabilityProvider.quote(table2)).append(".")
-                    .append(capabilityProvider.quote(joinColumns.get(i)));
-        }
-        return condition.toString();
     }
 }

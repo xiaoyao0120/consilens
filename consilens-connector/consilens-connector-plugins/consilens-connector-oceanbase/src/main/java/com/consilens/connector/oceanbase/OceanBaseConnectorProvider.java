@@ -1,5 +1,6 @@
 package com.consilens.connector.oceanbase;
 
+import com.consilens.connector.api.ConnectorTypes;
 import com.consilens.conncetor.base.AbstractJdbcConnectorProvider;
 
 /**
@@ -16,6 +17,6 @@ import com.consilens.conncetor.base.AbstractJdbcConnectorProvider;
 public class OceanBaseConnectorProvider extends AbstractJdbcConnectorProvider {
 
     public OceanBaseConnectorProvider() {
-        super("oceanbase", OceanBaseDatabaseDialect::new);
+        super(ConnectorTypes.OCEANBASE, OceanBaseDatabaseDialect::new);
     }
 }

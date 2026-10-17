@@ -1,5 +1,6 @@
 package com.consilens.connector.oceanbase;
 
+import com.consilens.connector.api.ConnectorTypes;
 import com.consilens.connector.api.DatabaseDialect;
 import com.consilens.connector.api.DatabaseDialectProvider;
 
@@ -19,7 +20,7 @@ public class OceanBaseDatabaseDialectProvider implements DatabaseDialectProvider
 
     @Override
     public String getConnectorType() {
-        return "oceanbase";
+        return ConnectorTypes.OCEANBASE;
     }
 
     @Override

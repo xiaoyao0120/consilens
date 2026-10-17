@@ -64,15 +64,6 @@ class SQLServerSqlQueryGeneratorTest {
         String sql = generator.getChecksumSQL("dbo", "users", columns, Arrays.asList("id"), types, null);
         assertTrue(sql.contains("HASHBYTES"));
     }
-
-    @Test
-    void testGetFullOuterJoinSQL() {
-        List<String> joinColumns = Arrays.asList("id");
-        String sql = generator.getFullOuterJoinSQL("table1", "table2", joinColumns, null);
-
-        assertTrue(sql.contains("FULL OUTER JOIN"));
-    }
-
     @Test
     void testGetBatchInsertSQL() {
         List<String> columns = Arrays.asList("id", "name", "email");

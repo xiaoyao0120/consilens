@@ -76,31 +76,6 @@ class BaseDataTypeHandlerTest {
         }
 
         @Override
-        public String getDefaultSchema() {
-            return "public";
-        }
-
-        @Override
-        public String getCatalogSeparator() {
-            return ".";
-        }
-
-        @Override
-        public String getPaginationHint(long offset, long limit) {
-            return "";
-        }
-
-        @Override
-        public char getWildcardEscapeChar() {
-            return '\\';
-        }
-
-        @Override
-        public String escapePattern(String pattern) {
-            return pattern;
-        }
-
-        @Override
         public String getOpenQuote() {
             return "\"";
         }

@@ -1,5 +1,6 @@
 package com.consilens.connector.clickhouse;
 
+import com.consilens.connector.api.ConnectorTypes;
 import com.consilens.connector.api.*;
 import com.consilens.conncetor.base.AbstractDatabaseDialect;
 
@@ -62,7 +63,7 @@ public class ClickHouseDatabaseDialect extends AbstractDatabaseDialect {
 
     @Override
     public String getConnectorType() {
-        return "clickhouse";
+        return ConnectorTypes.CLICKHOUSE;
     }
 
     @Override

@@ -42,6 +42,19 @@ public class MySQLDataTypeHandler extends BaseDataTypeHandler {
         return mysqlFamilyScientificFloatExpression(quotedCol);
     }
 
+    /**
+     * MySQL 的 YEAR 逻辑上是 16 位整数，但 JDBC 驱动把它读成 {@code java.sql.Date}
+     * （如 2092-01-01），而 PostgreSQL 的等价列读成整数。按逻辑类型归一化为年份整数，
+     * 让跨库本地比对不依赖具体驱动的返回形态。
+     */
+    @Override
+    public Object normalizeValueForComparison(Object value, DataType dataType) {
+        if (value instanceof java.sql.Date && dataType != null && dataType.isNumeric()) {
+            return ((java.sql.Date) value).toLocalDate().getYear();
+        }
+        return value;
+    }
+
 
 
     @Override

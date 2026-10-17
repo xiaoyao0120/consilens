@@ -2,10 +2,12 @@ package com.consilens.conncetor.base;
 
 import com.consilens.connector.api.CapabilityProvider;
 import com.consilens.connector.api.enums.DatabaseFeature;
+import com.consilens.connector.api.model.DataType;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -13,6 +15,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BaseSqlQueryGeneratorTest {
 
     private final BaseSqlQueryGenerator generator = new BaseSqlQueryGenerator(new TestCapabilityProvider()) {
+        @Override
+        public String getRowHashSQL(String schemaName, String tableName, List<String> primaryKeys,
+                List<String> columns, Map<String, DataType> columnDataTypes, String whereClause) {
+            return "";
+        }
     };
 
     @Test
@@ -71,6 +78,11 @@ class BaseSqlQueryGeneratorTest {
     @Test
     void shouldReturnFiveColumnContractWithFullOuterJoin() {
         BaseSqlQueryGenerator fullJoinGenerator = new BaseSqlQueryGenerator(new FullJoinCapabilityProvider()) {
+            @Override
+            public String getRowHashSQL(String schemaName, String tableName, List<String> primaryKeys,
+                    List<String> columns, Map<String, DataType> columnDataTypes, String whereClause) {
+                return "";
+            }
         };
 
         String sql = fullJoinGenerator.getJoinDiffStatsSQL(
@@ -106,31 +118,6 @@ class BaseSqlQueryGeneratorTest {
         @Override
         public Set<DatabaseFeature> getSupportedFeatures() {
             return Collections.emptySet();
-        }
-
-        @Override
-        public String getDefaultSchema() {
-            return "public";
-        }
-
-        @Override
-        public String getCatalogSeparator() {
-            return ".";
-        }
-
-        @Override
-        public String getPaginationHint(long offset, long limit) {
-            return "";
-        }
-
-        @Override
-        public char getWildcardEscapeChar() {
-            return '\\';
-        }
-
-        @Override
-        public String escapePattern(String pattern) {
-            return pattern;
         }
 
         @Override

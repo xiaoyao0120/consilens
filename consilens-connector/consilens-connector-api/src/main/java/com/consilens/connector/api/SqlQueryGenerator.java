@@ -20,13 +20,10 @@ public interface SqlQueryGenerator {
      * 严格档（validateUniqueKeys=true）在比对开始前用它做唯一性校验——键不唯一时
      * "按键比对"不成立（join 会 N×M 倍增、checksum 归因会退化成全行 SM/TM）。
      *
-     * <p>该能力是**可选的**，是否可用由 {@link #supportsKeyMultiplicityFilter()} 声明；
-     * 未实现的方言保持默认抛 {@link UnsupportedOperationException}。
+     * <p>是否可用由 {@link #supportsKeyMultiplicityFilter()} 声明。
      */
-    default String getDuplicateKeyProbeSQL(String schemaName, String tableName, java.util.List<String> keyColumns,
-            java.util.Map<String, DataType> keyTypes, String whereClause) {
-        throw new UnsupportedOperationException("getDuplicateKeyProbeSQL is not implemented");
-    }
+    String getDuplicateKeyProbeSQL(String schemaName, String tableName, java.util.List<String> keyColumns,
+            java.util.Map<String, DataType> keyTypes, String whereClause);
 
     /**
      * 键多重性过滤器（开放档 join 用）：按比对口径的键表达式（归一化 + 二进制安全）判断
@@ -37,8 +34,7 @@ public interface SqlQueryGenerator {
      * 的子集（此时 1:1 无倍增）。过滤器即用同一键表达式表达这一划分，无需键字面量，
      * 因此不存在跨方言的字面量编码/转义问题。
      *
-     * <p>该能力是**可选的**，是否可用由 {@link #supportsKeyMultiplicityFilter()} 声明；
-     * 未实现的方言保持默认抛 {@link UnsupportedOperationException}。
+     * <p>是否可用由 {@link #supportsKeyMultiplicityFilter()} 声明。
      *
      * @param duplicates true 取"重复键"集合（HAVING COUNT(*) &gt; 1）；false 取"唯一键"集合（= 1）
      * @param outerQualifier 外层（被判定行）所在表的限定名（表名，可为 null）——子查询内必须
@@ -46,11 +42,9 @@ public interface SqlQueryGenerator {
      * @return 形如 {@code EXISTS (SELECT 1 FROM <rel> d WHERE <where> AND d.k = <keyExpr> ... GROUP BY ... HAVING ...)}
      *         的谓词（无论单键还是复合键，实现都使用相关 EXISTS 子查询，不退化为 IN）
      */
-    default String getKeyMultiplicityFilterSQL(String schemaName, String tableName,
+    String getKeyMultiplicityFilterSQL(String schemaName, String tableName,
             java.util.List<String> keyColumns, java.util.Map<String, DataType> keyTypes,
-            String whereClause, boolean duplicates, String outerQualifier) {
-        throw new UnsupportedOperationException("getKeyMultiplicityFilterSQL is not implemented");
-    }
+            String whereClause, boolean duplicates, String outerQualifier);
 
     /**
      * 该方言能否表达键多重性过滤器（相关子查询 + 聚合）。
@@ -262,42 +256,6 @@ public interface SqlQueryGenerator {
                         String whereClause) {
                 throw new UnsupportedOperationException("getDistinctCountSQLFromSql is not implemented");
         }
-
-        /**
-         * Generate SQL for a full outer join between two tables.
-         *
-         * @param table1      the first table
-         * @param table2      the second table
-         * @param joinColumns the columns to join on
-         * @param whereClause optional WHERE clause
-         * @return SQL FULL OUTER JOIN query
-         */
-        String getFullOuterJoinSQL(String table1, String table2,
-                        List<String> joinColumns, String whereClause);
-
-        /**
-         * Generate SQL for a left outer join.
-         *
-         * @param table1      the first table
-         * @param table2      the second table
-         * @param joinColumns the columns to join on
-         * @param whereClause optional WHERE clause
-         * @return SQL LEFT OUTER JOIN query
-         */
-        String getLeftOuterJoinSQL(String table1, String table2,
-                        List<String> joinColumns, String whereClause);
-
-        /**
-         * Generate SQL for a right outer join.
-         *
-         * @param table1      the first table
-         * @param table2      the second table
-         * @param joinColumns the columns to join on
-         * @param whereClause optional WHERE clause
-         * @return SQL RIGHT OUTER JOIN query
-         */
-        String getRightOuterJoinSQL(String table1, String table2,
-                        List<String> joinColumns, String whereClause);
 
         /**
          * Generate SQL for inserting data into a table.

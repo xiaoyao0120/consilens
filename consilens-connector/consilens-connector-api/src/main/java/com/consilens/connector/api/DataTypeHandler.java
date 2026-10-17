@@ -62,6 +62,23 @@ public interface DataTypeHandler extends TypeConverter {
      */
     DataType convertToDataType(String sourceType);
 
+    /**
+     * Normalize a value into the representation used for in-memory comparison.
+     *
+     * <p>Most dialects return the JDBC value unchanged. Dialects whose driver
+     * renders a logical type differently from its peers override this to map it
+     * onto the common representation (e.g. MySQL YEAR arrives as
+     * {@link java.sql.Date} while PostgreSQL exposes it as an integer).
+     *
+     * @param value    value read from the database
+     * @param dataType logical column type, or {@link DataType#UNKNOWN} when unavailable
+     * @return value in comparison form
+     */
+    default Object normalizeValueForComparison(Object value, DataType dataType) {
+        return value;
+    }
+
+
     @Override
     TypeDescriptor convertToTypeDescriptor(String originType);
 

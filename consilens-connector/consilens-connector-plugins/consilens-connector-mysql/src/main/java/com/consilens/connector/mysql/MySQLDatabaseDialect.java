@@ -1,5 +1,6 @@
 package com.consilens.connector.mysql;
 
+import com.consilens.connector.api.ConnectorTypes;
 import com.consilens.connector.api.*;
 import com.consilens.conncetor.base.AbstractDatabaseDialect;
 
@@ -60,7 +61,7 @@ public class MySQLDatabaseDialect extends AbstractDatabaseDialect {
 
     @Override
     public String getConnectorType() {
-        return "mysql";
+        return ConnectorTypes.MYSQL;
     }
 
     @Override

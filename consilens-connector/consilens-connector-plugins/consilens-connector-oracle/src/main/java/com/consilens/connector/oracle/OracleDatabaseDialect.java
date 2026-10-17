@@ -1,5 +1,6 @@
 package com.consilens.connector.oracle;
 
+import com.consilens.connector.api.ConnectorTypes;
 import com.consilens.connector.api.*;
 import com.consilens.connector.api.capability.ConnectorCapability;
 import com.consilens.conncetor.base.AbstractDatabaseDialect;
@@ -38,7 +39,7 @@ public class OracleDatabaseDialect extends AbstractDatabaseDialect {
 
     @Override
     public String getConnectorType() {
-        return "oracle";
+        return ConnectorTypes.ORACLE;
     }
 
     /**

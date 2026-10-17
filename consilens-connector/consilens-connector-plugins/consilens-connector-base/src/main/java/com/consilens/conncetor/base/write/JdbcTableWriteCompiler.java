@@ -228,7 +228,7 @@ public class JdbcTableWriteCompiler implements TableWriteCompiler {
                 return typeDescriptor.isWithTimezone() ? java.sql.Types.TIMESTAMP_WITH_TIMEZONE : java.sql.Types.TIMESTAMP;
             case JSON_TYPE:
             case UUID_TYPE:
-                return "postgresql".equals(dialect.getConnectorType()) ? java.sql.Types.OTHER : java.sql.Types.VARCHAR;
+                return dialect.getStructuredColumnJdbcType();
             case BINARY_TYPE:
                 return java.sql.Types.BINARY;
             case STRING_TYPE:

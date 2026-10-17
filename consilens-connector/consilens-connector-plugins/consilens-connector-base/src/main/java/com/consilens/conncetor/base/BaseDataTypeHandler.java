@@ -22,7 +22,6 @@ import java.util.regex.Pattern;
 @Slf4j
 public class BaseDataTypeHandler implements DataTypeHandler {
 
-    private static final Set<String> DATE_ONLY_COMPARISON_MODES = Set.of("DATE_ONLY", "TRUNCATE_TO_DAY");
     private static final Pattern TYPE_PARAMS_PATTERN = Pattern.compile("^\\s*([^()]+?)(?:\\(([^)]*)\\))?\\s*$");
     private static final Pattern LENGTH_PATTERN = Pattern.compile("\\((\\d+)\\)");
     private static final Pattern PRECISION_SCALE_PATTERN = Pattern.compile("\\((\\d+)\\s*(?:,\\s*(\\d+))?\\)");
@@ -83,23 +82,9 @@ public class BaseDataTypeHandler implements DataTypeHandler {
         return rounding != null ? rounding : defaultRounding;
     }
 
-    protected String getFormat(String dataTypeName, String defaultFormat) {
-        String format = getRuleValue(dataTypeName, "getFormat", String.class);
-        return format != null ? format : defaultFormat;
-    }
-
     protected String getTimezone(String dataTypeName, String defaultTimezone) {
         String timezone = getRuleValue(dataTypeName, "getTimezone", String.class);
         return timezone != null ? timezone : defaultTimezone;
-    }
-
-    protected String getComparisonMode(String dataTypeName, String defaultMode) {
-        String comparisonMode = getRuleValue(dataTypeName, "getComparisonMode", String.class);
-        return comparisonMode != null ? comparisonMode.trim().toUpperCase(Locale.ROOT) : defaultMode;
-    }
-
-    protected boolean isDateOnlyComparison(String dataTypeName) {
-        return DATE_ONLY_COMPARISON_MODES.contains(getComparisonMode(dataTypeName, "EXACT"));
     }
 
     protected String getNativeTemporalFormat(String connectorName,
@@ -107,8 +92,12 @@ public class BaseDataTypeHandler implements DataTypeHandler {
                                              String defaultFormat,
                                              String dateOnlyDefaultFormat,
                                              Set<String> allowedTokens) {
-        String configuredFormat = getFormat(dataTypeName, null);
-        String effectiveDefault = isDateOnlyComparison(dataTypeName) ? dateOnlyDefaultFormat : defaultFormat;
+        String configuredFormat = getRuleValue(dataTypeName, "getFormat", String.class);
+        String comparisonMode = getRuleValue(dataTypeName, "getComparisonMode", String.class);
+        boolean dateOnlyComparison = comparisonMode != null
+                && ("DATE_ONLY".equalsIgnoreCase(comparisonMode.trim())
+                        || "TRUNCATE_TO_DAY".equalsIgnoreCase(comparisonMode.trim()));
+        String effectiveDefault = dateOnlyComparison ? dateOnlyDefaultFormat : defaultFormat;
         String format = configuredFormat == null || configuredFormat.isBlank()
                 ? effectiveDefault
                 : configuredFormat.trim();

@@ -1,5 +1,6 @@
 package com.consilens.connector.sqlserver;
 
+import com.consilens.connector.api.ConnectorTypes;
 import com.consilens.connector.api.*;
 import com.consilens.conncetor.base.AbstractDatabaseDialect;
 
@@ -35,7 +36,7 @@ public class SQLServerDatabaseDialect extends AbstractDatabaseDialect {
 
     @Override
     public String getConnectorType() {
-        return "sqlserver";
+        return ConnectorTypes.SQLSERVER;
     }
 
     @Override
@@ -46,6 +47,11 @@ public class SQLServerDatabaseDialect extends AbstractDatabaseDialect {
     @Override
     public int getDefaultPort() {
         return 1433;
+    }
+
+    @Override
+    public boolean usesAnsiTemporalLiterals() {
+        return false;
     }
 
     @Override

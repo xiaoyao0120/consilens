@@ -95,16 +95,6 @@ class ClickHouseSqlQueryGeneratorTest {
         assertTrue(sql.contains("COALESCE(trim(toString("));
         assertTrue(sql.contains("), '')"));
     }
-
-    @Test
-    void testGetFullOuterJoinSQL() {
-        List<String> joinColumns = Arrays.asList("id");
-        String sql = generator.getFullOuterJoinSQL("table1", "table2", joinColumns, null);
-
-        assertTrue(sql.contains("FULL OUTER JOIN"));
-        assertFalse(sql.contains("UNION")); // ClickHouse uses native FULL OUTER JOIN
-    }
-
     @Test
     void testGetBatchInsertSQL() {
         List<String> columns = Arrays.asList("id", "name", "email");

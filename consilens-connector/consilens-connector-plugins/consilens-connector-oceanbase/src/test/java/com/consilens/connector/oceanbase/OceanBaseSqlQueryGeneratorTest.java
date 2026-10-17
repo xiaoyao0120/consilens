@@ -88,26 +88,6 @@ class OceanBaseSqlQueryGeneratorTest {
         assertFalse(sql.contains("CREATE TEMPORARY"));
         assertFalse(sql.contains("`(SELECT"));
     }
-
-    @Test
-    void testGetFullOuterJoinSQL() {
-        // OceanBase supports FULL OUTER JOIN natively (unlike MySQL)
-        String sql = generator.getFullOuterJoinSQL("table1", "table2",
-                Arrays.asList("id"), null);
-
-        assertTrue(sql.contains("FULL OUTER JOIN"));
-        assertFalse(sql.contains("UNION"), "OceanBase should use native FULL OUTER JOIN, not UNION simulation");
-    }
-
-    @Test
-    void testGetFullOuterJoinSQLWithWhere() {
-        String sql = generator.getFullOuterJoinSQL("table1", "table2",
-                Arrays.asList("id"), "table1.status = 'active'");
-
-        assertTrue(sql.contains("FULL OUTER JOIN"));
-        assertTrue(sql.contains("WHERE table1.status = 'active'"));
-    }
-
     @Test
     void testGetBatchInsertSQL() {
         String sql = generator.getBatchInsertSQL("test_table",

@@ -67,18 +67,6 @@ class DorisSqlQueryGeneratorTest {
         assertTrue(sql.contains("CONCAT_WS"));
         assertTrue(sql.contains("ORDER BY"));
     }
-
-    @Test
-    void testGetFullOuterJoinSQL() {
-        String sql = generator.getFullOuterJoinSQL("table1", "table2",
-                Arrays.asList("id"), null);
-
-        assertTrue(sql.contains("LEFT JOIN"));
-        assertTrue(sql.contains("RIGHT JOIN"));
-        assertTrue(sql.contains("UNION"));
-        assertTrue(sql.contains("IS NULL"));
-    }
-
     @Test
     void testGetBatchInsertSQL() {
         String sql = generator.getBatchInsertSQL("test_table",

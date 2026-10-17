@@ -12,6 +12,18 @@ import java.util.stream.IntStream;
 
 public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
 
+    /**
+     * 重复键探测 SQL 的计数列别名。调用方按该列名读取每组的行数，属于
+     * SQL 内部输出契约，不是可配置项（改名会破坏结果解析）。
+     */
+    private static final String DUP_COUNT_ALIAS = "nl_dup_count";
+
+    /**
+     * 键多重性过滤器中内层自扫描的别名。仅用于避免与外层同名表/列解析冲突，
+     * 属于 SQL 内部别名，不是可配置项。
+     */
+    private static final String DUP_KEY_INNER_ALIAS = "nl_dup_k";
+
     private final CapabilityProvider capabilityProvider;
 
     public BaseSqlQueryGenerator(CapabilityProvider capabilityProvider) {
@@ -119,7 +131,7 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
             displayExprs.add("MIN(" + normalized + ")");
         }
         StringBuilder sql = new StringBuilder("SELECT ");
-        sql.append(String.join(", ", displayExprs)).append(", COUNT(*) AS nl_dup_count FROM ");
+        sql.append(String.join(", ", displayExprs)).append(", COUNT(*) AS ").append(DUP_COUNT_ALIAS).append(" FROM ");
         sql.append(buildRelationRef(schemaName, tableName));
         if (whereClause != null && !whereClause.trim().isEmpty()) {
             sql.append(" WHERE ").append(whereClause);
@@ -140,7 +152,7 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
             outerExprs.set(i, binarySafeExpression(outerExprs.get(i)));
         }
         // 内层（同一张表的独立扫描）：带别名，避免与外层同名解析冲突。
-        String innerAlias = "nl_dup_k";
+        String innerAlias = DUP_KEY_INNER_ALIAS;
         List<String> innerNorm = normalizedKeyExpressions(keyColumns, keyTypes, innerAlias);
         List<String> innerGroup = new java.util.ArrayList<>();
         for (String normalized : innerNorm) {
@@ -358,55 +370,6 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
     }
 
     @Override
-    public String getFullOuterJoinSQL(String table1, String table2, List<String> joinColumns, String whereClause) {
-        if (!capabilityProvider.supportsFeature(DatabaseFeature.FULL_OUTER_JOIN)) {
-            // Fallback to left and right outer joins unioned
-            String leftJoin = getLeftOuterJoinSQL(table1, table2, joinColumns, whereClause);
-            String rightJoin = getRightOuterJoinSQL(table1, table2, joinColumns, whereClause);
-            return "(" + leftJoin + ") UNION (" + rightJoin + ")";
-        }
-
-        StringBuilder sql = new StringBuilder();
-        sql.append("SELECT * FROM ").append(table1);
-        sql.append(" FULL OUTER JOIN ").append(table2);
-        sql.append(" ON ").append(buildJoinCondition(joinColumns));
-
-        if (whereClause != null && !whereClause.trim().isEmpty()) {
-            sql.append(" WHERE ").append(whereClause);
-        }
-
-        return sql.toString();
-    }
-
-    @Override
-    public String getLeftOuterJoinSQL(String table1, String table2, List<String> joinColumns, String whereClause) {
-        StringBuilder sql = new StringBuilder();
-        sql.append("SELECT * FROM ").append(table1);
-        sql.append(" LEFT OUTER JOIN ").append(table2);
-        sql.append(" ON ").append(buildJoinCondition(joinColumns));
-
-        if (whereClause != null && !whereClause.trim().isEmpty()) {
-            sql.append(" WHERE ").append(whereClause);
-        }
-
-        return sql.toString();
-    }
-
-    @Override
-    public String getRightOuterJoinSQL(String table1, String table2, List<String> joinColumns, String whereClause) {
-        StringBuilder sql = new StringBuilder();
-        sql.append("SELECT * FROM ").append(table1);
-        sql.append(" RIGHT OUTER JOIN ").append(table2);
-        sql.append(" ON ").append(buildJoinCondition(joinColumns));
-
-        if (whereClause != null && !whereClause.trim().isEmpty()) {
-            sql.append(" WHERE ").append(whereClause);
-        }
-
-        return sql.toString();
-    }
-
-    @Override
     public String getCreateTempTableSQL(String tempTableName, String selectSQL) {
         return "CREATE TEMPORARY TABLE " + capabilityProvider.quote(tempTableName) + " AS " + selectSQL;
     }
@@ -458,12 +421,6 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
 
         return sql.toString();
     }
-
-    @Override
-    public String formatValue(Object value) {
-        return SqlQueryGenerator.super.formatValue(value);
-    }
-
 
     @Override
     public String getJoinDiffStatsSQL(String schema1, String table1, String alias1,
@@ -919,20 +876,6 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
     }
 
     /**
-     * Build join condition for the given columns.
-     */
-    protected String buildJoinCondition(List<String> joinColumns) {
-        StringBuilder condition = new StringBuilder();
-        for (int i = 0; i < joinColumns.size(); i++) {
-            if (i > 0)
-                condition.append(" AND ");
-            condition.append("t1.").append(capabilityProvider.quote(joinColumns.get(i)))
-                    .append(" = t2.").append(capabilityProvider.quote(joinColumns.get(i)));
-        }
-        return condition.toString();
-    }
-
-    /**
      * Build key predicate for primary key filtering.
      */
     protected String buildKeyPredicate(List<String> keyColumns, List<List<Object>> primaryKeys) {
@@ -978,71 +921,30 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
         return predicate.toString();
     }
 
-    // ========== Normalization Helper Methods ==========
+    // ========== Checksum helpers ==========
 
     /**
-     * Build a COALESCE expression with a default value.
-     * Helper method to reduce code duplication in normalization logic.
-     *
-     * @param expression   the SQL expression to wrap
-     * @param defaultValue the default value if expression is NULL (e.g., "''")
-     * @return COALESCE SQL expression
+     * Whether this dialect can generate XOR checksums. Dialects that implement
+     * XOR aggregation override this capability bit; the SQL generation itself
+     * stays in {@link #getChecksumSQL(String, String, List, List, Map, String, ChecksumAlgorithm)}.
      */
-    protected String buildCoalesceExpression(String expression, String defaultValue) {
-        return "COALESCE(" + expression + ", " + defaultValue + ")";
-    }
-
-    /**
-     * Build a TRIM expression to remove leading and trailing whitespace.
-     * Helper method to reduce code duplication in normalization logic.
-     *
-     * @param expression the SQL expression to trim
-     * @return TRIM SQL expression
-     */
-    protected String buildTrimExpression(String expression) {
-        return "TRIM(" + expression + ")";
-    }
-
-    /**
-     * Build a CAST expression to convert a value to a target type.
-     * Helper method to reduce code duplication in normalization logic.
-     *
-     * @param expression the SQL expression to cast
-     * @param targetType the target SQL type (e.g., "TEXT", "VARCHAR(1000)")
-     * @return CAST SQL expression
-     */
-    protected String buildCastExpression(String expression, String targetType) {
-        return "CAST(" + expression + " AS " + targetType + ")";
-    }
-
-    /**
-     * Build an expression to format decimal numbers with controlled precision.
-     * This is useful for normalizing floating-point values to avoid precision
-     * differences.
-     * Subclasses should override this method to provide database-specific
-     * formatting.
-     *
-     * @param expression    the SQL expression representing a decimal number
-     * @param decimalPlaces number of decimal places to preserve (default: 4)
-     * @return SQL expression that formats the decimal number
-     */
-    protected String buildFormatDecimalExpression(String expression, int decimalPlaces) {
-        // Default implementation using standard SQL ROUND function
-        return "ROUND(" + expression + ", " + decimalPlaces + ")";
+    protected boolean supportsXorChecksum() {
+        return false;
     }
 
     @Override
-    public String getRowHashSQL(String schemaName, String tableName,
+    public boolean supportsChecksumAlgorithm(ChecksumAlgorithm checksumAlgorithm) {
+        return checksumAlgorithm == null
+                || !checksumAlgorithm.isXor()
+                || supportsXorChecksum();
+    }
+
+    @Override
+    public abstract String getRowHashSQL(String schemaName, String tableName,
             List<String> primaryKeys,
             List<String> columns,
             Map<String, DataType> columnDataTypes,
-            String whereClause) {
-        // Default implementation - throws UnsupportedOperationException
-        // Subclasses should override this method to provide database-specific implementation
-        throw new UnsupportedOperationException(
-                "getRowHashSQL is not implemented for " + this.getClass().getSimpleName() +
-                ". Please implement this method to support row-hash local comparison.");
-    }
+            String whereClause);
 
     /**
      * Default implementation of getChecksumSQL with ChecksumAlgorithm parameter.
@@ -1057,21 +959,17 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
      * @param checksumAlgorithm the checksum calculation algorithm
      * @return SQL checksum query
      */
+    @Override
     public String getChecksumSQL(String schemaName, String tableName,
             List<String> keyColumns,
             List<String> columns,
             Map<String, DataType> columnDataTypes,
             String whereClause,
             ChecksumAlgorithm checksumAlgorithm) {
-        
-        // For XOR algorithm, throw UnsupportedOperationException if not implemented by subclass
-        if (checksumAlgorithm != null && checksumAlgorithm.isXor()) {
-            throw new UnsupportedOperationException(
-                "XOR checksum algorithm is not implemented for " + this.getClass().getSimpleName() + 
-                ". Please implement getChecksumSQL with ChecksumAlgorithm parameter or use CONCAT algorithm.");
-        }
-        
-        // For CONCAT algorithm or null, delegate to the original method
+
+        // XOR support is advertised through supportsChecksumAlgorithm (and checked by
+        // the planner before SQL generation); dialects that support it override this
+        // method. Everything else delegates to the CONCAT implementation.
         return getChecksumSQL(schemaName, tableName, keyColumns, columns, columnDataTypes, whereClause);
     }
 

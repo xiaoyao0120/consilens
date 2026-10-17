@@ -17,8 +17,6 @@ public class CompareExecutionOptions {
 
     private Long bisectionThreshold;
 
-    private Boolean enableProfiling;
-
     private String checksumAlgorithm;
 
     private String localCompareMode;

@@ -144,24 +144,6 @@ public class PrestoSqlQueryGenerator extends BaseSqlQueryGenerator {
 
         return sql.toString();
     }
-
-    @Override
-    public String getFullOuterJoinSQL(String table1, String table2,
-            List<String> joinColumns,
-            String whereClause) {
-        StringBuilder sql = new StringBuilder();
-
-        sql.append("SELECT * FROM ").append(table1)
-                .append(" FULL OUTER JOIN ").append(table2)
-                .append(" ON ").append(buildJoinCondition(table1, table2, joinColumns));
-
-        if (whereClause != null && !whereClause.trim().isEmpty()) {
-            sql.append(" WHERE ").append(whereClause);
-        }
-
-        return sql.toString();
-    }
-
     @Override
     public String getBatchInsertSQL(String tableName, List<String> columns, int batchSize) {
         if (batchSize < 1) {
@@ -196,19 +178,5 @@ public class PrestoSqlQueryGenerator extends BaseSqlQueryGenerator {
     @Override
     protected String stringJoin(String separator, List<String> args) {
         return "ARRAY_JOIN(ARRAY[" + String.join(", ", args) + "], " + separator + ")";
-    }
-
-    private String buildJoinCondition(String table1, String table2, List<String> joinColumns) {
-        StringBuilder condition = new StringBuilder();
-        for (int i = 0; i < joinColumns.size(); i++) {
-            if (i > 0)
-                condition.append(" AND ");
-            condition.append(capabilityProvider.quote(table1)).append(".")
-                    .append(capabilityProvider.quote(joinColumns.get(i)))
-                    .append(" = ")
-                    .append(capabilityProvider.quote(table2)).append(".")
-                    .append(capabilityProvider.quote(joinColumns.get(i)));
-        }
-        return condition.toString();
     }
 }

@@ -76,18 +76,4 @@ public class OracleCapabilityProvider extends BaseCapabilityProvider {
         return EnumSet.copyOf(ORACLE_FEATURES);
     }
 
-    @Override
-    public String getDefaultSchema() {
-        return "SYSTEM"; // Oracle default, often user-specific
-    }
-
-    @Override
-    public char getWildcardEscapeChar() {
-        return '\\';
-    }
-
-    @Override
-    public String getPaginationHint(long offset, long limit) {
-        return "";
-    }
 }

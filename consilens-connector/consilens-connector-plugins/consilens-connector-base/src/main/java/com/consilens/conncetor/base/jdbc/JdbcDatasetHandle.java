@@ -79,7 +79,11 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
 
     private final String connectorName;
     private final ResourceLocator resource;
-    private final DatasetMetadata metadata;
+    /**
+     * 惰性初始化：createMetadata 里的分区属性探测会通过 JDBC 执行
+     * {@code SHOW CREATE TABLE}，构造期不能触发任何数据库连接。
+     */
+    private volatile DatasetMetadata metadata;
     private final String connectorType;
     private final Map<String, Object> connection;
     private final ReadOptions readOptions;
@@ -109,7 +113,7 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
                 .pushedPredicate(predicate)
                 .residualPredicate(null)
                 .build();
-        this.metadata = createMetadata(connectorName, connectorType, this.connection, resource, readOptions);
+        // metadata 延迟到 getMetadata() 首次调用时再构建（见该字段注释）。
     }
 
     @Override
@@ -119,7 +123,16 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
 
     @Override
     public DatasetMetadata getMetadata() {
-        return metadata;
+        DatasetMetadata local = metadata;
+        if (local != null) {
+            return local;
+        }
+        synchronized (this) {
+            if (metadata == null) {
+                metadata = createMetadata(connectorName, connectorType, connection, resource, readOptions);
+            }
+            return metadata;
+        }
     }
 
     @Override
@@ -863,7 +876,7 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
     }
 
     private void configureStreamingConnection(Connection jdbcConnection) throws SQLException {
-        if ("postgresql".equals(connectorType) && jdbcConnection.getAutoCommit()) {
+        if (dialect.requiresTransactionForStreamingReads() && jdbcConnection.getAutoCommit()) {
             jdbcConnection.setAutoCommit(false);
         }
     }

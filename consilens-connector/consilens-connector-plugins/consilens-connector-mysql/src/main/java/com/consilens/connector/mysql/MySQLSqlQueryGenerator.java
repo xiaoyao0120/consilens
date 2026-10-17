@@ -44,6 +44,12 @@ public class MySQLSqlQueryGenerator extends BaseSqlQueryGenerator {
         return this.dataTypeHandler;
     }
 
+    /** This dialect implements XOR checksum aggregation. */
+    @Override
+    protected boolean supportsXorChecksum() {
+        return true;
+    }
+
     /** MySQL 的 CAST 无 VARCHAR 类型，字符串化用 CHAR。 */
     @Override
     protected String orderByExpression(String column) {
@@ -79,14 +85,6 @@ public class MySQLSqlQueryGenerator extends BaseSqlQueryGenerator {
             return getChecksumSQLWithConcat(schemaName, tableName, keyColumns, columns, columnDataTypes, whereClause);
         }
     }
-
-    @Override
-    public boolean supportsChecksumAlgorithm(ChecksumAlgorithm checksumAlgorithm) {
-        return checksumAlgorithm == null
-                || checksumAlgorithm == ChecksumAlgorithm.CONCAT
-                || checksumAlgorithm.isXor();
-    }
-
     @Override
     protected String buildNullSafeNotEquals(String left, String right) {
         return "NOT (" + left + " <=> " + right + ")";
@@ -203,40 +201,6 @@ public class MySQLSqlQueryGenerator extends BaseSqlQueryGenerator {
         log.debug("Generated XOR checksum SQL for table: {}", tableName);
         return sql.toString();
     }
-
-    @Override
-    public String getFullOuterJoinSQL(String table1, String table2,
-            List<String> joinColumns,
-            String whereClause) {
-        // MySQL doesn't support FULL OUTER JOIN, simulate using UNION
-        StringBuilder sql = new StringBuilder();
-
-        sql.append("(SELECT * FROM ").append(capabilityProvider.quote(table1))
-                .append(" LEFT JOIN ").append(capabilityProvider.quote(table2))
-                .append(" ON ").append(buildJoinCondition(table1, table2, joinColumns))
-                .append(") UNION (SELECT * FROM ").append(capabilityProvider.quote(table1))
-                .append(" RIGHT JOIN ").append(capabilityProvider.quote(table2))
-                .append(" ON ").append(buildJoinCondition(table1, table2, joinColumns))
-                .append(" WHERE ");
-
-        for (int i = 0; i < joinColumns.size(); i++) {
-            if (i > 0) {
-                sql.append(" AND ");
-            }
-            sql.append(capabilityProvider.quote(table1)).append(".")
-                    .append(capabilityProvider.quote(joinColumns.get(i)))
-                    .append(" IS NULL");
-        }
-        sql.append(")");
-
-        if (whereClause != null && !whereClause.trim().isEmpty()) {
-            sql.insert(0, "SELECT * FROM (");
-            sql.append(") AS full_join WHERE ").append(whereClause);
-        }
-
-        return sql.toString();
-    }
-
     @Override
     public String getBatchInsertSQL(String tableName, List<String> columns, int batchSize) {
         if (batchSize < 1) {
@@ -269,25 +233,6 @@ public class MySQLSqlQueryGenerator extends BaseSqlQueryGenerator {
 
         return sql.toString();
     }
-
-    /**
-     * Build join condition for the given columns.
-     */
-    private String buildJoinCondition(String table1, String table2, List<String> joinColumns) {
-        StringBuilder condition = new StringBuilder();
-        for (int i = 0; i < joinColumns.size(); i++) {
-            if (i > 0) {
-                condition.append(" AND ");
-            }
-            condition.append(capabilityProvider.quote(table1)).append(".")
-                    .append(capabilityProvider.quote(joinColumns.get(i)))
-                    .append(" = ")
-                    .append(capabilityProvider.quote(table2)).append(".")
-                    .append(capabilityProvider.quote(joinColumns.get(i)));
-        }
-        return condition.toString();
-    }
-
 
     @Override
     public String getRowHashSQL(String schemaName, String tableName,

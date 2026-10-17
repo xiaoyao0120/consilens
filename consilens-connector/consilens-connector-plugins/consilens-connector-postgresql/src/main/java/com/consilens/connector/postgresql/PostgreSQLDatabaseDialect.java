@@ -1,5 +1,6 @@
 package com.consilens.connector.postgresql;
 
+import com.consilens.connector.api.ConnectorTypes;
 import com.consilens.connector.api.*;
 import com.consilens.conncetor.base.AbstractDatabaseDialect;
 
@@ -63,7 +64,7 @@ public class PostgreSQLDatabaseDialect extends AbstractDatabaseDialect {
 
     @Override
     public String getConnectorType() {
-        return "postgresql";
+        return ConnectorTypes.POSTGRESQL;
     }
 
     @Override
@@ -74,6 +75,16 @@ public class PostgreSQLDatabaseDialect extends AbstractDatabaseDialect {
     @Override
     public int getDefaultPort() {
         return 5432;
+    }
+
+    @Override
+    public boolean requiresTransactionForStreamingReads() {
+        return true;
+    }
+
+    @Override
+    public int getStructuredColumnJdbcType() {
+        return java.sql.Types.OTHER;
     }
 
     @Override

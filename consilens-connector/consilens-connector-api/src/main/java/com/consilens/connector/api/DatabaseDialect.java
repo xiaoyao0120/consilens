@@ -148,6 +148,32 @@ public interface DatabaseDialect {
     }
 
     /**
+     * 是否支持 ANSI 时间字面量（{@code DATE '2026-01-01'} / {@code TIMESTAMP '...'}）。
+     * SQL Server 不接受这两种字面量，只接受可隐式转换的普通字符串；其余方言默认支持。
+     *
+     * @return true when ANSI temporal literals can be used in SQL
+     */
+    default boolean usesAnsiTemporalLiterals() {
+        return true;
+    }
+
+    /**
+     * 流式读取时是否必须关闭 autoCommit。默认保持驱动默认行为；
+     * PostgreSQL 的游标只在事务内有效，需要显式事务才能流式 fetch。
+     */
+    default boolean requiresTransactionForStreamingReads() {
+        return false;
+    }
+
+    /**
+     * JSON/UUID 等结构化类型列写入时使用的 JDBC 类型。默认按字符串绑定；
+     * PostgreSQL 驱动要求 {@link java.sql.Types#OTHER} 才会走 json/uuid 的类型编解码。
+     */
+    default int getStructuredColumnJdbcType() {
+        return java.sql.Types.VARCHAR;
+    }
+
+    /**
      * Default connection port used when no explicit port is given.
      *
      * @return default port for this connector type
@@ -186,7 +212,10 @@ public interface DatabaseDialect {
         return null;
     }
 
-    default TableWriteCompiler getTableWriteCompiler() {
-        throw new UnsupportedOperationException("Table sink write is not supported for connectorType=" + getConnectorType());
-    }
+    /**
+     * Get the table sink write compiler for this connector type.
+     *
+     * @return table write compiler
+     */
+    TableWriteCompiler getTableWriteCompiler();
 }

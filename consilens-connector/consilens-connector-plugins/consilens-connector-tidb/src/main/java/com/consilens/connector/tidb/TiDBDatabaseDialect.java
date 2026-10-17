@@ -1,5 +1,6 @@
 package com.consilens.connector.tidb;
 
+import com.consilens.connector.api.ConnectorTypes;
 import com.consilens.connector.api.*;
 import com.consilens.conncetor.base.AbstractDatabaseDialect;
 import com.consilens.conncetor.base.MySQLProtocolConnectionPoolOptimizer;
@@ -44,7 +45,7 @@ public class TiDBDatabaseDialect extends AbstractDatabaseDialect {
 
     @Override
     public String getConnectorType() {
-        return "tidb";
+        return ConnectorTypes.TIDB;
     }
 
     @Override

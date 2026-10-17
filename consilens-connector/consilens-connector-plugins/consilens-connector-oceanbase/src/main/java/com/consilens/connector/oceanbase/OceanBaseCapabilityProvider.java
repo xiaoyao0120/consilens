@@ -60,14 +60,4 @@ public class OceanBaseCapabilityProvider extends BaseCapabilityProvider {
     public Set<DatabaseFeature> getSupportedFeatures() {
         return EnumSet.copyOf(OCEANBASE_FEATURES);
     }
-
-    @Override
-    public String getDefaultSchema() {
-        return "test";
-    }
-
-    @Override
-    public String getPaginationHint(long offset, long limit) {
-        return ""; // OceanBase uses LIMIT offset, limit syntax, no hint needed
-    }
 }

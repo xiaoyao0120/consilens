@@ -65,16 +65,6 @@ class PostgreSQLSqlQueryGeneratorTest {
         assertTrue(sql.contains("MD5"));
         assertTrue(sql.contains("STRING_AGG"));
     }
-
-    @Test
-    void testGetFullOuterJoinSQL() {
-        List<String> joinColumns = Arrays.asList("id");
-        String sql = generator.getFullOuterJoinSQL("table1", "table2", joinColumns, null);
-
-        assertTrue(sql.contains("FULL OUTER JOIN"));
-        assertFalse(sql.contains("UNION")); // PostgreSQL uses native FULL OUTER JOIN
-    }
-
     @Test
     void testGetBatchInsertSQL() {
         List<String> columns = Arrays.asList("id", "name", "email");

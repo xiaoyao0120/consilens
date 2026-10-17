@@ -1,5 +1,6 @@
 package com.consilens.connector.doris;
 
+import com.consilens.connector.api.ConnectorTypes;
 import com.consilens.connector.api.*;
 import com.consilens.conncetor.base.AbstractDatabaseDialect;
 import com.consilens.conncetor.base.MySQLProtocolConnectionPoolOptimizer;
@@ -59,7 +60,7 @@ public class DorisDatabaseDialect extends AbstractDatabaseDialect {
 
     @Override
     public String getConnectorType() {
-        return "doris";
+        return ConnectorTypes.DORIS;
     }
 
     /**

@@ -140,10 +140,4 @@ class OceanBaseDatabaseDialectTest {
         assertEquals("`", provider.getCloseQuote());
         assertEquals("`test_column`", provider.quote("test_column"));
     }
-
-    @Test
-    void testGetDefaultSchema() {
-        CapabilityProvider provider = dialect.getCapabilityProvider();
-        assertEquals("test", provider.getDefaultSchema());
-    }
 }

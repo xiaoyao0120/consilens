@@ -172,6 +172,11 @@ class JdbcDatasetHandleSplitPlannerTest {
         return new AbstractDatabaseDialect() {
             private final CapabilityProvider capabilityProvider = new BaseCapabilityProvider();
             private final SqlQueryGenerator sqlQueryGenerator = new BaseSqlQueryGenerator(capabilityProvider) {
+                @Override
+                public String getRowHashSQL(String schemaName, String tableName, List<String> primaryKeys,
+                        List<String> columns, Map<String, DataType> columnDataTypes, String whereClause) {
+                    return "";
+                }
             };
 
             @Override

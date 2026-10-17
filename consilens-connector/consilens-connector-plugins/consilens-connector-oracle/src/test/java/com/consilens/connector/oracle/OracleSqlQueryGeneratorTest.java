@@ -87,15 +87,6 @@ class OracleSqlQueryGeneratorTest {
         assertFalse(sql.contains("ELSE NULL"));
         assertFalse(sql.contains("CONCAT_WS"));
     }
-
-    @Test
-    void testGetFullOuterJoinSQL() {
-        List<String> joinColumns = Arrays.asList("id");
-        String sql = generator.getFullOuterJoinSQL("table1", "table2", joinColumns, null);
-
-        assertTrue(sql.contains("FULL OUTER JOIN"));
-    }
-
     @Test
     void testGetBatchInsertSQL() {
         List<String> columns = Arrays.asList("id", "name", "email");
