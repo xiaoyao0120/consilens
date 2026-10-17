@@ -57,7 +57,7 @@ public class ConnectionTestServiceImpl implements ConnectionTestService {
                     whitelistedOptions(request.getOptions()));
             properties = buildProperties(request.getUsername(), request.getPassword());
         } catch (Exception exception) {
-            return failure(startedAt, JdbcConnectionSupport.safeMessage(exception));
+            return failure(startedAt, exception);
         }
         try (Connection connection = connectionOpener.open(url, properties)) {
             if (connection == null || connection.isClosed()) {
@@ -69,7 +69,7 @@ public class ConnectionTestServiceImpl implements ConnectionTestService {
                     .error(null)
                     .build();
         } catch (Exception exception) {
-            return failure(startedAt, JdbcConnectionSupport.safeMessage(exception));
+            return failure(startedAt, exception);
         }
     }
 
@@ -96,10 +96,20 @@ public class ConnectionTestServiceImpl implements ConnectionTestService {
     }
 
     private ConnectionTestResponse failure(long startedAt, String message) {
+        return failure(startedAt, message, null);
+    }
+
+    /** 失败响应保留原始异常链，供 AI 工具按 SQLState 区分认证与网络错误。 */
+    private ConnectionTestResponse failure(long startedAt, Exception exception) {
+        return failure(startedAt, JdbcConnectionSupport.safeMessage(exception), exception);
+    }
+
+    private ConnectionTestResponse failure(long startedAt, String message, Throwable cause) {
         return ConnectionTestResponse.builder()
                 .success(false)
                 .latencyMs(System.currentTimeMillis() - startedAt)
                 .error(message)
+                .cause(cause)
                 .build();
     }
 }

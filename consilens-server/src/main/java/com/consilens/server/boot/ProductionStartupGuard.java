@@ -44,8 +44,6 @@ public class ProductionStartupGuard implements InitializingBean {
                 "consilens.server.node.heartbeat-interval-seconds");
         requirePositive(properties.getNode().getExpireSeconds(),
                 "consilens.server.node.expire-seconds");
-        requirePositive(properties.getNode().getTopologyRefreshSeconds(),
-                "consilens.server.node.topology-refresh-seconds");
         requirePositive(properties.getScheduler().getCommandPollIntervalMs(),
                 "consilens.server.scheduler.command-poll-interval-ms");
         requirePositive(properties.getScheduler().getClaimLeaseSeconds(),

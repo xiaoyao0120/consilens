@@ -12,8 +12,11 @@ import java.util.Optional;
 
 /**
  * Polls the durable run queue and executes claimed runs through the worker.
- * Runs are executed inline on the poll thread for now; concurrency scaling is
- * governed by max-concurrent-runs when the poller moves to a pool.
+ * Runs are executed inline on the scheduled poll thread, so this poller
+ * processes at most one run at a time; {@code ai.max-concurrent-runs} is not a
+ * parallelism knob for this loop (it currently only sizes recovery batches and
+ * documents the intended ceiling). Move execution to a pool before relying on
+ * that setting for parallel runs.
  */
 @Slf4j
 public class AgentRunPollingScheduler {
@@ -26,7 +29,7 @@ public class AgentRunPollingScheduler {
         this.workerId = workerId;
     }
 
-    @Scheduled(fixedDelayString = "${consilens.server.ai.command-poll-interval-ms:1000}")
+    @Scheduled(fixedDelayString = "${consilens.server.scheduler.command-poll-interval-ms:1000}")
     public void poll() {
         Optional<AgentRunRecord> run = scheduler.claimNextRun(workerId, Instant.now());
         if (run.isPresent()) {

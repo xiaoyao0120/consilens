@@ -10,7 +10,6 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.consilens.server.api.dto.MetadataColumnDto;
@@ -18,16 +17,19 @@ import com.consilens.server.application.ai.metadata.TransientConnectionSpec;
 import com.consilens.server.application.ai.metadata.TransientDatasourceMetadataService;
 import com.consilens.server.application.ai.tool.dto.InspectDraftMetadataInput;
 import com.consilens.server.application.ai.tool.dto.InspectDraftMetadataOutput;
+import com.consilens.server.boot.ConsilensServerProperties;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+
+import static com.consilens.server.application.ai.plan.CreateDatasourceCommandHandler.findDraft;
+import static com.consilens.server.application.ai.tool.SecretPayloadCodec.MAPPER;
 
 /**
  * {@code inspect_draft_metadata}: lists databases/tables/columns from a draft
@@ -37,16 +39,18 @@ import java.util.Map;
 public final class InspectDraftMetadataTool
         implements AgentTool<InspectDraftMetadataInput, InspectDraftMetadataOutput> {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final int MAX_COLUMNS = 200;
+    /** 列数上限来自 consilens.server.ai.max-inspected-columns（默认 200）。 */
+    private final int maxColumns;
 
     private final TransientDatasourceMetadataService metadataService;
     private final AgentSecretStore secretStore;
 
     public InspectDraftMetadataTool(TransientDatasourceMetadataService metadataService,
-                                    AgentSecretStore secretStore) {
+                                    AgentSecretStore secretStore,
+                                    ConsilensServerProperties properties) {
         this.metadataService = metadataService;
         this.secretStore = secretStore;
+        this.maxColumns = Math.max(1, properties.getAi().getMaxInspectedColumns());
     }
 
     @Override
@@ -55,15 +59,12 @@ public final class InspectDraftMetadataTool
                 .name("inspect_draft_metadata")
                 .description("读取草稿连接下的库、表、列元数据（不落库）")
                 .riskLevel(ToolRiskLevel.MEDIUM)
-                .executionMode(ToolExecutionMode.SEQUENTIAL)
                 .sideEffect(ToolSideEffect.READ)
-                .timeout(Duration.ofSeconds(30))
                 .idempotent(false)
                 .allowedStages(java.util.Set.of(
                         AgentWorkflowStage.COLLECTING_DATASOURCES,
                         AgentWorkflowStage.VALIDATING_CONNECTIONS,
                         AgentWorkflowStage.DISCOVERING_METADATA))
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 
@@ -112,10 +113,11 @@ public final class InspectDraftMetadataTool
                     .orElseThrow(() -> new IllegalStateException("secret not resolvable"));
             TransientConnectionSpec spec = TransientConnectionSpec.builder()
                     .type(draft.getType())
-                    .host(String.valueOf(params.get("host")))
+                    // 键缺失时保持 null，避免 String.valueOf(null) 生成字面量 "null"
+                    .host(Objects.toString(params.get("host"), null))
                     .port(integerValue(params.get("port")))
-                    .database(String.valueOf(params.get("database")))
-                    .username(String.valueOf(params.get("username")))
+                    .database(Objects.toString(params.get("database"), null))
+                    .username(Objects.toString(params.get("username"), null))
                     .password(SecretPayloadCodec.extract(secret, "password").toCharArray())
                     .options(optionsOf(params))
                     .build();
@@ -138,12 +140,12 @@ public final class InspectDraftMetadataTool
                 case "COLUMNS":
                     List<MetadataColumnDto> all = metadataService.listColumns(spec,
                             input.getDatabase(), input.getTable());
-                    boolean truncated = all.size() > MAX_COLUMNS;
+                    boolean truncated = all.size() > maxColumns;
                     return AgentToolOutcome.ok(
                             InspectDraftMetadataOutput.builder()
                                     .draftId(input.getDraftId()).operation("COLUMNS")
                                     .database(input.getDatabase()).table(input.getTable())
-                                    .columns(truncated ? new ArrayList<>(all.subList(0, MAX_COLUMNS)) : all)
+                                    .columns(truncated ? new ArrayList<>(all.subList(0, maxColumns)) : all)
                                     .truncated(truncated)
                                     .build(),
                             "列列表已读取");
@@ -179,16 +181,6 @@ public final class InspectDraftMetadataTool
                 .target(side == com.consilens.server.application.ai.tool.dto.AgentDraftSide.TARGET
                         ? updated : previous.getTarget())
                 .build();
-    }
-
-    private static AgentDatasourceDraftState findDraft(AgentWorkingState state, String draftId) {
-        if (state.getSource() != null && draftId.equals(state.getSource().getDraftId())) {
-            return state.getSource();
-        }
-        if (state.getTarget() != null && draftId.equals(state.getTarget().getDraftId())) {
-            return state.getTarget();
-        }
-        return null;
     }
 
     private static Map<String, Object> optionsOf(Map<String, Object> params) {

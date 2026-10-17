@@ -88,17 +88,21 @@ public class AgentApprovalService {
         if (!won) {
             return DecideOutcome.stale("APPROVAL_STALE");
         }
-        return new DecideOutcome(decision == AgentApprovalDecision.APPROVE
-                ? AgentApprovalStatus.APPROVED : AgentApprovalStatus.DENIED, null);
+        return DecideOutcome.decided(decision == AgentApprovalDecision.APPROVE
+                ? AgentApprovalStatus.APPROVED : AgentApprovalStatus.DENIED);
     }
 
     public static final class DecideOutcome {
         private final AgentApprovalStatus status;
         private final String errorCode;
 
-        DecideOutcome(AgentApprovalStatus status, String errorCode) {
+        private DecideOutcome(AgentApprovalStatus status, String errorCode) {
             this.status = status;
             this.errorCode = errorCode;
+        }
+
+        public static DecideOutcome decided(AgentApprovalStatus status) {
+            return new DecideOutcome(status, null);
         }
 
         public static DecideOutcome stale(String errorCode) {

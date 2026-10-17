@@ -28,6 +28,15 @@ public class RunTaskRecoveryService {
 
     private static final List<TaskStatus> RECOVERABLE_STATUSES = List.of(TaskStatus.CLAIMED, TaskStatus.RUNNING);
 
+    /** 启动恢复最多连续清空 10 个批次，避免异常数据导致无限循环。 */
+    private static final int MAX_STARTUP_RECOVERY_ROUNDS = 10;
+
+    /**
+     * 连续错过 3 个 claim 租约周期（心跳按调度周期刷新）才判定为 stale：
+     * 1 个周期过于敏感，过大则延迟故障转移。
+     */
+    private static final long STALE_LEASE_MULTIPLIER = 3L;
+
     private final TaskRepository taskRepository;
     private final TaskCommandRepository taskCommandRepository;
     private final RunTaskCommandEnqueueService runTaskCommandEnqueueService;
@@ -78,7 +87,8 @@ public class RunTaskRecoveryService {
 
     @Transactional
     public void recoverStaleRunningTasks(Instant now) {
-        long staleAfterSeconds = properties.getScheduler().getClaimLeaseSeconds() * 3L;
+        long staleAfterSeconds =
+                properties.getScheduler().getClaimLeaseSeconds() * STALE_LEASE_MULTIPLIER;
         taskRepository.listStaleRunning(now.minusSeconds(staleAfterSeconds),
                         properties.getScheduler().getRecoveryBatchSize())
                 .forEach(task -> retryOrFail(task, "EXECUTE_HEARTBEAT_LOST", "Execution heartbeat expired", now));
@@ -147,6 +157,4 @@ public class RunTaskRecoveryService {
                 : task.getMaxRetryCount();
         return retryCount < maxRetryCount;
     }
-
-    private static final int MAX_STARTUP_RECOVERY_ROUNDS = 10;
 }

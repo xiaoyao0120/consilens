@@ -5,7 +5,6 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.consilens.agent.core.security.SensitiveValueGuard;
@@ -15,12 +14,11 @@ import com.consilens.server.application.ai.tool.dto.GetDatasourceFormSchemaInput
 import com.consilens.server.application.ai.tool.dto.GetDatasourceFormSchemaOutput;
 import com.consilens.server.application.datasource.DataSourceService;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.stream.Collectors;
+import static com.consilens.server.application.ai.tool.SecretPayloadCodec.MAPPER;
 
 /**
  * {@code get_datasource_form_schema}: returns the required/non-secret form
@@ -30,7 +28,6 @@ import java.util.stream.Collectors;
 public final class GetDatasourceFormSchemaTool
         implements AgentTool<GetDatasourceFormSchemaInput, GetDatasourceFormSchemaOutput> {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final DataSourceService dataSourceService;
 
@@ -44,9 +41,7 @@ public final class GetDatasourceFormSchemaTool
                 .name("get_datasource_form_schema")
                 .description("获取指定数据源类型的表单字段定义（含必填与敏感标记）")
                 .riskLevel(ToolRiskLevel.LOW)
-                .executionMode(ToolExecutionMode.PARALLEL)
                 .sideEffect(ToolSideEffect.READ)
-                .timeout(Duration.ofSeconds(10))
                 .idempotent(true)
                 .allowedStages(java.util.Set.of(
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERY,
@@ -55,7 +50,6 @@ public final class GetDatasourceFormSchemaTool
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERING_METADATA,
                         com.consilens.agent.api.state.AgentWorkflowStage.DRAFTING_COMPARISON,
                         com.consilens.agent.api.state.AgentWorkflowStage.PLAN_READY))
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 

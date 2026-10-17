@@ -1,14 +1,18 @@
 package com.consilens.server.infrastructure.ai;
 
+import com.consilens.ai.spi.LLMBackendManager;
 import com.consilens.server.boot.ConsilensServerProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.core.env.Environment;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Startup gate for AI runtime (design section 30): provider discoverable,
@@ -18,6 +22,8 @@ import java.util.List;
  */
 @Slf4j
 public class AgentStartupValidator implements ApplicationRunner {
+
+    private static final String AI_SESSION_TABLE_COUNT_SQL = "SELECT COUNT(*) FROM cs_ai_session";
 
     private final ConsilensServerProperties properties;
     private final JdbcTemplate jdbcTemplate;
@@ -36,8 +42,12 @@ public class AgentStartupValidator implements ApplicationRunner {
         ConsilensServerProperties.Ai ai = properties.getAi();
         List<String> problems = new ArrayList<>();
 
-        if (!List.of("deepseek", "openai", "ollama").contains(ai.getBackend())) {
-            problems.add("unsupported ai.backend: " + ai.getBackend());
+        Set<String> supportedBackends = registeredBackends();
+        if (!supportedBackends.contains(ai.getBackend())) {
+            problems.add("unsupported ai.backend: " + ai.getBackend()
+                    + (supportedBackends.isEmpty()
+                    ? " (no LLM backend providers found on the classpath)"
+                    : " (available: " + String.join(", ", supportedBackends) + ")"));
         }
         if (blank(ai.getBaseUrl())) {
             problems.add("ai.base-url is required");
@@ -60,7 +70,7 @@ public class AgentStartupValidator implements ApplicationRunner {
             problems.add("secret key env " + ai.getSecretKeyEnv() + " is not set");
         }
         try {
-            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM cs_ai_session", Integer.class);
+            jdbcTemplate.queryForObject(AI_SESSION_TABLE_COUNT_SQL, Integer.class);
         } catch (Exception e) {
             problems.add("AI tables are not accessible: " + e.getClass().getSimpleName());
         }
@@ -74,6 +84,20 @@ public class AgentStartupValidator implements ApplicationRunner {
             throw new IllegalStateException("AI agent runtime startup failed: " + String.join("; ", problems));
         }
         log.error("AI agent runtime unavailable (fail-fast disabled): {}", String.join("; ", problems));
+    }
+
+    /**
+     * Backends are derived from the LLM backend SPI registrations rather than
+     * a hard-coded list: adding a provider plugin makes it valid here without
+     * touching this validator.
+     */
+    private static Set<String> registeredBackends() {
+        try {
+            return new TreeSet<>(LLMBackendManager.getInstance().supportedNames());
+        } catch (RuntimeException | LinkageError e) {
+            log.warn("unable to discover LLM backend providers from SPI", e);
+            return Collections.emptySet();
+        }
     }
 
     private static boolean blank(String value) {

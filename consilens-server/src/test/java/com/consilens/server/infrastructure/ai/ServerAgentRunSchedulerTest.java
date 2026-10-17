@@ -32,7 +32,7 @@ class ServerAgentRunSchedulerTest {
     @BeforeEach
     void setUp() {
         SqlSessionFactory factory = AiTestSupport.newSessionFactory("ai_scheduler_" + UUID.randomUUID());
-        persistence = new MyBatisAgentPersistence(factory);
+        persistence = new MyBatisAgentPersistence(factory, AiTestSupport.newObjectMapper());
         SqlSessionTemplate template = new SqlSessionTemplate(factory);
         runMapper = template.getMapper(AiRunMapper.class);
         ConsilensServerProperties properties = new ConsilensServerProperties();

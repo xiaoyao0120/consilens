@@ -235,11 +235,11 @@ public class TaskRepositoryImpl implements TaskRepository {
 
     @Override
     public List<TaskInstanceRecord> listByDefinitionId(Long definitionId, int limit) {
-        return taskService.list(new QueryWrapper<TaskInstanceEntity>().lambda()
-                        .eq(TaskInstanceEntity::getDefinitionId, definitionId)
-                        .orderByDesc(TaskInstanceEntity::getSubmitTime)
-                        .last("LIMIT " + Math.max(1, limit)))
-                .stream()
+        return taskService.page(new Page<>(1, Math.max(1, limit), false),
+                        new QueryWrapper<TaskInstanceEntity>().lambda()
+                                .eq(TaskInstanceEntity::getDefinitionId, definitionId)
+                                .orderByDesc(TaskInstanceEntity::getSubmitTime))
+                .getRecords().stream()
                 .map(this::toRecord)
                 .collect(Collectors.toList());
     }

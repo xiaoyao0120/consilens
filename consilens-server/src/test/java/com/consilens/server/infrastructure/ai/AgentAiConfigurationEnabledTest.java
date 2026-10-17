@@ -1,7 +1,8 @@
 package com.consilens.server.infrastructure.ai;
 
+import com.consilens.agent.api.model.AgentModelClient;
+import com.consilens.agent.core.loop.DefaultAgentLoop;
 import com.consilens.agent.core.tool.AgentToolRegistry;
-import com.consilens.server.application.ai.AgentRuntime;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -39,10 +40,9 @@ class AgentAiConfigurationEnabledTest {
         assertFalse(context.getBeansOfType(ServerAgentRunScheduler.class).isEmpty());
         assertFalse(context.getBeansOfType(AgentRunRecoveryScheduler.class).isEmpty());
         assertFalse(context.getBeansOfType(ServerAgentRunWorker.class).isEmpty());
-        AgentRuntime runtime = context.getBean(AgentRuntime.class);
-        assertNotNull(runtime.loop());
-        assertNotNull(runtime.modelClient());
-        AgentToolRegistry registry = runtime.registry();
+        assertNotNull(context.getBean(DefaultAgentLoop.class));
+        assertNotNull(context.getBean(AgentModelClient.class));
+        AgentToolRegistry registry = context.getBean(AgentToolRegistry.class);
         // 工具集增删都会让本测试失败：数量与各类工具的代表成员一起钉住，
         // 避免只改数字就把能力悄悄改没了。
         assertEquals(14, registry.all().size());

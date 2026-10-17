@@ -54,6 +54,6 @@ class MyBatisAgentPersistenceContractTest extends AgentPersistenceContractTest {
         configuration.addMapper(AiSnapshotMapper.class);
         configuration.addMapper(AiSecretMapper.class);
         SqlSessionFactory factory = new SqlSessionFactoryBuilder().build(configuration);
-        return new MyBatisAgentPersistence(factory);
+        return new MyBatisAgentPersistence(factory, AiTestSupport.newObjectMapper());
     }
 }

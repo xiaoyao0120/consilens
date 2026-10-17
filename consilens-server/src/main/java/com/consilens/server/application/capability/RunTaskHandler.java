@@ -50,7 +50,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 @Component
 public class RunTaskHandler implements CapabilityHandler<RunRequest> {
 
-    private static final int MAX_DIFF_ROWS_IN_RESULT = 1000;
+    /** 内联差异样本行数上限，来自 consilens.server.ai.diff-sample-rows（默认 1000）。 */
+    private final int diffSampleRows;
 
     private final ArtifactService artifactService;
     private final ServerCompareConfigService configService;
@@ -78,6 +79,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         this.secretProtector = secretProtector;
         this.dialectSupport = dialectSupport;
         this.properties = properties;
+        this.diffSampleRows = Math.max(1, properties.getAi().getDiffSampleRows());
         this.objectMapper = objectMapper;
         this.clusterSubmitSupport = clusterSubmitSupport;
     }
@@ -255,7 +257,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
                                                ServerCompareConfig config,
                                                RunRequest.Options options) throws Exception {
         CompareRequest compareRequest = configService.toCompareRequest(config, options);
-        DiffLifecycle lifecycle = buildLifecycle(config);
+        DiffLifecycle lifecycle = buildLifecycle(config, taskContext.getInstanceKey());
         DiffContext diffContext = buildDiffContext(taskContext, config);
         Throwable failure = null;
         try {
@@ -297,11 +299,11 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         return new DefaultCompareRuntime();
     }
 
-    protected DiffLifecycle buildLifecycle(ServerCompareConfig config) {
+    protected DiffLifecycle buildLifecycle(ServerCompareConfig config, String taskId) {
         ResultConfig resultConfig = ResultConfig.builder()
                 // 沿用用户的 failOnSinkError 配置；用户未配置时保持既有默认（true）
                 .failOnSinkError(config.getResult() == null || config.getResult().isFailOnSinkError())
-                .sinks(composeSinks(config))
+                .sinks(composeSinks(config, taskId))
                 .build();
         return new DefaultDiffLifecycle(resultConfig);
     }
@@ -312,6 +314,10 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
      * 都必须保证有一个指向默认路径的 diff-record sink。
      */
     List<SinkConfig> composeSinks(ServerCompareConfig config) {
+        return composeSinks(config, null);
+    }
+
+    List<SinkConfig> composeSinks(ServerCompareConfig config, String taskId) {
         List<SinkConfig> sinks = new ArrayList<>();
         if (config.getResult() != null && config.getResult().getSinks() != null) {
             sinks.addAll(config.getResult().getSinks());
@@ -328,14 +334,14 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         // 只有指向同一默认路径才算替代——否则报告会退化成 1000 行内联样本。
         boolean hasDefaultDiffRecord = sinks.stream()
                 .anyMatch(sink -> "jsonl".equals(sink.getFormat()) && sink.isEnabled()
-                        && defaultDiffPath().equals(sinkPath(sink)));
+                        && defaultDiffPath(taskId).equals(renderTaskId(sinkPath(sink), taskId)));
         if (!hasDefaultDiffRecord) {
             sinks.add(SinkConfig.builder()
                     .format("jsonl")
                     .type("diff-record")
                     .enabled(true)
                     .properties(toJson(Map.of(
-                            "path", defaultDiffPath())))
+                            "path", defaultDiffPath(taskId))))
                     .build());
         }
         return sinks;
@@ -349,8 +355,21 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         }
     }
 
-    private String defaultDiffPath() {
-        return properties.getArtifact().getLocalBaseDir() + "/run-result-${taskId}.jsonl";
+    /**
+     * 默认明细路径。运行时用真实 taskId 渲染；没有 taskId（单测直接调用）时保留
+     * {@code ${taskId}} 占位符，由 sink 在写入时插值。
+     */
+    private String defaultDiffPath(String taskId) {
+        String id = taskId == null || taskId.isBlank() ? "${taskId}" : taskId;
+        return properties.getArtifact().getLocalBaseDir() + "/run-result-" + id + ".jsonl";
+    }
+
+    /** 仅用于比较：把用户 sink 路径中的 {@code ${taskId}} 渲染成同一个真实 id。 */
+    private static String renderTaskId(String path, String taskId) {
+        if (path == null || taskId == null || taskId.isBlank()) {
+            return path;
+        }
+        return path.replace("${taskId}", taskId);
     }
 
     /**
@@ -414,7 +433,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
     }
 
     private void assertNotCancellationRequested(TaskExecutionContext context) {
-        if (taskRepository == null || context == null || context.getTaskId() == null) {
+        if (context == null || context.getTaskId() == null) {
             return;
         }
         boolean cancellationRequested = taskRepository.findById(context.getTaskId())
@@ -498,10 +517,10 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
                 : List.of();
         // Keep the artifact bounded: persist the full statistics plus a sampled
         // detail list instead of serializing millions of diff rows into a 50MB cap.
-        content.put("differenceSampleSize", (int) Math.min(differenceCount, MAX_DIFF_ROWS_IN_RESULT));
-        content.put("differenceSampleTruncated", allDifferences.size() > MAX_DIFF_ROWS_IN_RESULT);
+        content.put("differenceSampleSize", (int) Math.min(differenceCount, diffSampleRows));
+        content.put("differenceSampleTruncated", allDifferences.size() > diffSampleRows);
         content.put("differences", allDifferences.stream()
-                .limit(MAX_DIFF_ROWS_IN_RESULT)
+                .limit(diffSampleRows)
                 .map(this::diffRow)
                 .collect(Collectors.toList()));
         return content;
@@ -516,7 +535,7 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         result.put("sourceValues", row.getSourceValues().orElse(null));
         result.put("targetValues", row.getTargetValues().orElse(null));
         // 单一 columnNames 键：值数组两侧同序（键列 + 比对列），UI 按下标标注字段名
-        result.put("columnNames", row.getColumnNames1() != null ? row.getColumnNames1() : row.getColumnNames2());
+        result.put("columnNames", row.resolvedColumnNames());
         result.put("metadata", row.getMetadata());
         return result;
     }

@@ -33,6 +33,9 @@ public class AgentConversationApplicationService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentConversationApplicationService.class);
 
+    /** SSE 追赶/重放时单次读取的事件条数上限。 */
+    private static final int EVENT_PAGE_SIZE = 500;
+
     private final AgentPersistence persistence;
     private final AgentRunEnqueueService runEnqueueService;
     private final AgentApprovalService approvalService;
@@ -140,9 +143,9 @@ public class AgentConversationApplicationService {
             log.info("agent approval approved: sessionId={} approvalId={}",
                     sessionId, approvalId);
             String planId = approval.getProposedRunId();
-            if (planId != null && planId.startsWith("run:")) {
+            if (planId != null && planId.startsWith(AgentResumeKeys.RUN_PREFIX)) {
                 runEnqueueService.enqueueResume(sessionId, "run_" + approvalId,
-                        "run:" + approvalId);
+                        AgentResumeKeys.RUN_PREFIX + approvalId);
             } else if (planId != null) {
                 // 先校验计划仍可审批，再决定；approvePlan 失败视为并发竞争，仍入队（digest 已在 pre-check 校验）。
                 boolean planPending = persistence.findPlan(planId)
@@ -158,7 +161,8 @@ public class AgentConversationApplicationService {
                 if (!approved) {
                     // 并发下另一审批已推进计划：digest 相同，仍可执行。
                 }
-                runEnqueueService.enqueueResume(sessionId, "plan_" + planId, "plan:" + planId);
+                runEnqueueService.enqueueResume(sessionId, "plan_" + planId,
+                        AgentResumeKeys.PLAN_PREFIX + planId);
             }
         } else {
             log.info("agent approval denied: sessionId={} approvalId={}",
@@ -197,7 +201,7 @@ public class AgentConversationApplicationService {
 
     public List<AgentEvent> events(String sessionId, String actorId, long afterSeq) {
         requireSession(sessionId, actorId);
-        return persistence.listEventsAfter(sessionId, afterSeq, 500);
+        return persistence.listEventsAfter(sessionId, afterSeq, EVENT_PAGE_SIZE);
     }
 
     public void deleteSession(String sessionId, String actorId) {

@@ -7,16 +7,15 @@ import com.consilens.agent.api.store.AgentSnapshotRecord;
 import com.consilens.agent.core.loop.AgentLoopRequest;
 import com.consilens.agent.core.loop.AgentLoopResult;
 import com.consilens.agent.core.loop.AgentRunConfig;
-import com.consilens.agent.core.loop.AgentRunTrigger;
 import com.consilens.agent.core.loop.DefaultAgentLoop;
 import com.consilens.agent.core.runtime.AgentRunWorker;
 import com.consilens.agent.core.loop.AgentLoopOutcome;
+import com.consilens.server.application.ai.AgentResumeKeys;
 import com.consilens.server.application.ai.AgentRunEnqueueService;
 import com.consilens.agent.api.state.AgentRunStatus;
 import com.consilens.agent.api.state.AgentSessionStatus;
 import com.consilens.server.application.ai.plan.ProvisioningPlanExecutor;
 import com.consilens.server.application.ai.plan.RunTaskExecutor;
-import com.consilens.server.boot.ConsilensServerProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,7 +34,6 @@ public class ServerAgentRunWorker implements AgentRunWorker {
     private final MyBatisAgentPersistence persistence;
     private final DefaultAgentLoop loop;
     private final AgentRunConfig runConfig;
-    private final ConsilensServerProperties properties;
     private final ProvisioningPlanExecutor planExecutor;
     private final RunTaskExecutor runTaskExecutor;
     private final AgentRunEnqueueService runEnqueueService;
@@ -43,14 +41,12 @@ public class ServerAgentRunWorker implements AgentRunWorker {
     public ServerAgentRunWorker(MyBatisAgentPersistence persistence,
                                 DefaultAgentLoop loop,
                                 AgentRunConfig runConfig,
-                                ConsilensServerProperties properties,
                                 ProvisioningPlanExecutor planExecutor,
                                 RunTaskExecutor runTaskExecutor,
                                 AgentRunEnqueueService runEnqueueService) {
         this.persistence = persistence;
         this.loop = loop;
         this.runConfig = runConfig;
-        this.properties = properties;
         this.planExecutor = planExecutor;
         this.runTaskExecutor = runTaskExecutor;
         this.runEnqueueService = runEnqueueService;
@@ -77,14 +73,15 @@ public class ServerAgentRunWorker implements AgentRunWorker {
                 .workerId(run.getLeaseOwner() == null ? "worker" : run.getLeaseOwner())
                 .objectiveId(objectiveId)
                 .objective(session.getObjective())
-                .trigger(AgentRunTrigger.USER_MESSAGE)
                 .resumeFromRunId(run.getResumeFromRunId())
                 .deadline(Instant.now().plus(runConfig.getRunTimeout()))
                 .resumeExistingRun(true)
                 .build();
         AgentLoopResult result;
-        if (run.getResumeFromRunId() != null && run.getResumeFromRunId().startsWith("run:")) {
-            String approvalId = run.getResumeFromRunId().substring("run:".length());
+        if (run.getResumeFromRunId() != null
+                && run.getResumeFromRunId().startsWith(AgentResumeKeys.RUN_PREFIX)) {
+            String approvalId = run.getResumeFromRunId()
+                    .substring(AgentResumeKeys.RUN_PREFIX.length());
             String definitionId = persistence.findApproval(approvalId)
                     .map(a -> a.getSafeActionsJson())
                     .orElse(null);
@@ -96,8 +93,10 @@ public class ServerAgentRunWorker implements AgentRunWorker {
                     : runTaskExecutor.execute(run.getSessionId(), session.getActorId(), parsed,
                     run.getLeaseOwner() == null ? "worker" : run.getLeaseOwner(),
                     run.getRequestId());
-        } else if (run.getResumeFromRunId() != null && run.getResumeFromRunId().startsWith("plan:")) {
-            String planId = run.getResumeFromRunId().substring("plan:".length());
+        } else if (run.getResumeFromRunId() != null
+                && run.getResumeFromRunId().startsWith(AgentResumeKeys.PLAN_PREFIX)) {
+            String planId = run.getResumeFromRunId()
+                    .substring(AgentResumeKeys.PLAN_PREFIX.length());
             result = planExecutor.execute(run.getSessionId(), session.getActorId(), planId,
                     run.getLeaseOwner() == null ? "worker" : run.getLeaseOwner());
         } else {

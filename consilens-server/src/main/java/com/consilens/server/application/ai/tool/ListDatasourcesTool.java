@@ -5,7 +5,6 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.consilens.server.api.dto.DataSourceDto;
@@ -14,13 +13,12 @@ import com.consilens.server.application.ai.tool.dto.ListDatasourcesInput;
 import com.consilens.server.application.ai.tool.dto.ListDatasourcesOutput;
 import com.consilens.server.application.datasource.DataSourceService;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import static com.consilens.server.application.ai.tool.SecretPayloadCodec.MAPPER;
 
 /**
  * {@code list_datasources}: lists persisted datasources (id/name/type/default
@@ -30,7 +28,6 @@ import java.util.Locale;
 public final class ListDatasourcesTool
         implements AgentTool<ListDatasourcesInput, ListDatasourcesOutput> {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final int MAX_RESULTS = 50;
 
     private final DataSourceService dataSourceService;
@@ -45,9 +42,7 @@ public final class ListDatasourcesTool
                 .name("list_datasources")
                 .description("列出系统已有数据源（id/名称/类型/默认库，不含密码），可按名称关键词过滤")
                 .riskLevel(ToolRiskLevel.LOW)
-                .executionMode(ToolExecutionMode.PARALLEL)
                 .sideEffect(ToolSideEffect.READ)
-                .timeout(Duration.ofSeconds(10))
                 .idempotent(true)
                 .allowedStages(java.util.Set.of(
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERY,
@@ -56,7 +51,6 @@ public final class ListDatasourcesTool
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERING_METADATA,
                         com.consilens.agent.api.state.AgentWorkflowStage.DRAFTING_COMPARISON,
                         com.consilens.agent.api.state.AgentWorkflowStage.PLAN_READY))
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 

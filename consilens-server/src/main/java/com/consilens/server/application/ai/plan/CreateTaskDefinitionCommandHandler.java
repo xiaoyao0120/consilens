@@ -23,12 +23,14 @@ public class CreateTaskDefinitionCommandHandler {
 
     private final TaskDefinitionService taskDefinitionService;
     private final ServerCompareConfigService configService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
 
     public CreateTaskDefinitionCommandHandler(TaskDefinitionService taskDefinitionService,
-                                              ServerCompareConfigService configService) {
+                                              ServerCompareConfigService configService,
+                                              ObjectMapper objectMapper) {
         this.taskDefinitionService = taskDefinitionService;
         this.configService = configService;
+        this.objectMapper = objectMapper;
     }
 
     @SuppressWarnings("unchecked")

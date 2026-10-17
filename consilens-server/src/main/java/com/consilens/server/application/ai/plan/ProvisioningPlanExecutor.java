@@ -22,6 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.Instant;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -36,12 +37,20 @@ public class ProvisioningPlanExecutor {
 
     private final AgentPersistence persistence;
     private final ProvisioningActionTransactionService transactionService;
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper;
+    private final Map<AgentPlanActionType, ActionHandler> actionHandlers =
+            new EnumMap<>(AgentPlanActionType.class);
 
     public ProvisioningPlanExecutor(AgentPersistence persistence,
-                                    ProvisioningActionTransactionService transactionService) {
+                                    ProvisioningActionTransactionService transactionService,
+                                    ObjectMapper mapper) {
         this.persistence = persistence;
         this.transactionService = transactionService;
+        this.mapper = mapper;
+        // 新增 action 只需注册一次；执行路径不再维护 switch 分支。
+        actionHandlers.put(AgentPlanActionType.CREATE_DATASOURCE, this::createDatasource);
+        actionHandlers.put(AgentPlanActionType.REUSE_DATASOURCE, this::reuseDatasource);
+        actionHandlers.put(AgentPlanActionType.CREATE_TASK_DEFINITION, this::createTaskDefinition);
     }
 
     public AgentLoopResult execute(String sessionId, String actorId, String planId, String workerId) {
@@ -51,7 +60,8 @@ public class ProvisioningPlanExecutor {
         if (plan == null) {
             return result(AgentLoopOutcome.FAILED, AgentSessionStatus.FAILED, "PLAN_NOT_FOUND", false);
         }
-        if (!persistence.tryAcquireLease(sessionId, actorId, workerId, now, now.plusSeconds(120))) {
+        if (!persistence.tryAcquireLease(sessionId, actorId, workerId, now,
+                now.plusSeconds(AgentSessionLease.AGENT_SESSION_LEASE_SECONDS))) {
             return result(AgentLoopOutcome.BUSY, AgentSessionStatus.RUNNING, "SESSION_BUSY", false);
         }
         try {
@@ -164,28 +174,67 @@ public class ProvisioningPlanExecutor {
                                            Map<String, String> datasourceIds,
                                            Map<String, String> datasourceTypes,
                                            long planVersion) {
-        switch (action.getActionType()) {
-            case CREATE_DATASOURCE:
-                return transactionService.completeDatasourceAction(planId, action.getActionId(),
-                        sessionId, actorId, (String) action.getSafeArgs().get("draftId"), planVersion);
-            case REUSE_DATASOURCE:
-                AgentResourceRef ref = AgentResourceRef.builder()
-                        .resourceType(AgentResourceType.DATASOURCE)
-                        .resourceId((String) action.getSafeArgs().get("datasourceId"))
-                        .name(action.getName())
-                        .build();
-                transactionService.completeReuseAction(planId, action.getActionId(), ref, planVersion);
-                return ref;
-            case CREATE_TASK_DEFINITION:
-                return transactionService.completeTaskAction(planId, action.getActionId(),
-                        action.getSafeArgs(),
-                        datasourceIds.get("draft_source"),
-                        datasourceIds.get("draft_target"),
-                        datasourceTypes.get("draft_source"),
-                        datasourceTypes.get("draft_target"),
-                        planVersion);
-            default:
-                throw new IllegalStateException("unsupported plan action: " + action.getActionType());
+        ActionHandler handler = actionHandlers.get(action.getActionType());
+        if (handler == null) {
+            throw new IllegalStateException("unsupported plan action: " + action.getActionType());
+        }
+        return handler.execute(new ActionContext(sessionId, actorId, planId, action,
+                datasourceIds, datasourceTypes, planVersion));
+    }
+
+    private AgentResourceRef createDatasource(ActionContext context) {
+        return transactionService.completeDatasourceAction(context.planId, context.action.getActionId(),
+                context.sessionId, context.actorId,
+                (String) context.action.getSafeArgs().get("draftId"), context.planVersion);
+    }
+
+    private AgentResourceRef reuseDatasource(ActionContext context) {
+        AgentResourceRef ref = AgentResourceRef.builder()
+                .resourceType(AgentResourceType.DATASOURCE)
+                .resourceId((String) context.action.getSafeArgs().get("datasourceId"))
+                .name(context.action.getName())
+                .build();
+        transactionService.completeReuseAction(context.planId, context.action.getActionId(),
+                ref, context.planVersion);
+        return ref;
+    }
+
+    private AgentResourceRef createTaskDefinition(ActionContext context) {
+        return transactionService.completeTaskAction(context.planId, context.action.getActionId(),
+                context.action.getSafeArgs(),
+                context.datasourceIds.get("draft_source"),
+                context.datasourceIds.get("draft_target"),
+                context.datasourceTypes.get("draft_source"),
+                context.datasourceTypes.get("draft_target"),
+                context.planVersion);
+    }
+
+    @FunctionalInterface
+    private interface ActionHandler {
+        AgentResourceRef execute(ActionContext context);
+    }
+
+    private static final class ActionContext {
+        private final String sessionId;
+        private final String actorId;
+        private final String planId;
+        private final AgentPlanAction action;
+        private final Map<String, String> datasourceIds;
+        private final Map<String, String> datasourceTypes;
+        private final long planVersion;
+
+        private ActionContext(String sessionId, String actorId, String planId,
+                              AgentPlanAction action,
+                              Map<String, String> datasourceIds,
+                              Map<String, String> datasourceTypes,
+                              long planVersion) {
+            this.sessionId = sessionId;
+            this.actorId = actorId;
+            this.planId = planId;
+            this.action = action;
+            this.datasourceIds = datasourceIds;
+            this.datasourceTypes = datasourceTypes;
+            this.planVersion = planVersion;
         }
     }
 
@@ -214,7 +263,6 @@ public class ProvisioningPlanExecutor {
                 .task(state.getTask() == null ? null : state.getTask().toBuilder()
                         .definitionId(taskId).build())
                 .stage(AgentWorkflowStage.RESOURCES_READY)
-                .lastCompletedStep("PROVISIONING_COMMITTED")
                 .build();
         com.consilens.agent.api.store.AgentSessionRecord session =
                 persistence.findSession(sessionId).orElse(null);

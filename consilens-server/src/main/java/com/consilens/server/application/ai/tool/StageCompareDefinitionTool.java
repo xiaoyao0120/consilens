@@ -8,20 +8,18 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.consilens.agent.core.security.CanonicalJsonDigester;
 import com.consilens.server.application.ai.tool.dto.StageCompareDefinitionInput;
 import com.consilens.server.application.ai.tool.dto.StageCompareDefinitionOutput;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import static com.consilens.server.application.ai.tool.SecretPayloadCodec.MAPPER;
 
 /**
  * {@code stage_compare_definition}: writes the deterministic comparison draft
@@ -31,7 +29,6 @@ import java.util.Map;
 public final class StageCompareDefinitionTool
         implements AgentTool<StageCompareDefinitionInput, StageCompareDefinitionOutput> {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Override
     public AgentToolDescriptor descriptor() {
@@ -39,9 +36,7 @@ public final class StageCompareDefinitionTool
                 .name("stage_compare_definition")
                 .description("固化比对任务草稿（表、键、字段映射、忽略列）")
                 .riskLevel(ToolRiskLevel.LOW)
-                .executionMode(ToolExecutionMode.SEQUENTIAL)
                 .sideEffect(ToolSideEffect.CONTROL)
-                .timeout(Duration.ofSeconds(10))
                 .idempotent(false)
                 .allowedStages(java.util.Set.of(
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERY,
@@ -49,7 +44,6 @@ public final class StageCompareDefinitionTool
                         com.consilens.agent.api.state.AgentWorkflowStage.VALIDATING_CONNECTIONS,
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERING_METADATA,
                         com.consilens.agent.api.state.AgentWorkflowStage.DRAFTING_COMPARISON))
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 

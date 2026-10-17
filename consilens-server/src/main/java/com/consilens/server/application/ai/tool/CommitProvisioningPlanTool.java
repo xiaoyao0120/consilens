@@ -10,7 +10,6 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.consilens.server.application.ai.approval.AgentApprovalService;
@@ -18,11 +17,10 @@ import com.consilens.server.application.ai.plan.ProvisioningPlanCompiler;
 import com.consilens.server.application.ai.tool.dto.CommitProvisioningPlanInput;
 import com.consilens.server.application.ai.tool.dto.CommitProvisioningPlanOutput;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 import java.time.Instant;
+import static com.consilens.server.application.ai.tool.SecretPayloadCodec.MAPPER;
 
 /**
  * {@code commit_provisioning_plan}: creates the structured approval bound to
@@ -31,7 +29,6 @@ import java.time.Instant;
 public final class CommitProvisioningPlanTool
         implements AgentTool<CommitProvisioningPlanInput, CommitProvisioningPlanOutput> {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final AgentPersistence persistence;
     private final AgentApprovalService approvalService;
@@ -51,9 +48,7 @@ public final class CommitProvisioningPlanTool
                 .name("commit_provisioning_plan")
                 .description("提交计划进入结构化审批（批准后由系统执行）")
                 .riskLevel(ToolRiskLevel.HIGH)
-                .executionMode(ToolExecutionMode.SEQUENTIAL)
                 .sideEffect(ToolSideEffect.WRITE)
-                .timeout(Duration.ofSeconds(10))
                 .idempotent(false)
                 .allowedStages(java.util.Set.of(
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERY,
@@ -63,7 +58,6 @@ public final class CommitProvisioningPlanTool
                         com.consilens.agent.api.state.AgentWorkflowStage.DRAFTING_COMPARISON,
                         com.consilens.agent.api.state.AgentWorkflowStage.PLAN_READY,
                         com.consilens.agent.api.state.AgentWorkflowStage.AWAITING_COMMIT_APPROVAL))
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 

@@ -39,7 +39,6 @@ public class ServerTopologyServiceImpl implements ServerTopologyService {
         }
         return ServerTopologySnapshot.builder()
                 .liveNodes(liveNodes)
-                .schedulableNodes(liveNodes)
                 .currentSlot(currentSlot)
                 .totalSlot(totalSlots)
                 .dispatchable(currentNodeAlive)

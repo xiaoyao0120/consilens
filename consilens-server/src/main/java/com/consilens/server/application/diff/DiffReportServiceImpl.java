@@ -32,6 +32,9 @@ public class DiffReportServiceImpl implements DiffReportService {
 
     private static final String OPERATION_MISMATCH = "MISMATCH";
 
+    /** 报告内展示的差异样本条数上限；超过该值以 sampleTruncated 标记截断。 */
+    private static final int SAMPLE_LIMIT = 100;
+
     private final TaskRepository taskRepository;
     private final ArtifactRepository artifactRepository;
     private final ArtifactContentStore artifactContentStore;
@@ -89,10 +92,10 @@ public class DiffReportServiceImpl implements DiffReportService {
                 .statistics(toMap(statistics))
                 .columns(buildColumns(differences))
                 .samples(buildSamples(differences))
-                .sampleSize((int) Math.min(100, totalDifferenceCount))
+                .sampleSize((int) Math.min(SAMPLE_LIMIT, totalDifferenceCount))
                 .totalDifferenceCount(totalDifferenceCount)
                 .sampleTruncated(Boolean.TRUE.equals(runResult.getDifferenceTruncated())
-                        || totalDifferenceCount > 100)
+                        || totalDifferenceCount > SAMPLE_LIMIT)
                 .timeline(List.of())
                 .build();
     }
@@ -145,7 +148,7 @@ public class DiffReportServiceImpl implements DiffReportService {
         if (record.getDifferencesUri() != null && !record.getDifferencesUri().isBlank()) {
             try {
                 return objectMapper.valueToTree(artifactQueryService
-                        .listDifferences(record.getId(), 0, 100, null, "diff-report").getItems());
+                        .listDifferences(record.getId(), 0, SAMPLE_LIMIT, null, "diff-report").getItems());
             } catch (Exception ignored) {
                 return null;
             }
@@ -321,19 +324,4 @@ public class DiffReportServiceImpl implements DiffReportService {
         return value != null && value.isNumber() ? value.asDouble() : null;
     }
 
-    private Integer integerValue(JsonNode node, String field) {
-        if (node == null || !node.isObject()) {
-            return null;
-        }
-        JsonNode value = node.get(field);
-        return value != null && value.isIntegralNumber() ? value.asInt() : null;
-    }
-
-    private Boolean booleanValue(JsonNode node, String field) {
-        if (node == null || !node.isObject()) {
-            return null;
-        }
-        JsonNode value = node.get(field);
-        return value != null && value.isBoolean() ? value.asBoolean() : null;
-    }
 }

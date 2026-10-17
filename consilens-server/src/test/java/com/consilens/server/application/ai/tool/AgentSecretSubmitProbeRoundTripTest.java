@@ -20,6 +20,7 @@ import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.infrastructure.ai.AgentSecretCipher;
 import com.consilens.server.infrastructure.ai.InMemoryAgentSecretStore;
 import com.consilens.server.infrastructure.ai.MyBatisAgentPersistence;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -56,7 +57,8 @@ class AgentSecretSubmitProbeRoundTripTest {
     void setUp() {
         SqlSessionFactory factory = com.consilens.server.infrastructure.ai.AiTestSupport
                 .newSessionFactory("ai_roundtrip_" + java.util.UUID.randomUUID());
-        persistence = new MyBatisAgentPersistence(factory);
+        persistence = new MyBatisAgentPersistence(factory,
+                com.consilens.server.infrastructure.ai.AiTestSupport.newObjectMapper());
         persistence.createSession(AgentSessionRecord.builder()
                 .id("s1").actorId("actor").requestId("create-1")
                 .status(com.consilens.agent.api.state.AgentSessionStatus.WAITING_SECRET)
@@ -71,7 +73,7 @@ class AgentSecretSubmitProbeRoundTripTest {
         properties.getAi().setSecretTtlSeconds(600);
         properties.getAi().setSecretMaxReads(8);
         submitService = new AgentSecretApplicationService(store, cipher, persistence,
-                new AgentRunEnqueueService(persistence));
+                new AgentRunEnqueueService(persistence), new ObjectMapper());
         connectionTestService = mock(ConnectionTestService.class);
         probeTool = new ProbeDatasourceTool(store, connectionTestService, properties);
     }

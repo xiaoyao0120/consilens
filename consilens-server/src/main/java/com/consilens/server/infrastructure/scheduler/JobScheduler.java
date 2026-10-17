@@ -25,7 +25,7 @@ public class JobScheduler extends Thread {
 
     private static final long DEFAULT_SLEEP_TIME_MILLIS = 1000L;
 
-    private final ExponentialBackoffRetryStrategy retryStrategy = new ExponentialBackoffRetryStrategy();
+    private final ExponentialBackoffRetryStrategy retryStrategy;
 
     private final TaskCommandRepository taskCommandRepository;
     private final TaskRepository taskRepository;
@@ -49,6 +49,8 @@ public class JobScheduler extends Thread {
         this.runTaskExecuteManager = runTaskExecuteManager;
         this.runTaskRecoveryService = runTaskRecoveryService;
         this.properties = properties;
+        this.retryStrategy = new ExponentialBackoffRetryStrategy(
+                properties.getScheduler().getMaxRetryCount());
     }
 
     @PostConstruct

@@ -5,10 +5,10 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.consilens.agent.api.store.AgentApprovalRecord;
+import com.consilens.server.application.ai.AgentResumeKeys;
 import com.consilens.server.application.ai.approval.AgentApprovalService;
 import com.consilens.server.application.taskdefinition.TaskDefinitionService;
 import com.consilens.server.api.dto.TaskDefinitionRunRequest;
@@ -17,11 +17,10 @@ import com.consilens.server.application.ai.tool.dto.RunTaskDefinitionInput;
 import com.consilens.server.application.ai.tool.dto.RunTaskDefinitionOutput;
 import com.consilens.server.application.taskdefinition.TaskDefinitionService;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 import java.time.Instant;
+import static com.consilens.server.application.ai.tool.SecretPayloadCodec.MAPPER;
 
 /**
  * {@code run_task_definition}: submits one run of a task definition and
@@ -31,7 +30,6 @@ import java.time.Instant;
 public final class RunTaskDefinitionTool
         implements AgentTool<RunTaskDefinitionInput, RunTaskDefinitionOutput> {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final TaskDefinitionService taskDefinitionService;
     private final AgentApprovalService approvalService;
@@ -48,14 +46,11 @@ public final class RunTaskDefinitionTool
                 .name("run_task_definition")
                 .description("提交一次任务定义运行（需单独审批），返回任务 ID")
                 .riskLevel(ToolRiskLevel.HIGH)
-                .executionMode(ToolExecutionMode.SEQUENTIAL)
                 .sideEffect(ToolSideEffect.WRITE)
-                .timeout(Duration.ofSeconds(30))
                 .idempotent(true)
                 .allowedStages(java.util.Set.of(
                         com.consilens.agent.api.state.AgentWorkflowStage.RESOURCES_READY,
                         com.consilens.agent.api.state.AgentWorkflowStage.COMPLETED))
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 
@@ -94,7 +89,7 @@ public final class RunTaskDefinitionTool
             return AgentToolOutcome.error("TOOL_ARGUMENT_INVALID", false, "definitionId 必须是数字");
         }
         AgentApprovalRecord approval = approvalService.createApproval(
-                context.sessionId(), "run:" + input.getDefinitionId(),
+                context.sessionId(), AgentResumeKeys.RUN_PREFIX + input.getDefinitionId(),
                 approvalService.computeActionDigest("run_task_definition",
                         MAPPER.valueToTree(input), context.workingState().getResourceVersions(), "v1"),
                 "运行任务 " + input.getDefinitionId(),

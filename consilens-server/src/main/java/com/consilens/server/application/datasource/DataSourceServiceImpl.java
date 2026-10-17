@@ -91,7 +91,7 @@ public class DataSourceServiceImpl implements DataSourceService {
     /** 方言扩展参数白名单：仅 sid/schema/properties 进入连接构建（不进 URL 的由 dialect/连接属性处理）。 */
     private static Map<String, Object> extraJdbcParams(Map<String, Object> param) {
         Map<String, Object> extra = new LinkedHashMap<>();
-        for (String key : new String[]{"sid", "schema", "properties"}) {
+        for (String key : DatasourceConnectionPolicy.OPTION_WHITELIST) {
             Object value = param.get(key);
             if (value != null && !String.valueOf(value).isBlank()) {
                 extra.put(key, value);

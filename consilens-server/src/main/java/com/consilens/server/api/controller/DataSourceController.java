@@ -8,6 +8,7 @@ import com.consilens.server.api.dto.DataSourceDto;
 import com.consilens.server.api.dto.DataSourceTypeDto;
 import com.consilens.server.api.dto.MetadataColumnDto;
 import com.consilens.server.api.dto.PageResponse;
+import com.consilens.server.application.connection.DatasourceConnectionPolicy;
 import com.consilens.server.application.datasource.DataSourceService;
 import com.consilens.connector.api.DataSourceField;
 import com.consilens.server.support.trace.TraceIdSupport;
@@ -34,9 +35,6 @@ import java.util.List;
 @RestController
 @RequestMapping("/v1/datasources")
 public class DataSourceController {
-
-    /** 库名/表名允许的字符（比 id 宽松，避免误伤含特殊字符的表名）。 */
-    private static final String METADATA_NAME_PATTERN = "[A-Za-z0-9_.$: \\-]{1,256}";
 
     private final DataSourceService dataSourceService;
 
@@ -127,7 +125,7 @@ public class DataSourceController {
     @GetMapping("/{id}/databases/{database}/tables")
     public ResponseEntity<ApiResponse<List<String>>> listTables(
             @PathVariable Long id,
-            @PathVariable @Pattern(regexp = METADATA_NAME_PATTERN,
+            @PathVariable @Pattern(regexp = DatasourceConnectionPolicy.NAME_CHARS_PATTERN,
                     message = "database contains invalid characters") String database,
             HttpServletRequest httpServletRequest) {
         String traceId = TraceIdSupport.getOrCreateTraceId(httpServletRequest);
@@ -137,9 +135,9 @@ public class DataSourceController {
     @GetMapping("/{id}/databases/{database}/tables/{table}/columns")
     public ResponseEntity<ApiResponse<List<MetadataColumnDto>>> listColumns(
             @PathVariable Long id,
-            @PathVariable @Pattern(regexp = METADATA_NAME_PATTERN,
+            @PathVariable @Pattern(regexp = DatasourceConnectionPolicy.NAME_CHARS_PATTERN,
                     message = "database contains invalid characters") String database,
-            @PathVariable @Pattern(regexp = METADATA_NAME_PATTERN,
+            @PathVariable @Pattern(regexp = DatasourceConnectionPolicy.NAME_CHARS_PATTERN,
                     message = "table contains invalid characters") String table,
             HttpServletRequest httpServletRequest) {
         String traceId = TraceIdSupport.getOrCreateTraceId(httpServletRequest);

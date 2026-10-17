@@ -31,16 +31,18 @@ public class AgentSecretApplicationService {
     private final AgentSecretCipher cipher;
     private final AgentPersistence persistence;
     private final AgentRunEnqueueService runEnqueueService;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
 
     public AgentSecretApplicationService(AgentSecretStore secretStore,
                                          AgentSecretCipher cipher,
                                          AgentPersistence persistence,
-                                         AgentRunEnqueueService runEnqueueService) {
+                                         AgentRunEnqueueService runEnqueueService,
+                                         ObjectMapper objectMapper) {
         this.secretStore = secretStore;
         this.cipher = cipher;
         this.persistence = persistence;
         this.runEnqueueService = runEnqueueService;
+        this.objectMapper = objectMapper;
     }
 
     public boolean submit(String sessionId, String actorId, String secretRequestId,

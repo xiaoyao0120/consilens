@@ -186,9 +186,7 @@ public final class JdbcConnectionSupport {
             if (key.isEmpty()) {
                 continue;
             }
-            String lower = key.toLowerCase();
-            if ("user".equals(lower) || "password".equals(lower)
-                    || "connecttimeout".equals(lower) || "logintimeout".equals(lower)) {
+            if (DatasourceConnectionPolicy.SENSITIVE_PROPERTY_KEYS.contains(key.toLowerCase())) {
                 continue;
             }
             properties.setProperty(key, value);

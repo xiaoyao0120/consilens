@@ -18,7 +18,7 @@ public class AgentSecretCleanupScheduler {
         this.secretMapper = secretMapper;
     }
 
-    @Scheduled(fixedDelayString = "${consilens.server.ai.secret-ttl-seconds:600}000")
+    @Scheduled(fixedDelayString = "${consilens.server.ai.secret-cleanup-interval-ms:600000}")
     public int expireStaleSecrets() {
         return secretMapper.expireStale(LocalDateTime.now(ZoneOffset.UTC));
     }

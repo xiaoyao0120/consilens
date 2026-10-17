@@ -7,7 +7,6 @@ import com.consilens.core.diff.DiffResult;
 import com.consilens.core.compare.CompareRuntime;
 import com.consilens.core.lifecycle.DiffContext;
 import com.consilens.core.lifecycle.DiffLifecycle;
-import com.consilens.core.lifecycle.SegmentResult;
 import com.consilens.connector.api.planner.CompareRequest;
 import com.consilens.server.api.dto.ArtifactRefDto;
 import com.consilens.server.api.dto.RunRequest;
@@ -92,6 +91,29 @@ class RunTaskHandlerTest {
                 "sourceValues", "targetValues");
         assertThat(result.get("sourceValues")).isEqualTo(List.of("source-value"));
         assertThat(result.get("targetValues")).isEqualTo(List.of("target-value"));
+    }
+
+    /**
+     * 一侧缺失的行只在另一侧带列名（columnNames1 是空集合而非 null），
+     * columnNames 必须取到有值的那一侧，否则 UI 拿到空数组无法标注字段名。
+     */
+    @Test
+    void shouldResolveColumnNamesFromThePopulatedSide() {
+        RunTaskHandler handler = new RunTaskHandler(null, null, null,
+                        mock(com.consilens.server.domain.repository.DataSourceRepository.class),
+                        SecretProtectorTestKeys.protector(),
+                        new com.consilens.server.application.datasource.DialectSupport(),
+                        new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+
+        Map<String, Object> sourceMissing = handler.diffRow(
+                DiffRow.added(List.of(7), List.of("target-value"), List.of("name")));
+        Map<String, Object> targetMissing = handler.diffRow(
+                DiffRow.removed(List.of(7), List.of("source-value"), List.of("name")));
+
+        assertThat(sourceMissing.get("columnNames")).isEqualTo(List.of("name"));
+        assertThat(targetMissing.get("columnNames")).isEqualTo(List.of("name"));
     }
 
     @Test
@@ -298,7 +320,8 @@ class RunTaskHandlerTest {
                 .completedAt(java.time.Instant.now())
                 .build();
         RecordingLifecycle lifecycle = new RecordingLifecycle();
-        RunTaskHandler handler = new RunTaskHandler(artifactService, configService, null,
+        RunTaskHandler handler = new RunTaskHandler(artifactService, configService,
+                        mock(com.consilens.server.domain.repository.TaskRepository.class),
                         mock(com.consilens.server.domain.repository.DataSourceRepository.class),
                         SecretProtectorTestKeys.protector(),
                         new com.consilens.server.application.datasource.DialectSupport(),
@@ -311,7 +334,7 @@ class RunTaskHandlerTest {
             }
 
             @Override
-            protected DiffLifecycle buildLifecycle(ServerCompareConfig ignored) {
+            protected DiffLifecycle buildLifecycle(ServerCompareConfig ignored, String taskId) {
                 return lifecycle;
             }
         };
@@ -378,7 +401,8 @@ class RunTaskHandlerTest {
         when(configService.toCompareRequest(any(), any())).thenReturn(mock(CompareRequest.class));
         when(artifactService.writeArtifact(any(), any(), any(), any(), any()))
                 .thenReturn(ArtifactRefDto.builder().id("run-result").type("RUN_RESULT").format("json").build());
-        return new RunTaskHandler(artifactService, configService, null,
+        return new RunTaskHandler(artifactService, configService,
+                        mock(com.consilens.server.domain.repository.TaskRepository.class),
                         mock(com.consilens.server.domain.repository.DataSourceRepository.class),
                         SecretProtectorTestKeys.protector(),
                         new com.consilens.server.application.datasource.DialectSupport(),
@@ -517,10 +541,6 @@ class RunTaskHandlerTest {
         @Override
         public void onDiffStart(DiffContext context) {
             started = true;
-        }
-
-        @Override
-        public void onSegmentComplete(SegmentResult result) {
         }
 
         @Override

@@ -9,7 +9,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  */
 public final class SecretPayloadCodec {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    /** Shared mapper for the tool package: one instance instead of one per tool. */
+    static final ObjectMapper MAPPER = new ObjectMapper();
 
     private SecretPayloadCodec() {
     }

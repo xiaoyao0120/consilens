@@ -28,7 +28,6 @@ consilens:
       node-key:
       heartbeat-interval-seconds: 2
       expire-seconds: 30
-      topology-refresh-seconds: 3
     scheduler:
       enabled: true
       command-poll-interval-ms: 1000
@@ -52,18 +51,28 @@ consilens:
       # 不要把 key 写进本文件——凭据只走环境变量（api-key-env / secret-key-env）。
       enabled: false
       backend: deepseek
-      model: deepseek-v4-flash
-      base-url: https://opencode.ai/zen/go/v1
+      # 与 ConsilensServerProperties.Ai 的默认值保持一致；需要本地实验端点/模型时
+      # 用 CONSILENS_AI_MODEL / CONSILENS_AI_BASE_URL 覆盖，不再把开发端点写死在仓库里。
+      model: ${CONSILENS_AI_MODEL:deepseek-chat}
+      base-url: ${CONSILENS_AI_BASE_URL:https://api.deepseek.com}
       api-key-env: DEEPSEEK_API_KEY
       max-turns: 8
       max-tool-calls: 20
       run-timeout-seconds: 120
-      tool-timeout-seconds: 30
       lease-seconds: 30
       secret-ttl-seconds: 600
+      secret-cleanup-interval-ms: 600000
       secret-max-reads: 8
       secret-store: encrypted-db
       secret-key-env: CONSILENS_AGENT_SECRET_KEY
+      connect-timeout-seconds: 10
+      max-retries: 2
+      max-inspected-columns: 200
+      diff-sample-rows: 1000
+      sse:
+        max-connections: 64
+        heartbeat-ms: 15000
+        poll-ms: 1000
       max-concurrent-runs: 4
       fail-fast: true
 
@@ -98,7 +107,7 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/consilens?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: root
-    password: 123456@szh
+    password: ${CONSILENS_SERVER_DB_PASSWORD:}
   quartz:
     properties:
       org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.StdJDBCDelegate

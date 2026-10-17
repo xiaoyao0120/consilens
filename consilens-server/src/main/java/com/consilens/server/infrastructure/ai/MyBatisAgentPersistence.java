@@ -45,7 +45,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.session.SqlSessionFactory;
 
@@ -67,9 +66,9 @@ public class MyBatisAgentPersistence implements AgentPersistence {
     private final SqlSessionFactory sessionFactory;
     private final ObjectMapper mapper;
 
-    public MyBatisAgentPersistence(SqlSessionFactory sessionFactory) {
+    public MyBatisAgentPersistence(SqlSessionFactory sessionFactory, ObjectMapper mapper) {
         this.sessionFactory = sessionFactory;
-        this.mapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        this.mapper = mapper;
     }
 
     // ---------------------------------------------------------------- session

@@ -20,6 +20,8 @@ import com.consilens.server.infrastructure.ai.InMemoryAgentSecretStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.net.ConnectException;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -120,6 +122,37 @@ class ProbeDatasourceToolTest {
         when(connectionTestService.test(any(ConnectionTestRequest.class)))
                 .thenReturn(ConnectionTestResponse.builder().success(false)
                         .error("Connection timed out").build());
+
+        AgentToolOutcome<ProbeDatasourceOutput> outcome = tool.execute(
+                ProbeDatasourceInput.builder().draftId("draft_source").build(),
+                new DefaultTestToolContext("actor", "session", state));
+
+        assertFalse(outcome.isSuccess());
+        assertEquals("DATASOURCE_PROBE_FAILED", outcome.getErrorCode());
+        assertTrue(outcome.isRetryable());
+    }
+
+    @Test
+    void sqlStateInvalidAuthorizationIsAuthFailureWithoutKeywordInMessage() {
+        when(connectionTestService.test(any(ConnectionTestRequest.class)))
+                .thenReturn(ConnectionTestResponse.builder().success(false)
+                        .error("connection attempt rejected")
+                        .cause(new SQLException("rejected", "28P01")).build());
+
+        AgentToolOutcome<ProbeDatasourceOutput> outcome = tool.execute(
+                ProbeDatasourceInput.builder().draftId("draft_source").build(),
+                new DefaultTestToolContext("actor", "session", state));
+
+        assertFalse(outcome.isSuccess());
+        assertEquals("DATASOURCE_PROBE_AUTH_FAILED", outcome.getErrorCode());
+    }
+
+    @Test
+    void networkExceptionStaysRetryableEvenIfTextMentionsPassword() {
+        when(connectionTestService.test(any(ConnectionTestRequest.class)))
+                .thenReturn(ConnectionTestResponse.builder().success(false)
+                        .error("password proxy unreachable")
+                        .cause(new ConnectException("Connection refused")).build());
 
         AgentToolOutcome<ProbeDatasourceOutput> outcome = tool.execute(
                 ProbeDatasourceInput.builder().draftId("draft_source").build(),

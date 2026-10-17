@@ -26,7 +26,11 @@ import java.util.UUID;
 public class ProvisioningPlanCompiler {
 
     private static final String POLICY_VERSION = "v1";
-    private final ObjectMapper mapper = new ObjectMapper();
+    private final ObjectMapper mapper;
+
+    public ProvisioningPlanCompiler(ObjectMapper mapper) {
+        this.mapper = mapper;
+    }
 
     public AgentProvisioningPlan compile(AgentWorkingState state) {
         String planId = "plan_" + UUID.randomUUID();

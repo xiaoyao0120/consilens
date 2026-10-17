@@ -15,7 +15,6 @@ import java.util.List;
 public class ServerTopologySnapshot {
 
     private List<ServerNodeRecord> liveNodes;
-    private List<ServerNodeRecord> schedulableNodes;
     private int currentSlot;
     private int totalSlot;
     private boolean dispatchable;

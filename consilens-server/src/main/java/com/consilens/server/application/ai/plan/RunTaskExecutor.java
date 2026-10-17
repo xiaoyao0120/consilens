@@ -32,7 +32,8 @@ public class RunTaskExecutor {
     public AgentLoopResult execute(String sessionId, String actorId, long definitionId,
                                    String workerId, String runRequestId) {
         Instant now = Instant.now();
-        if (!persistence.tryAcquireLease(sessionId, actorId, workerId, now, now.plusSeconds(120))) {
+        if (!persistence.tryAcquireLease(sessionId, actorId, workerId, now,
+                now.plusSeconds(AgentSessionLease.AGENT_SESSION_LEASE_SECONDS))) {
             return result(AgentLoopOutcome.BUSY, AgentSessionStatus.RUNNING, "SESSION_BUSY", false);
         }
         try {

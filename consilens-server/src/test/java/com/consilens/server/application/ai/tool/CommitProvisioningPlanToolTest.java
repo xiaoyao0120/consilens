@@ -15,6 +15,7 @@ import com.consilens.agent.core.store.InMemoryAgentPersistence;
 import com.consilens.server.application.ai.approval.AgentApprovalService;
 import com.consilens.server.application.ai.plan.ProvisioningPlanCompiler;
 import com.consilens.server.application.ai.tool.dto.CommitProvisioningPlanInput;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -43,7 +44,7 @@ class CommitProvisioningPlanToolTest {
                 .nextSeq(0).snapshotSeq(0).version(0)
                 .createdAt(Instant.now()).updatedAt(Instant.now())
                 .build());
-        compiler = new ProvisioningPlanCompiler();
+        compiler = new ProvisioningPlanCompiler(new ObjectMapper());
         tool = new CommitProvisioningPlanTool(persistence,
                 new AgentApprovalService(persistence), compiler);
     }

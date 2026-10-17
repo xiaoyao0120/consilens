@@ -9,6 +9,8 @@ import com.consilens.server.infrastructure.db.mapper.ai.AiSecretMapper;
 import com.consilens.server.infrastructure.db.mapper.ai.AiSessionMapper;
 import com.consilens.server.infrastructure.db.mapper.ai.AiSnapshotMapper;
 import com.consilens.server.infrastructure.db.mapper.ai.AiToolCallMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.apache.ibatis.datasource.pooled.PooledDataSource;
 import org.apache.ibatis.mapping.Environment;
 import org.apache.ibatis.session.Configuration;
@@ -26,6 +28,10 @@ import java.sql.Connection;
 public final class AiTestSupport {
 
     private AiTestSupport() {
+    }
+
+    public static ObjectMapper newObjectMapper() {
+        return new ObjectMapper().registerModule(new JavaTimeModule());
     }
 
     public static SqlSessionFactory newSessionFactory(String dbName) {

@@ -5,7 +5,6 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.consilens.server.api.dto.DataSourceTypeDto;
@@ -14,12 +13,11 @@ import com.consilens.server.application.ai.tool.dto.ListDatasourceTypesInput;
 import com.consilens.server.application.ai.tool.dto.ListDatasourceTypesOutput;
 import com.consilens.server.application.datasource.DataSourceService;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.stream.Collectors;
+import static com.consilens.server.application.ai.tool.SecretPayloadCodec.MAPPER;
 
 /**
  * {@code list_datasource_types}: returns supported types and default ports.
@@ -28,7 +26,6 @@ import java.util.stream.Collectors;
 public final class ListDatasourceTypesTool
         implements AgentTool<ListDatasourceTypesInput, ListDatasourceTypesOutput> {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final DataSourceService dataSourceService;
 
@@ -42,9 +39,7 @@ public final class ListDatasourceTypesTool
                 .name("list_datasource_types")
                 .description("列出系统支持的数据源类型与默认端口")
                 .riskLevel(ToolRiskLevel.LOW)
-                .executionMode(ToolExecutionMode.PARALLEL)
                 .sideEffect(ToolSideEffect.READ)
-                .timeout(Duration.ofSeconds(10))
                 .idempotent(true)
                 .allowedStages(java.util.Set.of(
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERY,
@@ -53,7 +48,6 @@ public final class ListDatasourceTypesTool
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERING_METADATA,
                         com.consilens.agent.api.state.AgentWorkflowStage.DRAFTING_COMPARISON,
                         com.consilens.agent.api.state.AgentWorkflowStage.PLAN_READY))
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 

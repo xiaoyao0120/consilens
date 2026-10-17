@@ -34,9 +34,9 @@ public class AgentRuntimeFactory {
                 .apiKey(apiKey == null ? "" : apiKey)
                 .model(ai.getModel())
                 .stream(false)
-                .connectTimeout(Duration.ofSeconds(10))
+                .connectTimeout(Duration.ofSeconds(ai.getConnectTimeoutSeconds()))
                 .readTimeout(Duration.ofSeconds(ai.getRunTimeoutSeconds()))
-                .maxRetries(2)
+                .maxRetries(ai.getMaxRetries())
                 .build();
         return new OpenAiCompatibleModelClient(config);
     }
@@ -54,7 +54,6 @@ public class AgentRuntimeFactory {
                 .maxTurns(ai.getMaxTurns())
                 .maxToolCalls(ai.getMaxToolCalls())
                 .runTimeout(Duration.ofSeconds(ai.getRunTimeoutSeconds()))
-                .parallelReadsEnabled(false)
                 .build();
     }
 }

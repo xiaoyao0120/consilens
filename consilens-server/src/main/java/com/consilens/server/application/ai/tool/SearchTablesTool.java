@@ -5,7 +5,6 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.consilens.server.api.dto.DataSourceDto;
@@ -14,13 +13,12 @@ import com.consilens.server.application.ai.tool.dto.SearchTablesOutput;
 import com.consilens.server.application.ai.tool.dto.TableCandidate;
 import com.consilens.server.application.datasource.DataSourceService;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import static com.consilens.server.application.ai.tool.SecretPayloadCodec.MAPPER;
 
 /**
  * {@code search_tables}: fuzzy keyword search over persisted datasources.
@@ -31,7 +29,6 @@ import java.util.Locale;
 public final class SearchTablesTool
         implements AgentTool<SearchTablesInput, SearchTablesOutput> {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final int MAX_DATABASES_PER_SOURCE = 8;
     private static final int MAX_CANDIDATES = 50;
 
@@ -47,9 +44,7 @@ public final class SearchTablesTool
                 .name("search_tables")
                 .description("按关键词模糊搜索已有数据源中的库/表，返回候选表列表（数据源+库+表），供用户确认")
                 .riskLevel(ToolRiskLevel.LOW)
-                .executionMode(ToolExecutionMode.PARALLEL)
                 .sideEffect(ToolSideEffect.READ)
-                .timeout(Duration.ofSeconds(30))
                 .idempotent(true)
                 .allowedStages(java.util.Set.of(
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERY,
@@ -58,7 +53,6 @@ public final class SearchTablesTool
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERING_METADATA,
                         com.consilens.agent.api.state.AgentWorkflowStage.DRAFTING_COMPARISON,
                         com.consilens.agent.api.state.AgentWorkflowStage.PLAN_READY))
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 

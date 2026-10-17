@@ -1,9 +1,16 @@
 package com.consilens.server.application.capability;
 
 import com.consilens.cluster.api.ClusterApplicationResult;
+import com.consilens.cluster.api.ClusterComparisonDescription;
+import com.consilens.cluster.api.ClusterExecutionDescription;
 import com.consilens.cluster.api.ClusterSubmission;
+import com.consilens.cluster.api.ClusterSubmissionContext;
+import com.consilens.cluster.api.ClusterSubmissionParameters;
 import com.consilens.cluster.api.ClusterSubmitRequest;
 import com.consilens.cluster.api.ClusterSubmitter;
+import com.consilens.cluster.api.KubernetesSecretKeyRef;
+import com.consilens.cluster.api.KubernetesSubmissionSpec;
+import com.consilens.cluster.api.YarnSubmissionSpec;
 import com.consilens.connector.api.planner.ExecutionMode;
 import com.consilens.server.api.dto.RunRequest;
 import com.consilens.server.application.capability.config.EndpointConfig;
@@ -14,7 +21,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -26,7 +35,7 @@ class ClusterSubmitSupportTest {
 
     @Test
     void shouldMountKubernetesDescriptorWithoutPlaintextPasswordsOrDeletingCompletedJob() throws Exception {
-        CapturingSubmitter submitter = new CapturingSubmitter();
+        CapturingSubmitter submitter = kubernetesSubmitter();
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(submitter));
         RunRequest request = new RunRequest();
         request.setSerialNo("orders-20260915");
@@ -57,7 +66,7 @@ class ClusterSubmitSupportTest {
 
     @Test
     void shouldStageYarnDescriptorFileAndKeepAmDefaults() throws Exception {
-        CapturingSubmitter submitter = new CapturingSubmitter();
+        CapturingSubmitter submitter = yarnSubmitter();
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(submitter));
         RunRequest request = new RunRequest();
         request.setSerialNo("orders-20260915");
@@ -87,7 +96,7 @@ class ClusterSubmitSupportTest {
 
     @Test
     void shouldKeepPlaintextPasswordInYarnDescriptor() throws Exception {
-        CapturingSubmitter submitter = new CapturingSubmitter();
+        CapturingSubmitter submitter = yarnSubmitter();
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(submitter));
         RunRequest request = new RunRequest();
         request.setSerialNo("orders-20260915");
@@ -108,7 +117,7 @@ class ClusterSubmitSupportTest {
 
     @Test
     void shouldRejectInvalidMemoryFormatBeforeSubmission() {
-        ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(new CapturingSubmitter()));
+        ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()));
         RunRequest request = new RunRequest();
         request.setSerialNo("orders-20260915");
         request.getOptions().setPlatform("yarn");
@@ -127,7 +136,7 @@ class ClusterSubmitSupportTest {
 
     @Test
     void shouldKillOnCancellationAfterSubmission() {
-        CapturingSubmitter submitter = new CapturingSubmitter();
+        CapturingSubmitter submitter = yarnSubmitter();
         submitter.completes = false;
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(submitter));
         RunRequest request = new RunRequest();
@@ -147,7 +156,7 @@ class ClusterSubmitSupportTest {
 
     @Test
     void shouldKillOnTimeoutAfterSubmission() {
-        CapturingSubmitter submitter = new CapturingSubmitter();
+        CapturingSubmitter submitter = yarnSubmitter();
         submitter.completes = false;
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(submitter));
         RunRequest request = new RunRequest();
@@ -168,7 +177,7 @@ class ClusterSubmitSupportTest {
 
     @Test
     void shouldNotKillWhenApplicationFailsOnItsOwn() throws Exception {
-        CapturingSubmitter submitter = new CapturingSubmitter();
+        CapturingSubmitter submitter = yarnSubmitter();
         submitter.finalStatus = "FAILED";
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(submitter));
         RunRequest request = new RunRequest();
@@ -189,7 +198,7 @@ class ClusterSubmitSupportTest {
 
     @Test
     void shouldSweepStaleApplicationsWithSanitizedSubmissionIdUsedBySubmit() throws Exception {
-        CapturingSubmitter submitter = new CapturingSubmitter();
+        CapturingSubmitter submitter = yarnSubmitter();
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(submitter));
         RunRequest request = new RunRequest();
         request.setSerialNo("orders:2026.09.15 10:00");
@@ -210,7 +219,7 @@ class ClusterSubmitSupportTest {
 
     @Test
     void shouldContinueSubmissionWhenStaleSweepFails() throws Exception {
-        CapturingSubmitter submitter = new CapturingSubmitter();
+        CapturingSubmitter submitter = yarnSubmitter();
         submitter.sweepFails = true;
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(submitter));
         RunRequest request = new RunRequest();
@@ -228,6 +237,118 @@ class ClusterSubmitSupportTest {
 
         assertThat(result.succeeded()).isTrue();
         assertThat(submitter.request).isNotNull();
+    }
+
+    private static CapturingSubmitter yarnSubmitter() {
+        return new CapturingSubmitter("yarn", true, false);
+    }
+
+    private static CapturingSubmitter kubernetesSubmitter() {
+        return new CapturingSubmitter("kubernetes", false, true);
+    }
+
+    private static ClusterSubmitRequest buildYarnRequest(ClusterSubmissionContext context) {
+        Map<String, Object> params = context.getProperties();
+        String descriptorUri = context.getDescriptorFile().toAbsolutePath().toString();
+        return ClusterSubmitRequest.builder()
+                .submissionId(context.getSubmissionId())
+                .comparison(ClusterComparisonDescription.builder()
+                        .sourceConfigRef("descriptor:" + descriptorUri)
+                        .targetConfigRef("descriptor:" + descriptorUri)
+                        .build())
+                .execution(ClusterExecutionDescription.builder()
+                        .executionMode(ExecutionMode.YARN)
+                        .maxAttempts(ClusterSubmissionParameters.positiveInteger(
+                                params.get("maxAppAttempts"), "maxAppAttempts"))
+                        .build())
+                .yarnSubmission(YarnSubmissionSpec.builder()
+                        .runtimeArchiveUri(ClusterSubmissionParameters.required(
+                                params, "archive", "yarn.archive"))
+                        .descriptorUri(descriptorUri)
+                        .stagingUri((String) params.get("stagingDir"))
+                        .applicationName(context.getSubmissionId())
+                        .queue((String) params.get("queue"))
+                        .amJavaHome((String) params.get("amJavaHome"))
+                        .amMemoryMb(ClusterSubmissionParameters.parseMemoryMb(
+                                ClusterSubmissionParameters.orDefault(params, "amMemory", "1g")))
+                        .amVCores(ClusterSubmissionParameters.intOrDefault(params, "amVCores", 1))
+                        .tags(ClusterSubmissionParameters.splitCsv((String) params.get("tags")))
+                        .files(ClusterSubmissionParameters.splitCsv((String) params.get("files")))
+                        .jars(ClusterSubmissionParameters.splitCsv((String) params.get("jars")))
+                        .build())
+                .build();
+    }
+
+    private static ClusterSubmitRequest buildKubernetesRequest(ClusterSubmissionContext context) {
+        Map<String, Object> params = context.getProperties();
+        String jobName = ClusterSubmissionParameters.orDefault(
+                params, "jobName", defaultJobName(context.getSubmissionId()));
+        Map<String, KubernetesSecretKeyRef> secretEnv = secretEnvsOf(params.get("secretEnv"));
+        return ClusterSubmitRequest.builder()
+                .submissionId(context.getSubmissionId())
+                .comparison(ClusterComparisonDescription.builder()
+                        .sourceConfigRef("descriptor:configmap:" + descriptorConfigMapName(jobName))
+                        .targetConfigRef("descriptor:configmap:" + descriptorConfigMapName(jobName))
+                        .build())
+                .execution(ClusterExecutionDescription.builder()
+                        .executionMode(ExecutionMode.KUBERNETES)
+                        .maxAttempts(ClusterSubmissionParameters.positiveInteger(
+                                params.get("maxAppAttempts"), "maxAppAttempts"))
+                        .build())
+                .kubernetesSubmission(KubernetesSubmissionSpec.builder()
+                        .namespace(ClusterSubmissionParameters.orDefault(
+                                params, "namespace", KubernetesSubmissionSpec.DEFAULT_NAMESPACE))
+                        .jobName(jobName)
+                        .image(ClusterSubmissionParameters.required(params, "image", "kubernetes.image"))
+                        .descriptorData(Map.of("comparison.yaml", context.getDescriptor()))
+                        .descriptorConfigMapName(descriptorConfigMapName(jobName))
+                        .descriptorMountPath(KubernetesSubmissionSpec.DEFAULT_DESCRIPTOR_MOUNT_PATH)
+                        .memoryMiB(ClusterSubmissionParameters.parseMemoryMb(
+                                ClusterSubmissionParameters.orDefault(params, "memory", "1g")))
+                        .cpuMilli(ClusterSubmissionParameters.parseCpuMilli(
+                                ClusterSubmissionParameters.orDefault(params, "cpu", "0.5")))
+                        .serviceAccountName(stringParam(params, "serviceAccount"))
+                        .imagePullSecrets(ClusterSubmissionParameters.splitCsv(
+                                (String) params.get("imagePullSecrets")))
+                        .envs(ClusterSubmissionParameters.stringMap(params.get("envs")))
+                        .secretEnv(secretEnv)
+                        .build())
+                .build();
+    }
+
+    private static Map<String, KubernetesSecretKeyRef> secretEnvsOf(Object raw) {
+        if (!(raw instanceof Map)) {
+            return Map.of();
+        }
+        Map<String, KubernetesSecretKeyRef> result = new LinkedHashMap<>();
+        ((Map<?, ?>) raw).forEach((name, reference) -> {
+            Map<?, ?> values = (Map<?, ?>) reference;
+            result.put(String.valueOf(name), KubernetesSecretKeyRef.builder()
+                    .secretName(ClusterSubmissionParameters.stringValue(values.get("secretName")))
+                    .secretKey(ClusterSubmissionParameters.stringValue(values.get("secretKey")))
+                    .build());
+        });
+        return result;
+    }
+
+    private static String defaultJobName(String submissionId) {
+        String suffix = submissionId.toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9-]", "-")
+                .replaceAll("^-+|-+$", "");
+        return ("consilens-" + (suffix.isEmpty() ? "run" : suffix))
+                .substring(0, Math.min(52, "consilens-".length() + suffix.length()))
+                .replaceAll("-+$", "");
+    }
+
+    private static String descriptorConfigMapName(String jobName) {
+        return (jobName + "-descriptor")
+                .substring(0, Math.min(63, jobName.length() + "-descriptor".length()))
+                .replaceAll("-+$", "");
+    }
+
+    private static String stringParam(Map<String, Object> params, String key) {
+        Object value = params.get(key);
+        return value == null ? null : String.valueOf(value);
     }
 
     private EndpointConfig endpoint(String password) {
@@ -252,12 +373,45 @@ class ClusterSubmitSupportTest {
     }
 
     private static final class CapturingSubmitter implements ClusterSubmitter {
+        private final String platform;
+        private final boolean requiresDescriptorFile;
+        private final boolean redactsPasswords;
         private ClusterSubmitRequest request;
         private ClusterSubmitRequest staleSweepRequest;
         private boolean killed;
         boolean completes = true;
         boolean sweepFails;
         String finalStatus = "SUCCEEDED";
+
+        private CapturingSubmitter(String platform,
+                                   boolean requiresDescriptorFile,
+                                   boolean redactsPasswords) {
+            this.platform = platform;
+            this.requiresDescriptorFile = requiresDescriptorFile;
+            this.redactsPasswords = redactsPasswords;
+        }
+
+        @Override
+        public String platform() {
+            return platform;
+        }
+
+        @Override
+        public boolean requiresDescriptorFile() {
+            return requiresDescriptorFile;
+        }
+
+        @Override
+        public boolean descriptorRedactsPasswords() {
+            return redactsPasswords;
+        }
+
+        @Override
+        public ClusterSubmitRequest buildRequest(ClusterSubmissionContext context) {
+            return "yarn".equals(platform)
+                    ? buildYarnRequest(context)
+                    : buildKubernetesRequest(context);
+        }
 
         @Override
         public ClusterSubmission submit(ClusterSubmitRequest request) {

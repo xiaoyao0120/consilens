@@ -72,7 +72,7 @@ class MyBatisAgentPersistenceConcurrencyTest {
         configuration.addMapper(AiSnapshotMapper.class);
         configuration.addMapper(AiSecretMapper.class);
         SqlSessionFactory factory = new SqlSessionFactoryBuilder().build(configuration);
-        persistence = new MyBatisAgentPersistence(factory);
+        persistence = new MyBatisAgentPersistence(factory, AiTestSupport.newObjectMapper());
         persistence.createSession(AgentSessionRecord.builder()
                 .id("s1").actorId("actor").requestId("create-1")
                 .status(AgentSessionStatus.READY)

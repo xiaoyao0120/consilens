@@ -17,6 +17,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.server.ResponseStatusException;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.validation.ConstraintViolationException;
@@ -86,6 +87,16 @@ public class GlobalExceptionHandler {
                                                                     HttpServletRequest request) {
         return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
                 .body(ApiResponse.error("Method not allowed", "METHOD_NOT_ALLOWED",
+                        TraceIdSupport.getOrCreateTraceId(request)));
+    }
+
+    /** 保留显式 HTTP 状态（如 SSE 并发上限的 503），避免被兜底 handler 吞成 500。 */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ApiResponse<Void>> handleResponseStatus(ResponseStatusException exception,
+                                                                  HttpServletRequest request) {
+        String reason = exception.getReason() == null ? "request rejected" : exception.getReason();
+        return ResponseEntity.status(exception.getStatus())
+                .body(ApiResponse.error(reason, "REQUEST_REJECTED",
                         TraceIdSupport.getOrCreateTraceId(request)));
     }
 

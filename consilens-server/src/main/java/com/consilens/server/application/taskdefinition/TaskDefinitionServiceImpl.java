@@ -30,6 +30,12 @@ import java.util.stream.Collectors;
 @Service
 public class TaskDefinitionServiceImpl implements TaskDefinitionService {
 
+    /** 任务定义详情页展示的最近执行实例条数。 */
+    private static final int RECENT_INSTANCE_LIMIT = 5;
+
+    /** 自动生成 serialNo 时任务名前缀的最大长度。 */
+    private static final int SERIAL_NAME_MAX_LENGTH = 40;
+
     private final TaskDefinitionRepository definitionRepository;
     private final TaskRepository taskRepository;
     private final RunTaskSubmissionService submissionService;
@@ -84,7 +90,7 @@ public class TaskDefinitionServiceImpl implements TaskDefinitionService {
     public TaskDefinitionDetailDto get(Long id) {
         TaskDefinitionRecord record = require(id);
         List<TaskDefinitionDetailDto.RecentInstanceDto> recent = taskRepository
-                .listByDefinitionId(id, 5)
+                .listByDefinitionId(id, RECENT_INSTANCE_LIMIT)
                 .stream()
                 .map(this::toRecentInstance)
                 .collect(Collectors.toList());
@@ -148,7 +154,8 @@ public class TaskDefinitionServiceImpl implements TaskDefinitionService {
         RunRequest runRequest = new RunRequest();
         runRequest.setSerialNo(request != null && request.getSerialNo() != null && !request.getSerialNo().isBlank()
                 ? request.getSerialNo()
-                : "def-" + record.getName().substring(0, Math.min(record.getName().length(), 40))
+                : "def-" + record.getName()
+                        .substring(0, Math.min(record.getName().length(), SERIAL_NAME_MAX_LENGTH))
                         + "-" + UUID.randomUUID().toString().substring(0, 8));
         runRequest.setConfigContent(fromConfigJson(record.getConfig()));
         runRequest.setDefinitionId(record.getId());

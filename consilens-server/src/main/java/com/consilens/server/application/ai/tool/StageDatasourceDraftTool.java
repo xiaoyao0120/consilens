@@ -12,7 +12,6 @@ import com.consilens.agent.api.tool.AgentTool;
 import com.consilens.agent.api.tool.AgentToolContext;
 import com.consilens.agent.api.tool.AgentToolDescriptor;
 import com.consilens.agent.api.tool.AgentToolOutcome;
-import com.consilens.agent.api.tool.ToolExecutionMode;
 import com.consilens.agent.api.tool.ToolRiskLevel;
 import com.consilens.agent.api.tool.ToolSideEffect;
 import com.consilens.agent.core.security.SensitiveValueGuard;
@@ -23,10 +22,8 @@ import com.consilens.server.application.ai.tool.dto.StageDatasourceDraftOutput;
 import com.consilens.server.application.datasource.DataSourceService;
 import com.consilens.server.boot.ConsilensServerProperties;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -34,6 +31,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import static com.consilens.server.application.ai.tool.SecretPayloadCodec.MAPPER;
 
 /**
  * {@code stage_datasource_draft}: merges model-provided non-secret slots into
@@ -44,7 +42,6 @@ import java.util.Set;
 public final class StageDatasourceDraftTool
         implements AgentTool<StageDatasourceDraftInput, StageDatasourceDraftOutput> {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private final DataSourceService dataSourceService;
     private final AgentSecretStore secretStore;
@@ -64,9 +61,7 @@ public final class StageDatasourceDraftTool
                 .name("stage_datasource_draft")
                 .description("合并非敏感槽位生成数据源草稿，返回缺失字段；就绪后创建安全凭据请求")
                 .riskLevel(ToolRiskLevel.LOW)
-                .executionMode(ToolExecutionMode.SEQUENTIAL)
                 .sideEffect(ToolSideEffect.CONTROL)
-                .timeout(Duration.ofSeconds(10))
                 .idempotent(false)
                 .allowedStages(java.util.Set.of(
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERY,
@@ -75,7 +70,6 @@ public final class StageDatasourceDraftTool
                         com.consilens.agent.api.state.AgentWorkflowStage.DISCOVERING_METADATA,
                         com.consilens.agent.api.state.AgentWorkflowStage.DRAFTING_COMPARISON,
                         com.consilens.agent.api.state.AgentWorkflowStage.PLAN_READY))
-                .resultVisibility(com.consilens.agent.api.tool.ToolResultVisibility.MODEL_AND_USER)
                 .build();
     }
 

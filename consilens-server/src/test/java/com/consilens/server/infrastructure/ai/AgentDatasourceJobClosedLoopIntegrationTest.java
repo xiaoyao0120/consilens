@@ -60,7 +60,7 @@ import static org.mockito.Mockito.when;
         "consilens.server.ai.secret-key-env=CONSILENS_TEST_FAKE_SECRET",
         "consilens.server.ai.secret-store=memory",
         "consilens.server.ai.poller-enabled=false",
-        "consilens.server.ai.command-poll-interval-ms=3600000",
+        "consilens.server.scheduler.command-poll-interval-ms=3600000",
         "consilens.server.ai.lease-seconds=3600",
         "consilens.server.scheduler.enabled=false",
         "consilens.server.security.enabled=false",

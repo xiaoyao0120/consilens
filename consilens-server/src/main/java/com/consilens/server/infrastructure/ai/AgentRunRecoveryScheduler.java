@@ -22,6 +22,13 @@ import java.util.List;
 @Slf4j
 public class AgentRunRecoveryScheduler implements AgentRecoveryScanner {
 
+    /**
+     * Scan up to four times the configured concurrency per recovery pass:
+     * a crashed worker can leave a full concurrency batch plus retries, and
+     * the extra headroom drains such bursts in one pass without unbounded scans.
+     */
+    private static final int RECOVERY_BATCH_MULTIPLIER = 4;
+
     private final AiRunMapper runMapper;
     private final MyBatisAgentPersistence persistence;
     private final ConsilensServerProperties properties;
@@ -40,7 +47,7 @@ public class AgentRunRecoveryScheduler implements AgentRecoveryScanner {
         LocalDateTime now = LocalDateTime.ofInstant(Instant.now(), ZoneOffset.UTC);
         int recovered = 0;
         List<AiRunEntity> stale = runMapper.listExpiredRunning(now,
-                properties.getAi().getMaxConcurrentRuns() * 4);
+                properties.getAi().getMaxConcurrentRuns() * RECOVERY_BATCH_MULTIPLIER);
         for (AiRunEntity run : stale) {
             if (runMapper.transitionStatus(run.getRunId(), AgentRunStatus.RUNNING.name(),
                     AgentRunStatus.INTERRUPTED.name()) != 1) {

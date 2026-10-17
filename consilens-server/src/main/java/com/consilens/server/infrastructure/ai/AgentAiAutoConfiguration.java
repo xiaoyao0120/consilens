@@ -9,7 +9,6 @@ import com.consilens.agent.core.loop.DefaultAgentLoop;
 import com.consilens.agent.core.tool.AgentToolRegistry;
 import com.consilens.agent.model.openai.OpenAiCompatibleModelClient;
 import com.consilens.server.application.ai.AgentRunEnqueueService;
-import com.consilens.server.application.ai.AgentRuntime;
 import com.consilens.server.application.ai.AgentRuntimeFactory;
 import com.consilens.server.application.ai.AgentSecretApplicationService;
 import com.consilens.server.application.ai.AgentConversationApplicationService;
@@ -45,6 +44,7 @@ import com.consilens.server.infrastructure.db.mapper.ai.AiRunMapper;
 import com.consilens.server.infrastructure.db.mapper.ai.AiPlanActionMapper;
 import com.consilens.server.infrastructure.db.mapper.ai.AiPlanMapper;
 import com.consilens.server.infrastructure.db.mapper.ai.AiSecretMapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -114,9 +114,10 @@ public class AgentAiAutoConfiguration {
             AgentSecretStore secretStore,
             AgentSecretCipher cipher,
             MyBatisAgentPersistence persistence,
-            AgentRunEnqueueService runEnqueueService) {
+            AgentRunEnqueueService runEnqueueService,
+            ObjectMapper objectMapper) {
         return new AgentSecretApplicationService(secretStore, cipher,
-                persistence, runEnqueueService);
+                persistence, runEnqueueService, objectMapper);
     }
 
     @Bean
@@ -133,8 +134,8 @@ public class AgentAiAutoConfiguration {
     }
 
     @Bean
-    public ProvisioningPlanCompiler provisioningPlanCompiler() {
-        return new ProvisioningPlanCompiler();
+    public ProvisioningPlanCompiler provisioningPlanCompiler(ObjectMapper objectMapper) {
+        return new ProvisioningPlanCompiler(objectMapper);
     }
 
     @Bean
@@ -148,15 +149,17 @@ public class AgentAiAutoConfiguration {
     @Bean
     public CreateTaskDefinitionCommandHandler createTaskDefinitionCommandHandler(
             TaskDefinitionService taskDefinitionService,
-            ServerCompareConfigService configService) {
-        return new CreateTaskDefinitionCommandHandler(taskDefinitionService, configService);
+            ServerCompareConfigService configService,
+            ObjectMapper objectMapper) {
+        return new CreateTaskDefinitionCommandHandler(taskDefinitionService, configService, objectMapper);
     }
 
     @Bean
     public ProvisioningPlanExecutor provisioningPlanExecutor(
             MyBatisAgentPersistence persistence,
-            ProvisioningActionTransactionService transactionService) {
-        return new ProvisioningPlanExecutor(persistence, transactionService);
+            ProvisioningActionTransactionService transactionService,
+            ObjectMapper objectMapper) {
+        return new ProvisioningPlanExecutor(persistence, transactionService, objectMapper);
     }
 
     @Bean
@@ -195,7 +198,7 @@ public class AgentAiAutoConfiguration {
                 new GetTableSchemaTool(dataSourceService),
                 new StageDatasourceDraftTool(dataSourceService, secretStore, properties),
                 new ProbeDatasourceTool(secretStore, connectionTestService, properties),
-                new InspectDraftMetadataTool(metadataService, secretStore),
+                new InspectDraftMetadataTool(metadataService, secretStore, properties),
                 new StageCompareDefinitionTool(),
                 new PrepareProvisioningPlanTool(planCompiler, persistence),
                 new CommitProvisioningPlanTool(persistence, approvalService, planCompiler),
@@ -219,26 +222,18 @@ public class AgentAiAutoConfiguration {
                                       AgentToolRegistry registry,
                                       AgentContextAssembler assembler,
                                       AgentRunConfig runConfig) {
-        return new DefaultAgentLoop(persistence, modelClient, registry, assembler, runConfig);
-    }
-
-    @Bean
-    public AgentRuntime agentRuntime(AgentToolRegistry registry,
-                                     DefaultAgentLoop loop,
-                                     AgentModelClient modelClient,
-                                     AgentRunConfig runConfig) {
-        return new AgentRuntime(registry, loop, modelClient, runConfig);
+        return new DefaultAgentLoop(persistence, modelClient, registry, assembler, runConfig,
+                com.consilens.agent.api.tool.AgentSecretResolver.NOOP);
     }
 
     @Bean
     public ServerAgentRunWorker serverAgentRunWorker(MyBatisAgentPersistence persistence,
                                                      DefaultAgentLoop loop,
                                                      AgentRunConfig runConfig,
-                                                     ConsilensServerProperties properties,
                                                      ProvisioningPlanExecutor planExecutor,
                                                      RunTaskExecutor runTaskExecutor,
                                                      AgentRunEnqueueService runEnqueueService) {
-        return new ServerAgentRunWorker(persistence, loop, runConfig, properties,
+        return new ServerAgentRunWorker(persistence, loop, runConfig,
                 planExecutor, runTaskExecutor, runEnqueueService);
     }
 

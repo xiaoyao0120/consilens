@@ -319,7 +319,6 @@ public class ServerCompareConfigService {
         Map<String, Object> executionOptions = new LinkedHashMap<>();
         putIfPresent(executionOptions, "bisectionFactor", strategy.get("bisectionFactor"));
         putIfPresent(executionOptions, "bisectionThreshold", strategy.get("bisectionThreshold"));
-        putIfPresent(executionOptions, "enableProfiling", strategy.get("enableProfiling"));
         putIfPresent(executionOptions, "checksumAlgorithm", strategy.get("algorithm"));
         ServerCompareConfig config = ServerCompareConfig.builder()
                 .source(endpointFromCli("source", sourceMap, comparison))
@@ -507,7 +506,6 @@ public class ServerCompareConfigService {
         return CompareExecutionOptions.builder()
                 .bisectionFactor(integer(merged.get("bisectionFactor")))
                 .bisectionThreshold(longValue(merged.get("bisectionThreshold")))
-                .enableProfiling(booleanValue(merged.get("enableProfiling")))
                 .checksumAlgorithm(string(merged.get("checksumAlgorithm")))
                 .localCompareMode(string(merged.get("localCompareMode")))
                 .validateUniqueKeys(booleanValue(merged.get("validateUniqueKeys")))
