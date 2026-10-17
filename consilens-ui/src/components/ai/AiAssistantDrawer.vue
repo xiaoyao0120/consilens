@@ -6,6 +6,7 @@ import { AddOutline, OpenOutline } from "@vicons/ionicons5";
 import { useAgentConversationStore } from "@/stores/agentConversation";
 import ConversationTimeline from "./ConversationTimeline.vue";
 import AgentComposer from "./AgentComposer.vue";
+import { AI_SESSION_STATUS_MAP } from "@/common/statusMapping";
 
 // 业务页侧边栏版 AI 助手：与独立页面共享同一套会话（Pinia store），
 // 只承担轻对话；进入需要凭据/审批的写流程时提示跳转完整 AI 助手页。
@@ -44,21 +45,9 @@ watch(
   }
 );
 
-const STATUS_META = {
-  READY: { label: "就绪", type: "default" },
-  RUNNING: { label: "运行中", type: "success" },
-  WAITING_SECRET: { label: "等待凭据", type: "warning" },
-  WAITING_APPROVAL: { label: "等待审批", type: "warning" },
-  WAITING_INPUT: { label: "等待输入", type: "warning" },
-  SUSPENDED: { label: "已暂停", type: "warning" },
-  COMPLETED: { label: "已完成", type: "success" },
-  FAILED: { label: "失败", type: "error" },
-  CANCELLED: { label: "已取消", type: "default" },
-};
-
 const statusMeta = computed(() => {
   const status = store.session?.status || "";
-  return STATUS_META[status] || { label: status || "未开始", type: "default" };
+  return AI_SESSION_STATUS_MAP[status] || { label: status || "未开始", type: "default" };
 });
 
 // 需要完整界面（凭据表单/审批卡片）的流程状态
@@ -137,7 +126,6 @@ function gotoAssistant() {
         :events="store.orderedEvents"
         :pending-delta="store.pendingDelta"
         :session-id="store.currentSessionId"
-        :is-running="store.isRunning"
         @suggest="handleSuggest"
       />
 

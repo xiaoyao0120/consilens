@@ -2,17 +2,16 @@
 import { computed, h, ref } from "vue";
 import { NButton, NDrawer, NDrawerContent, NDataTable } from "naive-ui";
 import StateTag from "./StateTag.vue";
+import { DIFF_OPERATION_LABELS } from "@/common/statusMapping";
 import { parsePrimaryKey } from "@/utils/format";
 
 // 差异明细展示（参考 DataGrip / Redgate Data Compare 等对比工具的配色习惯）：
-// - 整行按操作类型着色：更新=琥珀、新增=绿、删除=红（极浅背景）
+// - 整行按操作类型着色：更新=琥珀、源缺失=绿、目标缺失=红（极浅背景）
 // - 每个字段一列（源端/目标双列），变化字段旧值红色、新值绿色，未变化字段原样展示
 // - 「详情」抽屉逐字段对比，变化的行红底、源红目标绿
 const props = defineProps({
   // [{operation, primaryKey, metadata, changedColumns, columnNames, sourceValues, targetValues}]
   samples: { type: Array, default: () => [] },
-  // 占满父容器高度：表格内部滚动、表头固定不随内容滚动
-  flexHeight: { type: Boolean, default: true },
   // 列显示开关（由父页面图例行的开关控制）：默认只显示不一致行的差异列
   showAllColumns: { type: Boolean, default: false },
 });
@@ -227,7 +226,7 @@ const drawer = ref({ show: false, rows: [], title: "" });
 
 function openDetail(sample) {
   const pk = parsePrimaryKey(sample.primaryKey);
-  const opText = { mismatch: "不一致", source_missing: "源端缺失", target_missing: "目标缺失" }[opKey(sample)] || sample.operation;
+  const opText = DIFF_OPERATION_LABELS[opKey(sample)]?.label || sample.operation;
   drawer.value = {
     show: true,
     rows: allFieldPairs(sample),
@@ -262,7 +261,7 @@ function detailRowClass(row) {
       :columns="columns"
       :data="rows"
       :scroll-x="scrollX"
-      :flex-height="flexHeight"
+      flex-height
       :row-class-name="rowClass"
       size="small"
       :row-key="(row) => row.key"
@@ -313,7 +312,7 @@ function detailRowClass(row) {
   }
 
   :deep(.cell-muted) {
-    color: var(--text-muted, #a1a1aa);
+    color: var(--text-muted);
   }
 
   :deep(.cell-old),

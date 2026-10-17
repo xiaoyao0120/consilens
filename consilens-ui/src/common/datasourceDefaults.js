@@ -1,5 +1,8 @@
 // ===== 数据源动态表单公共逻辑 =====
 
+// 新建数据源时的默认类型（后端类型列表不可用时的兜底）
+export const DEFAULT_DS_TYPE = "mysql";
+
 // 后端连接参数白名单（超出部分不提交，避免后端拒绝）
 export const DS_PARAM_WHITELIST = [
   "host",

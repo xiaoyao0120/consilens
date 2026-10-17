@@ -2,20 +2,8 @@ import request from "./index";
 
 // ===== 任务 =====
 
-export function listTasks(params) {
-  return request.get("/tasks", { params });
-}
-
-export function getTask(taskId, config) {
-  return request.get(`/tasks/${taskId}`, config || {});
-}
-
 export function getDiffReport(taskId, config) {
   return request.get(`/tasks/${taskId}/diff-report`, config || {});
-}
-
-export function submitTask(payload) {
-  return request.post("/tasks/execute", payload);
 }
 
 export function retryTask(taskId) {
@@ -24,16 +12,6 @@ export function retryTask(taskId) {
 
 export function cancelTask(taskId) {
   return request.post(`/tasks/${taskId}/cancel`);
-}
-
-// ===== 编排 =====
-
-export function plan(payload) {
-  return request.post("/plan", payload);
-}
-
-export function validate(payload) {
-  return request.post("/validate", payload);
 }
 
 // ===== artifact =====
@@ -149,10 +127,6 @@ export function listTaskInstances(params) {
 
 export function getTaskInstance(id) {
   return request.get(`/task-instances/${id}`);
-}
-
-export function submitTaskInstance(payload) {
-  return request.post("/task-instances", payload);
 }
 
 // ===== 工作台 =====

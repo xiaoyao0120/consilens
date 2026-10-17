@@ -11,6 +11,7 @@ import {
   updateDatasource,
   deleteDatasource,
   testDatasource,
+  testConnection,
   listDatasourceDatabases,
   listDatasourceTables,
   listDatasourceColumns,
@@ -21,8 +22,9 @@ import EmptyState from "@/components/common/EmptyState.vue";
 import SkeletonTable from "@/components/common/SkeletonTable.vue";
 import CopyableId from "@/components/common/CopyableId.vue";
 import TimeText from "@/components/common/TimeText.vue";
-import { FALLBACK_DS_FIELDS, collectDsParam, splitTestOptions } from "@/common/datasourceDefaults";
+import { DEFAULT_DS_TYPE, FALLBACK_DS_FIELDS, collectDsParam, splitTestOptions } from "@/common/datasourceDefaults";
 import { datasourceTypeColor } from "@/common/statusMapping";
+import { useListQuerySync } from "@/composables/useListQuerySync";
 
 const message = useMessage();
 const dialog = useDialog();
@@ -44,13 +46,15 @@ const pagination = reactive({
   prefix: ({ itemCount }) => `共 ${itemCount} 条`,
 });
 
-// 筛选：filters 绑定输入，applied 在点「查询」时生效（与其它列表页一致）
+// 筛选与 URL 双向同步：初始从 query 恢复，每次加载写回（与其它列表页同一套交互）
 const filters = reactive({ keyword: "", type: null, startTime: null, endTime: null });
-const applied = reactive({ keyword: "", type: null, startTime: null, endTime: null });
 
-const filtersActive = computed(
-  () => !!(applied.keyword || applied.type || applied.startTime || applied.endTime)
-);
+const { filtersActive, syncToUrl } = useListQuerySync(filters, pagination, {
+  keyword: {},
+  type: {},
+  startTime: { serialize: (v) => String(timeOf(v)) },
+  endTime: { serialize: (v) => String(timeOf(v)) },
+});
 
 function timeOf(value) {
   if (!value) return null;
@@ -59,27 +63,18 @@ function timeOf(value) {
 }
 
 const filteredItems = computed(() => {
-  const keyword = applied.keyword.trim().toLowerCase();
+  const keyword = filters.keyword.trim().toLowerCase();
+  const start = timeOf(filters.startTime);
+  const end = timeOf(filters.endTime);
   return items.value.filter((item) => {
     if (keyword && !String(item.name || "").toLowerCase().includes(keyword)) return false;
-    if (applied.type && item.type !== applied.type) return false;
+    if (filters.type && item.type !== filters.type) return false;
     const created = timeOf(item.createdAt);
-    if (applied.startTime && (created === null || created < applied.startTime)) return false;
-    if (applied.endTime && (created === null || created > applied.endTime)) return false;
+    if (start && (created === null || created < start)) return false;
+    if (end && (created === null || created > end)) return false;
     return true;
   });
 });
-
-watch(
-  filteredItems,
-  (list) => {
-    pagination.itemCount = list.length;
-    // 筛选后页码越界时回退到最后一页，避免空页
-    const maxPage = Math.max(1, Math.ceil(list.length / pagination.pageSize));
-    if (pagination.page > maxPage) pagination.page = maxPage;
-  },
-  { immediate: true }
-);
 
 async function loadTypes() {
   try {
@@ -92,6 +87,7 @@ async function loadTypes() {
 async function loadData() {
   loading.value = true;
   loadError.value = false;
+  syncToUrl();
   try {
     const result = await listDatasources();
     items.value = Array.isArray(result) ? result : result?.items || [];
@@ -103,15 +99,25 @@ async function loadData() {
   }
 }
 
+// 本地筛选 + 分页：itemCount 跟随筛选结果，页码越界时回退到最后一页避免空页
+watch(
+  filteredItems,
+  (list) => {
+    pagination.itemCount = list.length;
+    const maxPage = Math.max(1, Math.ceil(list.length / pagination.pageSize));
+    if (pagination.page > maxPage) pagination.page = maxPage;
+  },
+  { immediate: true }
+);
+
 function handleSearch() {
-  Object.assign(applied, filters);
   pagination.page = 1;
+  loadData();
 }
 
 function handleReset() {
   Object.assign(filters, { keyword: "", type: null, startTime: null, endTime: null });
-  Object.assign(applied, { keyword: "", type: null, startTime: null, endTime: null });
-  pagination.page = 1;
+  handleSearch();
 }
 
 // ===== 新建 / 编辑 =====
@@ -172,9 +178,9 @@ function openCreate() {
   modal.id = null;
   modal.testResult = null;
   modal.prefill = null;
-  const defaultType = types.value.find((item) => item.type === "mysql")?.type
+  const defaultType = types.value.find((item) => item.type === DEFAULT_DS_TYPE)?.type
     || types.value[0]?.type
-    || "mysql";
+    || DEFAULT_DS_TYPE;
   modal.form = { name: "", type: defaultType };
   modal.show = true;
   // type 未变化时 watch 不触发，这里显式加载模板
@@ -258,7 +264,6 @@ async function testConnectionLocal() {
   // 仅当字段有值才放入；sid / schema / properties 放入 options
   const param = collectDsParam(values, modal.fields);
   const options = splitTestOptions(param);
-  const { testConnection } = await import("@/api/modules");
   return testConnection({
     type: modal.form.type,
     ...param,
@@ -552,6 +557,7 @@ onMounted(() => {
         :bordered="false"
         size="small"
         :pagination="pagination"
+        remote
         @update:page="(page) => { pagination.page = page; }"
         @update:page-size="(size) => { pagination.pageSize = size; pagination.page = 1; }"
       />

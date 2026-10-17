@@ -36,6 +36,13 @@ export function useListQuerySync(filters, pagination, fields) {
       query[spec.queryKey || key] = spec.serialize ? spec.serialize(value) : String(value);
     }
     if (pagination.page > 1) query.page = String(pagination.page);
+    // 值与 query 一致时跳过 replace：避免 onMounted 的首次加载也产生一次路由替换
+    // （会触发路由 watch 连锁，并在浏览器历史里留下无意义记录）
+    const current = route.query;
+    const sameKeys = Object.keys(query).length === Object.keys(current).length;
+    if (sameKeys && Object.keys(query).every((key) => String(current[key]) === query[key])) {
+      return;
+    }
     router.replace({ query });
   }
 

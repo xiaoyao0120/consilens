@@ -4,8 +4,9 @@ import { useRoute, useRouter } from "vue-router";
 import { useMessage } from "naive-ui";
 import { NButton, NIcon, NPopconfirm, NSpin, NSwitch } from "naive-ui";
 import { ArrowBackOutline, RefreshOutline, TimeOutline, ServerOutline, PlayCircleOutline, PulseOutline } from "@vicons/ionicons5";
-import { getTaskInstance, retryTask, cancelTask, getArtifactContent, getDiffReport, listArtifactDifferences } from "@/api/modules";
+import { getTaskInstance, retryTask, cancelTask, getDiffReport, listArtifactDifferences } from "@/api/modules";
 import { formatTime, formatDuration, formatNumber, formatRatio } from "@/utils/format";
+import { DIFF_OPERATION_LABELS } from "@/common/statusMapping";
 import StateTag from "@/components/common/StateTag.vue";
 import KeyValueList from "@/components/common/KeyValueList.vue";
 import MatchScoreGauge from "@/components/common/MatchScoreGauge.vue";
@@ -141,12 +142,8 @@ const diffPage = reactive({
 });
 
 // 操作类型筛选（图例勾选框，多选；默认全选 = 全部类型，取消勾选即只看其余类型）
-const FILTER_OPS = [
-  { value: "mismatch", label: "不一致" },
-  { value: "source_missing", label: "源端缺失" },
-  { value: "target_missing", label: "目标缺失" },
-];
-const diffOps = ref(["mismatch", "source_missing", "target_missing"]);
+const FILTER_OPS = Object.values(DIFF_OPERATION_LABELS);
+const diffOps = ref(Object.keys(DIFF_OPERATION_LABELS));
 // 差异明细列显示开关：默认只看差异列
 const showAllColumns = ref(false);
 
@@ -704,11 +701,8 @@ onBeforeUnmount(stopPolling);
   display: flex;
   flex-direction: column;
   height: 100%;
-  // 限高：表格内滚，分页控件始终留在视口内（否则整页被长表撑开，
-  // 分页落到首屏之外，看起来像"没有翻页控件"）。
-  // 375px ≈ 页头 + 统计卡 + tab 的高度，随视口自适应。
-  max-height: calc(100vh - 375px);
-  min-height: 280px;
+  // 高度由外层 .diff-pane 统一扣除（页头 + 统计卡 + tab），这里只占满剩余空间：
+  // 表格内滚，分页控件始终留在视口内（否则整页被长表撑开，分页落到首屏之外）
 }
 
 // 勾选筛选栏：独立元素，固定不随表格刷新
@@ -732,6 +726,8 @@ onBeforeUnmount(stopPolling);
       .n-checkbox__label {
         font-size: 12px;
       }
+    }
+  }
 
   .column-switch {
     display: inline-flex;
@@ -740,9 +736,7 @@ onBeforeUnmount(stopPolling);
 
     .switch-label {
       font-size: 12px;
-      color: var(--n-text-color, #666);
-    }
-  }
+      color: var(--text-secondary);
     }
   }
 
@@ -758,8 +752,8 @@ onBeforeUnmount(stopPolling);
     height: 10px;
     border-radius: 3px;
 
-    &.swatch-old { background: rgba(220, 38, 38, 0.12); border: 1px solid rgba(220, 38, 38, 0.45); }
-    &.swatch-new { background: rgba(22, 163, 74, 0.12); border: 1px solid rgba(22, 163, 74, 0.45); }
+    &.swatch-old { background: var(--diff-old-bg); border: 1px solid var(--diff-old-text); }
+    &.swatch-new { background: var(--diff-new-bg); border: 1px solid var(--diff-new-text); }
   }
 
   .legend-all {

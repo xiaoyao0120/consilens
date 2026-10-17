@@ -12,6 +12,7 @@ import { useAgentConversationStore } from "@/stores/agentConversation";
 import ConversationTimeline from "@/components/ai/ConversationTimeline.vue";
 import AgentComposer from "@/components/ai/AgentComposer.vue";
 import AgentWorkingState from "@/components/ai/AgentWorkingState.vue";
+import { AI_SESSION_STATUS_MAP } from "@/common/statusMapping";
 import { formatTime } from "@/utils/format";
 
 const store = useAgentConversationStore();
@@ -113,21 +114,9 @@ async function handleStop() {
 }
 
 // ===== 状态展示 =====
-const STATUS_META = {
-  READY: { label: "就绪", type: "default" },
-  RUNNING: { label: "运行中", type: "success" },
-  WAITING_SECRET: { label: "等待凭据", type: "warning" },
-  WAITING_APPROVAL: { label: "等待审批", type: "warning" },
-  WAITING_INPUT: { label: "等待输入", type: "warning" },
-  SUSPENDED: { label: "已暂停", type: "warning" },
-  COMPLETED: { label: "已完成", type: "success" },
-  FAILED: { label: "失败", type: "error" },
-  CANCELLED: { label: "已取消", type: "default" },
-};
-
 const statusMeta = computed(() => {
   const status = store.session?.status || "";
-  return STATUS_META[status] || { label: status || "未开始", type: "default" };
+  return AI_SESSION_STATUS_MAP[status] || { label: status || "未开始", type: "default" };
 });
 
 const STREAM_LABELS = {
@@ -222,7 +211,7 @@ onBeforeUnmount(() => {
               </n-button>
             </div>
             <div class="session-item-meta">
-              <n-tag size="tiny" :bordered="false">{{ STATUS_META[item.status]?.label || item.status || "-" }}</n-tag>
+              <n-tag size="tiny" :bordered="false">{{ AI_SESSION_STATUS_MAP[item.status]?.label || item.status || "-" }}</n-tag>
               <span>{{ formatTime(item.updatedAt, "MM-DD HH:mm") }}</span>
             </div>
           </div>
@@ -252,7 +241,6 @@ onBeforeUnmount(() => {
           :events="store.orderedEvents"
           :pending-delta="store.pendingDelta"
           :session-id="store.currentSessionId"
-          :is-running="store.isRunning"
           @suggest="handleSuggest"
         />
 

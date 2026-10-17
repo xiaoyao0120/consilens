@@ -44,7 +44,7 @@ watch(
     </header>
 
     <div class="app-body">
-      <!-- 200px 侧栏（与外壳同色，右侧 1px 分割线） -->
+      <!-- 220px 侧栏（与外壳同色，右侧 1px 分割线；宽度对齐 EmonLens） -->
       <aside class="sidebar">
         <SideMenu />
       </aside>
@@ -97,7 +97,7 @@ watch(
   height: 22px;
   border-radius: 6px;
   background: var(--primary);
-  color: #fff;
+  color: var(--on-primary);
   font-size: 12px;
   font-weight: 700;
   flex-shrink: 0;
@@ -143,8 +143,8 @@ watch(
 }
 
 .sidebar {
-  flex: 0 0 200px;
-  width: 200px;
+  flex: 0 0 220px;
+  width: 220px;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;

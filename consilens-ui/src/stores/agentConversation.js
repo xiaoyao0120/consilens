@@ -7,48 +7,42 @@ import {
   fetchAiEvents,
   decideAiApproval,
   cancelAiRun,
-  retryAiRun,
   newRequestId,
 } from "@/api/agent";
 
 // 本地会话索引（仅存非敏感元数据：id/title/更新时间/最近状态；不存事件、不存 secret）
 const SESSION_INDEX_KEY = "consilens-ai-session-index";
 
-// ===== 纯函数（便于单元测试 / 静态自查）=====
+// ===== 纯函数（模块内部使用）=====
 
 // 事件 seq 规范化：非数值返回 null（调用方按非法事件忽略）
-export function toSeq(event) {
+function toSeq(event) {
   if (!event || event.seq === undefined || event.seq === null) return null;
   const seq = Number(event.seq);
   return Number.isFinite(seq) ? seq : null;
 }
 
 // 已应用过（seq <= lastSeq）的事件视为重复，直接丢弃
-export function isDuplicateEvent(seq, lastSeq) {
+function isDuplicateEvent(seq, lastSeq) {
   return seq <= lastSeq;
 }
 
-// 跳号数量：0 表示连续，>0 表示中间缺失
-export function gapSize(seq, lastSeq) {
-  return seq - lastSeq - 1;
-}
-
 // 断线退避：1/2/4/8… 秒，最大 30 秒
-export function nextBackoffMs(attempt) {
+function nextBackoffMs(attempt) {
   const ms = 1000 * 2 ** attempt;
   return Math.min(ms, 30000);
 }
 
 // SSE 无数据看门狗：后端 15s heartbeat，40s 无任何字节判定假死（落在 30-45s 区间）
-export const SSE_WATCHDOG_MS = 40000;
+const SSE_WATCHDOG_MS = 40000;
 
-export function watchdogExpired(lastDataAt, now = Date.now(), thresholdMs = SSE_WATCHDOG_MS) {
+function watchdogExpired(lastDataAt, now = Date.now(), thresholdMs = SSE_WATCHDOG_MS) {
   return now - lastDataAt > thresholdMs;
 }
 
 // 兼容后端 JSON 分页事件的不同返回结构：
 // 直接数组 / {events:[...],lastSeq} / {data:{events:[...]}} / items / records / list
-export function extractEventList(res) {
+function extractEventList(res) {
   if (Array.isArray(res)) return res;
   if (!res || typeof res !== "object") return [];
   const candidates = [res.items, res.records, res.events, res.list];
@@ -81,7 +75,7 @@ export function normalizeSecretFields(fields) {
 }
 
 // 解析 SSE 文本块，返回 [{ id, event, data }]；忽略注释行（heartbeat）
-export function parseSseBlocks(text) {
+function parseSseBlocks(text) {
   const blocks = String(text || "").split(/\r?\n\r?\n/);
   const out = [];
   for (const block of blocks) {
@@ -100,7 +94,7 @@ export function parseSseBlocks(text) {
 }
 
 // 事件类型 -> 会话状态（顺序不变量见设计文档 21.3）
-export function sessionStatusAfterEvent(eventType, payload) {
+function sessionStatusAfterEvent(eventType, payload) {
   switch (eventType) {
     case "RUN_STARTED":
       return "RUNNING";
@@ -539,14 +533,6 @@ export const useAgentConversationStore = defineStore("agentConversation", {
       const id = this.currentSessionId;
       if (!id) return;
       await cancelAiRun(id);
-      await this.refreshSession();
-      this.startStream();
-    },
-
-    async retryRun() {
-      const id = this.currentSessionId;
-      if (!id) return;
-      await retryAiRun(id, { requestId: newRequestId() });
       await this.refreshSession();
       this.startStream();
     },

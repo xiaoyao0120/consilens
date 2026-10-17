@@ -3,7 +3,7 @@ import { ref, computed, h, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useMessage, useDialog } from "naive-ui";
 import { NButton, NIcon, NDataTable, NTag, NPopconfirm, NSpin } from "naive-ui";
-import { ArrowBackOutline, PlayCircleOutline, PencilOutline, TrashOutline, PulseOutline } from "@vicons/ionicons5";
+import { ArrowBackOutline, PlayCircleOutline, PencilOutline, TrashOutline } from "@vicons/ionicons5";
 import { getTaskDefinition, deleteTaskDefinition, runTaskDefinition, toggleTaskDefinition } from "@/api/modules";
 import { formatTime, formatDuration } from "@/utils/format";
 import StateTag from "@/components/common/StateTag.vue";

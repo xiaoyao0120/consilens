@@ -15,8 +15,6 @@ const props = defineProps({
   expiresAt: { type: [String, Number], default: "" },
 });
 
-const emit = defineEmits(["submitted"]);
-
 const MAX_FAILS = 3;
 const values = ref({});
 const calling = ref(false);
@@ -59,7 +57,6 @@ async function handleSubmit() {
     submitted.value = true;
     failCount.value = 0;
     clearValues(); // 提交成功立即清空
-    emit("submitted", { secretRequestId: props.secretRequestId });
   } catch (err) {
     failCount.value += 1;
     if (failCount.value >= MAX_FAILS) {
@@ -73,10 +70,9 @@ async function handleSubmit() {
   }
 }
 
-// 取消（父级移除表单）与组件卸载时清空
+// 取消与组件卸载时清空
 function handleCancel() {
   clearValues();
-  emit("submitted", { secretRequestId: props.secretRequestId, cancelled: true });
 }
 
 onBeforeUnmount(clearValues);

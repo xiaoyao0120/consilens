@@ -17,7 +17,6 @@ const props = defineProps({
   events: { type: Array, default: () => [] },
   pendingDelta: { type: String, default: "" },
   sessionId: { type: String, default: "" },
-  isRunning: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["suggest"]);
@@ -492,7 +491,7 @@ function isAuditEvent(type) {
 
 .user-bubble {
   background: var(--primary);
-  color: #fff;
+  color: var(--on-primary);
 }
 
 .msg-text {

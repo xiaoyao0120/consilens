@@ -89,9 +89,9 @@ const columns = [
         "a",
         {
           class: "app-name-link mono",
-          onClick: () => router.push(`/artifacts/${row.id}`),
+          onClick: () => router.push(`/artifacts/${row.artifactId}`),
         },
-        row.id
+        row.artifactId
       ),
   },
   {
@@ -224,7 +224,7 @@ onMounted(loadData);
         :columns="columns"
         :data="data.items"
         :loading="loading"
-        :row-key="(row) => row.id"
+        :row-key="(row) => row.artifactId"
         flex-height
         :bordered="false"
         size="small"

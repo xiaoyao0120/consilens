@@ -5,10 +5,6 @@ export function formatTime(value, pattern = "YYYY-MM-DD HH:mm:ss") {
   return dayjs(value).format(pattern);
 }
 
-export function formatDate(value) {
-  return formatTime(value, "YYYY-MM-DD");
-}
-
 export function formatBytes(bytes) {
   if (bytes === null || bytes === undefined) return "-";
   if (bytes < 1024) return `${bytes} B`;
@@ -45,11 +41,6 @@ export function formatDuration(start, end) {
   return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
 }
 
-export function formatLatency(ms) {
-  if (ms === null || ms === undefined) return "-";
-  return `${ms} ms`;
-}
-
 export function buildPageParams(page, pageSize, filters = {}) {
   const params = { page, pageSize };
   Object.entries(filters).forEach(([key, value]) => {
@@ -64,24 +55,6 @@ export function buildPageParams(page, pageSize, filters = {}) {
     }
   });
   return params;
-}
-
-// 解析 RUN_RESULT artifact 内容
-export function parseRunResultContent(content) {
-  if (typeof content === "string") {
-    try {
-      content = JSON.parse(content);
-    } catch {
-      return null;
-    }
-  }
-  if (!content || typeof content !== "object") return null;
-  return {
-    statistics: content.statistics || null,
-    differences: Array.isArray(content.differences) ? content.differences : [],
-    sampleSize: content.differenceSampleSize || null,
-    totalDifferences: content.totalDifferenceCount ?? content.differences?.length ?? 0,
-  };
 }
 
 export function generateSerialNo() {

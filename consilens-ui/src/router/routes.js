@@ -1,23 +1,30 @@
 const Layout = () => import("@/components/Layout/index.vue");
 
+// 侧栏分组：顺序即渲染顺序，条目按 meta.section 归组（对标 EmonLens 的分段式分组标题）
+export const menuSections = [
+  { key: "overview", label: "概览" },
+  { key: "compare", label: "校验" },
+  { key: "resources", label: "资源" },
+];
+
 export const menuRoutes = [
   {
     path: "/dashboard",
     name: "dashboard",
     component: () => import("@/views/dashboard/index.vue"),
-    meta: { title: "工作台", icon: "grid-outline" },
+    meta: { title: "工作台", icon: "grid-outline", section: "overview" },
   },
   {
     path: "/ai",
     name: "ai-assistant",
     component: () => import("@/views/aiAssistant/index.vue"),
-    meta: { title: "AI 助手", icon: "sparkles-outline" },
+    meta: { title: "AI 助手", icon: "sparkles-outline", section: "overview" },
   },
   {
     path: "/definitions",
     name: "definitions",
     component: () => import("@/views/definitions/index.vue"),
-    meta: { title: "任务定义", icon: "play-circle-outline" },
+    meta: { title: "任务定义", icon: "play-circle-outline", section: "compare" },
   },
   {
     path: "/definitions/new",
@@ -35,7 +42,7 @@ export const menuRoutes = [
     path: "/instances",
     name: "instances",
     component: () => import("@/views/instances/index.vue"),
-    meta: { title: "运行实例", icon: "pulse-outline" },
+    meta: { title: "运行实例", icon: "pulse-outline", section: "compare" },
   },
   {
     path: "/instances/:taskId",
@@ -47,7 +54,7 @@ export const menuRoutes = [
     path: "/artifacts",
     name: "artifacts",
     component: () => import("@/views/artifacts/index.vue"),
-    meta: { title: "Artifact 中心", icon: "albums-outline" },
+    meta: { title: "Artifact 中心", icon: "albums-outline", section: "compare" },
   },
   {
     path: "/artifacts/:artifactId",
@@ -59,13 +66,13 @@ export const menuRoutes = [
     path: "/datasources",
     name: "datasources",
     component: () => import("@/views/datasources/index.vue"),
-    meta: { title: "数据源", icon: "link-outline" },
+    meta: { title: "数据源", icon: "link-outline", section: "resources" },
   },
   {
     path: "/nodes",
     name: "nodes",
     component: () => import("@/views/nodes/index.vue"),
-    meta: { title: "节点与集群", icon: "server-outline" },
+    meta: { title: "节点与集群", icon: "server-outline", section: "resources" },
   },
   {
     path: "/:pathMatch(.*)*",

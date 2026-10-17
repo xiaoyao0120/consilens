@@ -46,10 +46,13 @@ async function openDetail(node) {
   }
 }
 
+// 内存占比的兜底基准（MB）：后端节点数据目前只返回 availableMemoryMb，没有总内存配置，
+// 因此以 16GB 作为展示基准；若后端后续返回总内存字段，应优先使用后端配置值。
+const DEFAULT_MEMORY_MB = 16384;
+
 function memoryBar(availableMb) {
   if (availableMb === null || availableMb === undefined) return 0;
-  // 以 16GB 为基准估算内存占比
-  return Math.min(100, Math.round((availableMb / 16384) * 100));
+  return Math.min(100, Math.round((availableMb / DEFAULT_MEMORY_MB) * 100));
 }
 
 // 可用内存越少越告警；无数据（null/undefined）用中性色，不能当成"内存耗尽"

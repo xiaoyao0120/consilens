@@ -45,11 +45,7 @@ export function decideAiApproval(sessionId, approvalId, payload) {
   return request.post(`/ai/sessions/${sessionId}/approvals/${approvalId}`, payload);
 }
 
-// 取消 / 重试（幂等；retry 需要 requestId 幂等键）
+// 取消运行（幂等）
 export function cancelAiRun(sessionId) {
   return request.post(`/ai/sessions/${sessionId}/cancel`);
-}
-
-export function retryAiRun(sessionId, payload) {
-  return request.post(`/ai/sessions/${sessionId}/retry`, payload);
 }

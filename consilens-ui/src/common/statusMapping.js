@@ -34,13 +34,35 @@ export const NODE_STATUS_MAP = {
   REGISTERED: { label: "已注册", type: "warning" },
 };
 
+// AI 会话状态 → badge 类型与中文文案（AI 助手页 / 侧边抽屉共用）
+export const AI_SESSION_STATUS_MAP = {
+  READY: { label: "就绪", type: "default" },
+  RUNNING: { label: "运行中", type: "success" },
+  WAITING_SECRET: { label: "等待凭据", type: "warning" },
+  WAITING_APPROVAL: { label: "等待审批", type: "warning" },
+  WAITING_INPUT: { label: "等待输入", type: "warning" },
+  SUSPENDED: { label: "已暂停", type: "warning" },
+  COMPLETED: { label: "已完成", type: "success" },
+  FAILED: { label: "失败", type: "error" },
+  CANCELLED: { label: "已取消", type: "default" },
+};
+
 // 差异操作类型（与后端 DiffOperation 一致）
-// SOURCE_MISSING：源端缺失 → 目标端存在该行（即“新增”）；TARGET_MISSING：目标端缺失 → 源端已删除（即“删除”）
+// SOURCE_MISSING：源端缺失 → 目标端存在该行；TARGET_MISSING：目标端缺失 → 源端已删除
 export const DIFF_OPERATION_MAP = {
   MISMATCH: { label: "更新", type: "warning" },
-  SOURCE_MISSING: { label: "新增", type: "success" },
-  TARGET_MISSING: { label: "删除", type: "error" },
+  SOURCE_MISSING: { label: "源缺失", type: "success" },
+  TARGET_MISSING: { label: "目标缺失", type: "error" },
 };
+
+// 后端差异明细使用小写操作键（mismatch / source_missing / target_missing）：
+// 表格、图例、抽屉标题统一从此表取 value/label/type，避免各处各写一份文案
+export const DIFF_OPERATION_LABELS = Object.fromEntries(
+  Object.entries(DIFF_OPERATION_MAP).map(([value, meta]) => {
+    const key = value.toLowerCase();
+    return [key, { value: key, ...meta }];
+  })
+);
 
 // 差异评分色阶（diff-report / diffSummary.status）
 export const DIFF_SCORE_STATUS_MAP = {
@@ -48,6 +70,16 @@ export const DIFF_SCORE_STATUS_MAP = {
   GOOD: { label: "少量差异", type: "warning" },
   POOR: { label: "差异较多", type: "error" },
   NONE: { label: "暂无数据", type: "default" },
+};
+
+// 所有状态映射的合并视图：StateTag 用它在单一来源上查 label/type，
+// 避免组件内再维护一份会与上述映射漂移的内置表
+export const STATE_TAG_MAP = {
+  ...TASK_STATUS_MAP,
+  ...ARTIFACT_TYPE_MAP,
+  ...NODE_STATUS_MAP,
+  ...DIFF_OPERATION_MAP,
+  ...DIFF_SCORE_STATUS_MAP,
 };
 
 // badge 类型 → 语义色（引用 global.scss 的 CSS 变量，主题切换自动跟随；页面禁止另写 hex）

@@ -3,28 +3,22 @@
 // 脱离 .app-layout 的 .bright/.dark 作用域，必须让变量挂在根元素才能继承。
 // 全站颜色只允许引用这里的变量或 theme.js，不允许页面硬编码 hex。
 //
-// 布局骨架：40px 顶栏 + 200px 侧栏（外壳色）+ 12px 圆角浮动内容面板。
+// 布局骨架：40px 顶栏 + 220px 侧栏（外壳色）+ 12px 圆角浮动内容面板。
 // 亮色：浅灰外壳 + 纯白面板；暗色：板岩外壳 + 深蓝黑面板（面板比外壳更暗，形成浮层）。
 
 :root,
 .bright {
   // 外壳（顶栏 + 侧栏）与面板
   --shell-bg: #f3f4f6;
-  --bg: #f3f4f6;
-  --bg-page: #f3f4f6;
   --panel-bg: #ffffff;
   --card: #ffffff;
   --bg-surface: #ffffff;
   --bg-subtle: #f7f8fa;
-  --elevated-bg: #ffffff;
-  --elevated-border: #e0e3e8;
 
   // 描边与分隔线
   --border: #e0e3e8;
   --border-strong: #d2d7dd;
-  --divider: #ecedef;
   --shell-divider: #dfe2e7; // 顶栏/侧栏/内容区之间的分割线
-  --row-border: #e9e9e9;
   --table-header-bg: #f7f8fa;
   --row-hover-bg: #f5f7fb;
 
@@ -33,43 +27,36 @@
   --text-primary: #1f2329;
   --text-secondary: #5a6169;
   --text-muted: #8a9099;
-  --text-placeholder: #9aa0a6;
   --text-disabled: #b9bdc2;
 
   // 主色与语义色（Reafuture 靛蓝主色 + 亮绿成功色）
   --primary: #3b77f1;
-  --primary-hover: #2f63d6;
+  // 主色/成功色实底上的前景色（两者在两个主题下都保持白字可读）
+  --on-primary: #ffffff;
   --primary-bg: #e3edf7;
   --primary-border: rgba(59, 119, 241, 0.28);
   --link: #3b77f1;
   --link-hover: #2f63d6;
-  --brand-soft-bg: #e3edf7;
-  --brand-soft-fg: #3f6fe0;
   --success: #1b8a4e;
   --success-bg: #e8f6ee;
   --warning: #a87c1f;
-  --warn: #a87c1f;
   --warning-bg: #fbf3e2;
   --danger: #c63f2c;
-  --error: #c63f2c;
   --error-bg: #fdece9;
   --violet: #7b6fd0;
   --accent-green: #22a45d;
   --accent-amber: #d9a93b;
 
-  // 侧栏菜单
-  --nav-active-bg: #e3edf7;
-  --nav-active-fg: #3f6fe0;
+  // 侧栏菜单（对齐 EmonLens：不整块染色，选中态靠底色差 + 字重 + 图标主色表达）
   --nav-hover-bg: #eceef1;
+  --nav-active-bg: #e2e5e9;
+  --nav-active-icon: #3b77f1;
 
   // 圆角体系
   --radius-badge: 6px;
   --radius-ctl: 8px;
   --radius-card: 10px;
-  --radius-panel: 12px;
   --radius-pill: 999px;
-
-  --card-shadow: none;
 
   // 代码块 / 编辑器（亮色主题用浅色代码面）
   --code-bg: #fafbfc;
@@ -77,12 +64,6 @@
   --code-border: #e3e6ea;
   --code-text: #24292f;
   --code-muted: #8a9099;
-  --code-active-line: #f1f5fd;
-  --code-keyword: #8250df;
-  --code-string: #0a3069;
-  --code-number: #0550ae;
-  --code-comment: #8a9099;
-  --code-function: #6639ba;
 
   // 差异对比语义色（旧值/新值/行着色），暗色块中单独翻转
   --diff-old-text: #c63f2c;
@@ -103,20 +84,14 @@
   // 对齐 IntelliJ 新 UI 暗色三层：外壳（顶栏/侧栏）2B2D30，主内容区（编辑器层）1E1F22，
   // 结构线 393B40，表头/悬停比内容区亮一档（2B2D30 系）
   --shell-bg: #2b2d30;
-  --bg: #1e1f22;
-  --bg-page: #1e1f22;
   --panel-bg: #1e1f22;
   --card: #1e1f22;
   --bg-surface: #1e1f22;
   --bg-subtle: #2b2d30;
-  --elevated-bg: #2b2d30;
-  --elevated-border: #393b40;
 
   --border: #393b40;
   --border-strong: #4a4d52;
-  --divider: #2b2d30;
   --shell-divider: #1e1f22; // 与 IDE 一致：同为亮色区域之间用编辑区底色做凹槽线
-  --row-border: #2b2d30;
   --table-header-bg: #2b2d30;
   --row-hover-bg: #2b2d30;
 
@@ -124,40 +99,32 @@
   --text-primary: #dfe1e5;
   --text-secondary: #bcbec4;
   --text-muted: #9ea0a8;
-  --text-placeholder: #8c9197;
   --text-disabled: #6f737a;
 
   --primary: #3b77f1;
-  --primary-hover: #5a8df5;
+  --on-primary: #ffffff;
   --primary-bg: #22305c;
   --primary-border: rgba(96, 132, 222, 0.45);
   --link: #7c8fd8;
   --link-hover: #9aa9e6;
-  --brand-soft-bg: #22305c;
-  --brand-soft-fg: #7c8fd8;
   --success: #34a853;
   --success-bg: rgba(52, 168, 83, 0.16);
   --warning: #d9a93b;
-  --warn: #d9a93b;
   --warning-bg: rgba(217, 169, 59, 0.14);
   --danger: #e8705c;
-  --error: #e8705c;
   --error-bg: rgba(232, 84, 63, 0.16);
   --violet: #7b6fd0;
   --accent-green: #34a853;
   --accent-amber: #d9a93b;
 
-  --nav-active-bg: #2b3942;
-  --nav-active-fg: #8fc4e0;
   --nav-hover-bg: #393b40;
+  --nav-active-bg: #43474e;
+  --nav-active-icon: #5a8df5;
 
   --radius-badge: 6px;
   --radius-ctl: 8px;
   --radius-card: 10px;
-  --radius-panel: 12px;
   --radius-pill: 999px;
-
-  --card-shadow: none;
 
   // 代码块 / 编辑器（IDE 内联代码块实测色 #303236，比内容区亮一档）
   --code-bg: #303236;
@@ -165,12 +132,6 @@
   --code-border: #393b40;
   --code-text: #dfe1e5;
   --code-muted: #8c9197;
-  --code-active-line: #2b2d30;
-  --code-keyword: #c792ea;
-  --code-string: #a5d6a7;
-  --code-number: #f2b880;
-  --code-comment: #6e767d;
-  --code-function: #82aaff;
 
   // 差异对比语义色（暗色：提高 tint 透明度、文字换亮色阶）
   --diff-old-text: #f08171;
@@ -350,20 +311,12 @@ p {
   min-height: 0;
 }
 
-.cp {
-  cursor: pointer;
-}
-
 .mt-8 {
   margin-top: 8px;
 }
 
 .mt-12 {
   margin-top: 12px;
-}
-
-.mt-16 {
-  margin-top: 16px;
 }
 
 .mb-12 {
@@ -376,14 +329,6 @@ p {
 
 .ml-8 {
   margin-left: 8px;
-}
-
-.ml-16 {
-  margin-left: 16px;
-}
-
-.mr-8 {
-  margin-right: 8px;
 }
 
 // 日志/ID/代码等宽字体
@@ -542,56 +487,73 @@ p {
   transform: translateY(-4px);
 }
 
-// ===== 侧边栏菜单（对齐参考设计：37px 行高 + 实底圆角选中块，无分组标题） =====
-// 字号 14px / 常规字距，贴近参考图的菜单文字观感
+// ===== 侧边栏菜单（对标 EmonLens：中文分组标题 + 34px 行高 + 中性实底选中块） =====
+// 行高 34px + 上下各 5px 外边距：相邻项的上下 margin 折叠，实际视觉空隙 5px（EmonLens 同值）
 
 .side-menu {
-  padding: 3px 0 8px;
+  padding: 4px 0 8px;
+}
+
+// 分组标题：中文小字 + 极轻字距，只做分隔标签，不参与 hover/高亮
+// 只覆盖 naive 未声明的属性：它的 .n-menu .n-menu-item-group .n-menu-item-group-title
+// 权重更高（36px 行高 + 上下 6px 外边距），分组间距由那套几何决定，EmonLens 同样如此
+.side-menu .n-menu-item-group-title {
+  padding: 0 12px !important;
+  box-sizing: border-box;
+  // 中文没有大小写，12px 比拉丁大写 11px 更接近参考的字重观感（11px 汉字偏小、发虚）
+  font-size: 12px !important;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--text-muted) !important;
 }
 
 .side-menu:not(.n-menu--collapsed) .n-menu-item {
-  height: 37px;
-  margin: 2px 7px;
+  height: 34px;
+  margin: 5px 10px;
   border-radius: var(--radius-ctl);
 }
 
 .side-menu:not(.n-menu--collapsed) .n-menu-item-content {
   border-radius: var(--radius-ctl);
-  padding-left: 8px !important;
+  padding-left: 12px !important;
 }
 
 .side-menu .n-menu-item-content .n-icon {
-  font-size: 18px;
+  font-size: 16px;
 }
 
-// 中文标签在 14px 下的视觉体积约等于拉丁 17-18px（参考图实际是 13.5-14px 拉丁），
-// 取 13px 与全站正文基准一致，视觉量级也与参考图对齐
+// 中文标签在 13px 下的视觉体积与全站正文一致；选中靠字重加粗，不再靠放大字号
 .side-menu:not(.n-menu--collapsed) .n-menu-item-content-header {
   font-size: 13px;
   font-weight: 500;
   letter-spacing: normal;
 }
 
-// hover：低饱和底
-.side-menu:not(.n-menu--collapsed) .n-menu-item-content:hover {
+// hover：低饱和中性底
+// naive 把 hover/选中底色画在 .n-menu-item-content::before 上（inset: 0 8px），
+// 元素自身的 background 遮不住它，所以这里直接覆盖 ::before，让两侧底色同源于 --nav-*
+.side-menu:not(.n-menu--collapsed) .n-menu-item-content:hover,
+.side-menu:not(.n-menu--collapsed) .n-menu-item-content:hover::before {
   background: var(--nav-hover-bg) !important;
   color: var(--text-primary) !important;
 }
 
-// 选中：实底圆角块（亮色浅蓝底 + 蓝字；暗色板岩底 + 浅钢蓝字）
+// 选中：中性实底圆角块 + 深色字（亮色浅灰 / 暗色板岩），主色只落在图标上
 .side-menu:not(.n-menu--collapsed) .n-menu-item-content--selected,
-.side-menu:not(.n-menu--collapsed) .n-menu-item-content--selected:hover {
+.side-menu:not(.n-menu--collapsed) .n-menu-item-content--selected:hover,
+.side-menu:not(.n-menu--collapsed) .n-menu-item-content--selected::before,
+.side-menu:not(.n-menu--collapsed) .n-menu-item-content--selected:hover::before {
   background: var(--nav-active-bg) !important;
-  color: var(--nav-active-fg) !important;
+  color: var(--text-primary) !important;
 }
 
 .side-menu:not(.n-menu--collapsed) .n-menu-item-content--selected .n-menu-item-content-header {
-  color: var(--nav-active-fg) !important;
+  color: var(--text-primary) !important;
   font-weight: 600;
 }
 
 .side-menu:not(.n-menu--collapsed) .n-menu-item-content--selected .n-icon {
-  color: var(--nav-active-fg);
+  color: var(--nav-active-icon);
 }
 
 // ===== render 函数使用的类（h() 创建的元素不带 scoped 属性，必须全局定义）=====
@@ -649,14 +611,6 @@ p {
   }
 }
 
-.ds-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 500;
-  color: var(--text);
-}
-
 .ds-icon {
   color: var(--text-muted);
 }
@@ -686,12 +640,6 @@ p {
   white-space: nowrap;
 }
 
-.col-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
 .col-tag {
   padding: 1px 8px;
   font-size: 12px;
@@ -700,12 +648,6 @@ p {
   background: var(--warning-bg);
   color: var(--warning);
   white-space: nowrap;
-}
-
-.detail-text {
-  font-size: 12px;
-  color: var(--text-secondary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 .pct-cell {

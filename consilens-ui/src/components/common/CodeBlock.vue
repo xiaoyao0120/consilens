@@ -1,29 +1,13 @@
 <script setup>
-import { computed, ref } from "vue";
 import { useMessage } from "naive-ui";
 
 const props = defineProps({
   content: { type: String, default: "" },
   label: { type: String, default: "" },
   maxHeight: { type: Number, default: 360 },
-  // >0 时超过行数默认折叠，可展开全部
-  collapseLines: { type: Number, default: 0 },
 });
 
 const message = useMessage();
-const expanded = ref(false);
-
-// .code-body 行高（px）：折叠高度按行数估算，样式里通过同一 CSS 变量取值，避免两处漂移
-const BODY_LINE_HEIGHT = 19; // 12px 字号 × 1.6 行高
-
-const lineCount = computed(() => (props.content ? props.content.split("\n").length : 0));
-const collapsible = computed(
-  () => props.collapseLines > 0 && lineCount.value > props.collapseLines
-);
-const bodyMaxHeight = computed(() => {
-  if (!collapsible.value || expanded.value) return props.maxHeight;
-  return Math.min(props.maxHeight, props.collapseLines * BODY_LINE_HEIGHT);
-});
 
 async function copyAll() {
   if (!navigator.clipboard) {
@@ -44,18 +28,11 @@ async function copyAll() {
   <div class="code-block">
     <div class="code-head">
       <span class="code-label">{{ label }}</span>
-      <span v-if="collapsible" class="code-meta">{{ lineCount }} 行</span>
       <div class="code-actions">
-        <button v-if="collapsible" type="button" class="code-btn" @click="expanded = !expanded">
-          {{ expanded ? "收起" : "展开全部" }}
-        </button>
         <button type="button" class="code-btn" @click="copyAll">复制</button>
       </div>
     </div>
-    <pre class="code-body" :style="{ maxHeight: bodyMaxHeight + 'px', '--code-line-height': BODY_LINE_HEIGHT + 'px' }">{{ content }}</pre>
-    <div v-if="collapsible && !expanded" class="code-foot" @click="expanded = true">
-      显示全部 {{ lineCount }} 行
-    </div>
+    <pre class="code-body" :style="{ maxHeight: maxHeight + 'px' }">{{ content }}</pre>
   </div>
 </template>
 
@@ -80,12 +57,6 @@ async function copyAll() {
   font-size: 12px;
   font-weight: 500;
   color: var(--code-text);
-}
-
-.code-meta {
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11px;
-  color: var(--code-muted);
 }
 
 .code-actions {
@@ -115,21 +86,8 @@ async function copyAll() {
   overflow: auto;
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
-  line-height: var(--code-line-height, 1.6);
+  line-height: 1.6;
   color: var(--code-text);
   white-space: pre;
-}
-
-.code-foot {
-  padding: 8px 0;
-  text-align: center;
-  font-size: 12px;
-  color: var(--code-muted);
-  border-top: 1px solid var(--code-border);
-  cursor: pointer;
-
-  &:hover {
-    color: var(--code-text);
-  }
 }
 </style>
