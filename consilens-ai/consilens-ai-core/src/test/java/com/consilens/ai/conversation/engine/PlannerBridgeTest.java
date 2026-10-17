@@ -9,6 +9,7 @@ import com.consilens.ai.session.model.AiSession;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -68,6 +69,20 @@ class PlannerBridgeTest {
         assertEquals(TurnDecision.Type.MESSAGE, decision.getType());
         assertTrue(decision.getMessage().contains("模板") || decision.getMessage().contains("template"));
         assertTrue(decision.getMessage().contains("source:"));
+    }
+
+    @Test
+    void shouldLoadFallbackTemplateFromClasspathResource() {
+        PlannerBridge fallbackBridge = new PlannerBridge(new ExampleTemplateStore(List.of()));
+        PlannerResult result = PlannerResult.builder()
+                .type(PlannerType.CHAT)
+                .build();
+
+        TurnDecision decision = fallbackBridge.toTurnDecision(result, context("给我一个模板"), assembler);
+
+        assertEquals(TurnDecision.Type.MESSAGE, decision.getType());
+        assertTrue(decision.getMessage().contains("jdbc:mysql://HOST:3306/DB"));
+        assertTrue(decision.getMessage().contains("jdbc:postgresql://HOST:5432/DB"));
     }
 
     @Test

@@ -11,12 +11,12 @@ import com.consilens.ai.runtime.intent.IntentRouter;
 import com.consilens.ai.session.model.AiSession;
 import com.consilens.ai.execution.model.ConfigGenerationRequest;
 
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 
@@ -26,8 +26,7 @@ import java.util.regex.Matcher;
 public class DefaultTurnPlanner implements TurnPlanner {
 
     private static final String CONFIG_REQUEST_KEY = "configRequest";
-    private static final List<String> CONNECTOR_TYPES = Arrays.asList(
-            "mysql", "postgresql", "postgres", "oracle", "clickhouse", "sqlserver", "starrocks", "doris");
+    private static final Set<String> CONNECTOR_TYPES = SupportedConnectors.types();
     private static final Pattern KEY_PATTERN = Pattern.compile("(?i)(\\bkeys?\\b|\\bprimary\\s+key\\b|\\bpk\\b|主键|keys\\s*:)");
     private static final Pattern SQL_PATTERN = Pattern.compile("(?i)(\\bselect\\b|\\bwith\\b|sql\\s*:)");
     private static final Pattern JOIN_PATTERN = Pattern.compile("(?i)(\\bjoin\\b|关联)");

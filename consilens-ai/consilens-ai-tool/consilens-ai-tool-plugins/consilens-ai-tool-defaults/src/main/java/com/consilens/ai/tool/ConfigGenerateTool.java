@@ -1,9 +1,12 @@
 package com.consilens.ai.tool;
 
+import com.consilens.core.database.dialect.DialectFactory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.extern.slf4j.Slf4j;
+
+import java.util.Optional;
 
 /**
  * Tool that generates a Consilens YAML configuration file for a given pair of database tables.
@@ -54,12 +57,12 @@ public class ConfigGenerateTool implements Tool {
     public ToolResult execute(JsonNode input, ToolContext context) {
         String sourceUrl = input.path("source_url").asText();
         String sourceUsername = input.path("source_username").asText();
-        String sourceType = input.path("source_type").asText(inferType(sourceUrl));
+        String sourceType = input.path("source_type").asText();
         String sourcePasswordEnv = input.path("source_password_env").asText("SOURCE_PASSWORD");
         String sourceTable = input.path("source_table").asText();
         String targetUrl = input.path("target_url").asText();
         String targetUsername = input.path("target_username").asText();
-        String targetType = input.path("target_type").asText(inferType(targetUrl));
+        String targetType = input.path("target_type").asText();
         String targetPasswordEnv = input.path("target_password_env").asText("TARGET_PASSWORD");
         String targetTable = input.path("target_table").asText();
         String primaryKeys = input.path("primary_keys").asText();
@@ -68,6 +71,21 @@ public class ConfigGenerateTool implements Tool {
         if (sourceUrl.isEmpty() || sourceUsername.isEmpty() || targetUrl.isEmpty() || targetUsername.isEmpty()
                 || sourceTable.isEmpty() || targetTable.isEmpty() || primaryKeys.isEmpty()) {
             return ToolResult.failure("Required parameters: source_url, source_username, source_table, target_url, target_username, target_table, primary_keys");
+        }
+
+        if (sourceType.isBlank()) {
+            Optional<String> inferred = inferType(sourceUrl);
+            if (inferred.isEmpty()) {
+                return ToolResult.failure("Cannot infer source connector type from source_url; please provide source_type.");
+            }
+            sourceType = inferred.get();
+        }
+        if (targetType.isBlank()) {
+            Optional<String> inferred = inferType(targetUrl);
+            if (inferred.isEmpty()) {
+                return ToolResult.failure("Cannot infer target connector type from target_url; please provide target_type.");
+            }
+            targetType = inferred.get();
         }
 
         String yaml = buildYaml(sourceType, sourceUrl, sourceUsername, sourcePasswordEnv, sourceTable,
@@ -140,26 +158,17 @@ public class ConfigGenerateTool implements Tool {
         return sb.toString();
     }
 
-    private String inferType(String url) {
-        if (url == null) {
-            return "";
+    private Optional<String> inferType(String url) {
+        if (url == null || url.isBlank()) {
+            return Optional.empty();
         }
-        String lower = url.toLowerCase();
-        if (lower.startsWith("jdbc:postgresql:")) {
-            return "postgresql";
+        String connectorType = DialectFactory.connectorTypeFromJdbcUrl(url);
+        // 只做 URL→方言的单一来源推断，不要求该方言已注册到当前 classpath：
+        // 生成配置的机器未必装有目标方言插件，注册校验应在执行阶段进行
+        if ("unknown".equals(connectorType)) {
+            return Optional.empty();
         }
-        if (lower.startsWith("jdbc:mysql:")) {
-            return "mysql";
-        }
-        if (lower.startsWith("jdbc:oracle:")) {
-            return "oracle";
-        }
-        if (lower.startsWith("jdbc:sqlserver:")) {
-            return "sqlserver";
-        }
-        int start = lower.indexOf(':');
-        int end = start < 0 ? -1 : lower.indexOf(':', start + 1);
-        return start >= 0 && end > start ? lower.substring(start + 1, end) : "";
+        return Optional.of(connectorType);
     }
 
     private String quote(String value) {

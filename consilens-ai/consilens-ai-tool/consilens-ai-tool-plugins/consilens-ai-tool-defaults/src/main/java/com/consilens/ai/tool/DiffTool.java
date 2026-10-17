@@ -1,6 +1,9 @@
 package com.consilens.ai.tool;
 
+import com.consilens.connector.api.DatabaseDialect;
+import com.consilens.connector.api.DatabaseDialects;
 import com.consilens.core.algorithm.LocalDiffEngine;
+import com.consilens.core.database.dialect.DialectFactory;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -27,7 +30,8 @@ import java.util.UUID;
 public class DiffTool implements Tool {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private static final int DEFAULT_LIMIT = 10000;
+    private static final int DEFAULT_LIMIT = 10_000;
+    private static final String SELECT_ALL_FROM = "SELECT * FROM ";
 
     @Override
     public String getName() {
@@ -134,10 +138,15 @@ public class DiffTool implements Tool {
         List<Object[]> rows = new ArrayList<>();
         List<String> allColumns = new ArrayList<>();
 
+        DatabaseDialect dialect = resolveDialect(url);
+        String quotedTable = dialect.getCapabilityProvider().quote(List.of(table.split("\\.")));
+        String sql = SELECT_ALL_FROM + quotedTable
+                + " " + dialect.getSqlQueryGenerator().getLimitClause(0, limit);
+
         try (Connection conn = DriverManager.getConnection(url, username, password);
              Statement stmt = conn.createStatement()) {
             stmt.setMaxRows(limit);
-            try (ResultSet rs = stmt.executeQuery("SELECT * FROM " + table)) {
+            try (ResultSet rs = stmt.executeQuery(sql)) {
                 ResultSetMetaData meta = rs.getMetaData();
                 int colCount = meta.getColumnCount();
                 for (int i = 1; i <= colCount; i++) {
@@ -153,6 +162,15 @@ public class DiffTool implements Tool {
             }
         }
         return new TableData(rows, allColumns);
+    }
+
+    private DatabaseDialect resolveDialect(String jdbcUrl) {
+        String connectorType = DialectFactory.connectorTypeFromJdbcUrl(jdbcUrl);
+        if ("unknown".equals(connectorType)) {
+            throw new IllegalArgumentException(
+                    "Cannot determine database dialect from JDBC URL: " + jdbcUrl);
+        }
+        return DatabaseDialects.require(connectorType);
     }
 
     private static class TableData {

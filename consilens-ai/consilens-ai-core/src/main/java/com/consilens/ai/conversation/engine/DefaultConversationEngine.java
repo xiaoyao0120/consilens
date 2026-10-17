@@ -23,9 +23,10 @@ import com.consilens.ai.session.model.PendingQuestionState;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -35,9 +36,6 @@ import java.util.stream.Collectors;
  */
 public class DefaultConversationEngine implements ConversationEngine {
 
-    private static final Set<String> SUPPORTED_CONNECTORS = Set.of(
-            "mysql", "postgresql", "oracle", "sqlserver", "presto",
-            "clickhouse", "trino", "tidb", "starrocks", "doris");
     private static final Pattern SOURCE_TYPE_PATTERN = Pattern.compile("(?i)\\bsourceType\\s*[:=]\\s*([a-zA-Z0-9_-]+)");
     private static final Pattern TARGET_TYPE_PATTERN = Pattern.compile("(?i)\\btargetType\\s*[:=]\\s*([a-zA-Z0-9_-]+)");
     private static final Pattern SOURCE_TABLE_PATTERN = Pattern.compile("(?i)\\bsourceTable\\s*[:=]\\s*([^\\n,]+)");
@@ -53,6 +51,10 @@ public class DefaultConversationEngine implements ConversationEngine {
     private static final Pattern YAML_TARGET_RESOURCE_PATTERN = Pattern.compile("(?is)target\\s*:\\s*.*?resource\\s*:\\s*.*?\\b(name|path|query)\\s*:");
     private static final Pattern YAML_KEYS_PATTERN = Pattern.compile("(?is)comparison\\s*:\\s*.*?keys\\s*:\\s*.*?-\\s*[^\\n]+");
     private static final String VALIDATION_MARKER = "\n\n[输入校验]\n";
+    // TODO: AiTaskResult does not expose a structured error code yet, so these markers are a
+    // best-effort mapping from English summary text. Keep the mapping in this single place;
+    // replace it with a structured error-code field once the task runtime propagates one.
+    private static final Map<String, ConversationErrorCode> ERROR_CODE_MARKERS = createErrorCodeMarkers();
 
     private final AiSessionStore sessionStore;
     private final TurnPlanner turnPlanner;
@@ -409,9 +411,9 @@ public class DefaultConversationEngine implements ConversationEngine {
             return;
         }
         String normalized = value.trim().toLowerCase();
-        if (!SUPPORTED_CONNECTORS.contains(normalized)) {
+        if (!SupportedConnectors.supports(normalized)) {
             violations.add("- `" + label + "` 不在支持列表："
-                    + String.join(", ", SUPPORTED_CONNECTORS) + "。");
+                    + SupportedConnectors.options() + "。");
         }
     }
 
@@ -566,16 +568,21 @@ public class DefaultConversationEngine implements ConversationEngine {
             return ConversationErrorCode.INTERNAL_ERROR;
         }
         String normalized = message.toLowerCase();
-        if (normalized.contains("no task registered")) {
-            return ConversationErrorCode.COMMAND_UNSUPPORTED;
-        }
-        if (normalized.contains("no current config") || normalized.contains("config artifact")) {
-            return ConversationErrorCode.CONFIG_NOT_FOUND;
-        }
-        if (normalized.contains("approval")) {
-            return ConversationErrorCode.APPROVAL_REQUIRED;
+        for (Map.Entry<String, ConversationErrorCode> marker : ERROR_CODE_MARKERS.entrySet()) {
+            if (normalized.contains(marker.getKey())) {
+                return marker.getValue();
+            }
         }
         return ConversationErrorCode.INTERNAL_ERROR;
+    }
+
+    private static Map<String, ConversationErrorCode> createErrorCodeMarkers() {
+        Map<String, ConversationErrorCode> markers = new LinkedHashMap<>();
+        markers.put("no task registered", ConversationErrorCode.COMMAND_UNSUPPORTED);
+        markers.put("no current config", ConversationErrorCode.CONFIG_NOT_FOUND);
+        markers.put("config artifact", ConversationErrorCode.CONFIG_NOT_FOUND);
+        markers.put("approval", ConversationErrorCode.APPROVAL_REQUIRED);
+        return Collections.unmodifiableMap(markers);
     }
 
     private SessionSnapshot snapshot(AiSession session) {

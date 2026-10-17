@@ -7,6 +7,9 @@ import com.consilens.ai.conversation.engine.model.PlannerType;
 import com.consilens.ai.conversation.engine.model.QuestionSpec;
 import com.consilens.ai.conversation.engine.model.TurnDecision;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -17,6 +20,9 @@ import java.util.ArrayList;
  * Converts structured planner output to runtime turn decisions.
  */
 public class PlannerBridge {
+
+    private static final String FALLBACK_TEMPLATE_RESOURCE =
+            "examples/fallback/fallback-mysql-to-postgresql.yaml";
 
     private final ExampleTemplateStore exampleTemplateStore;
 
@@ -110,39 +116,23 @@ public class PlannerBridge {
                     + best.getContent().trim()
                     + "\n\n可以用 `/use-config <path>` 加载已有配置文件，或直接描述你的比对目标让 AI 生成配置。";
         }
-        return "可以，先给你一个可改的模板（YAML）：\n"
-                + "source:\n"
-                + "  type: mysql\n"
-                + "  name: source-mysql\n"
-                + "  connection:\n"
-                + "    url: jdbc:mysql://HOST:3306/DB\n"
-                + "    username: USER\n"
-                + "    password: PASS\n"
-                + "  resource:\n"
-                + "    type: table\n"
-                + "    name: my_table\n"
-                + "target:\n"
-                + "  type: postgresql\n"
-                + "  name: target-postgresql\n"
-                + "  connection:\n"
-                + "    url: jdbc:postgresql://HOST:5432/DB\n"
-                + "    username: USER\n"
-                + "    password: PASS\n"
-                + "  resource:\n"
-                + "    type: table\n"
-                + "    name: my_table\n"
-                + "comparison:\n"
-                + "  keys:\n"
-                + "    source:\n"
-                + "      - id\n"
-                + "    target:\n"
-                + "      - id\n"
-                + "strategy:\n"
-                + "  mode: checksum\n"
-                + "result:\n"
-                + "  sinks:\n"
-                + "    - format: console\n"
-                + "      type: result";
+        String fallbackTemplate = loadFallbackTemplate();
+        if (fallbackTemplate == null) {
+            return "配置模板资源不可用，请检查安装包完整性后重试。";
+        }
+        return "可以，先给你一个可改的模板（YAML）：\n" + fallbackTemplate;
+    }
+
+    private String loadFallbackTemplate() {
+        try (InputStream in = PlannerBridge.class.getClassLoader()
+                .getResourceAsStream(FALLBACK_TEMPLATE_RESOURCE)) {
+            if (in == null) {
+                return null;
+            }
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8).trim();
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     private String firstNonBlank(String... values) {
@@ -327,7 +317,7 @@ public class PlannerBridge {
     }
 
     private String connectorOptions() {
-        return "mysql, postgresql, oracle, sqlserver, clickhouse, trino, tidb, starrocks, doris, presto";
+        return SupportedConnectors.options();
     }
 
     private boolean isTemplateRequest(String rawInput) {

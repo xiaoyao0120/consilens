@@ -65,6 +65,27 @@ class ConfigGenerateToolTest {
     }
 
     @Test
+    void shouldFailWhenConnectorTypeCannotBeInferred() {
+        com.fasterxml.jackson.databind.node.ObjectNode input = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+        input.put("source_url", "jdbc:unknown://source-host/db");
+        input.put("source_username", "root");
+        input.put("source_table", "db.orders");
+        input.put("target_url", "jdbc:mysql://target-host:3306/mydb");
+        input.put("target_username", "root");
+        input.put("target_table", "mydb.orders");
+        input.put("primary_keys", "id");
+
+        ToolContext context = ToolContext.builder()
+                .conversation(new com.consilens.ai.chat.ConversationContext())
+                .build();
+
+        ToolResult result = tool.execute(input, context);
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getError()).contains("Cannot infer source connector type");
+    }
+
+    @Test
     void shouldHaveValidInputSchema() {
         JsonNode schema = tool.getInputSchema();
         assertThat(schema).isNotNull();
