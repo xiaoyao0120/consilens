@@ -34,16 +34,4 @@ public final class ServiceLoaderUtils {
         log.debug("Loaded {} providers for {}", result.size(), serviceType.getName());
         return result;
     }
-
-    public static <S> List<S> loadAllStrict(Class<S> serviceType) {
-        return loadAllStrict(serviceType, Thread.currentThread().getContextClassLoader());
-    }
-
-    public static <S> List<S> loadAllStrict(Class<S> serviceType, ClassLoader classLoader) {
-        List<S> result = new ArrayList<>();
-        for (S provider : ServiceLoader.load(serviceType, classLoader)) {
-            result.add(provider);
-        }
-        return result;
-    }
 }

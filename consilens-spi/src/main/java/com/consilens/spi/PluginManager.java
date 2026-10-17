@@ -1,7 +1,5 @@
 package com.consilens.spi;
 
-import java.util.Arrays;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -38,15 +36,6 @@ public final class PluginManager<K, P, T> {
         return new PluginManager<>(registry, factory, configuredCreator);
     }
 
-    @SafeVarargs
-    public static <K, P, T> PluginManager<K, P, T> of(Function<P, K> keyExtractor,
-                                                      Function<P, T> singletonCreator,
-                                                      BiFunction<P, Map<String, ?>, T> configuredCreator,
-                                                      P... providers) {
-        KeyedRegistry<K, P> registry = KeyedRegistry.from(Arrays.asList(providers), keyExtractor, "test");
-        return from(registry, singletonCreator, configuredCreator);
-    }
-
     public T get(K key) {
         return factory.get(key);
     }
@@ -78,20 +67,8 @@ public final class PluginManager<K, P, T> {
         return registry.supports(key);
     }
 
-    public P getProvider(K key) {
-        return registry.get(key);
-    }
-
-    public P findProvider(K key) {
-        return registry.find(key);
-    }
-
     public Set<K> getSupportedKeys() {
         return registry.getSupportedKeys();
-    }
-
-    public Collection<P> getSupportedProviders() {
-        return registry.providers();
     }
 
     public Set<K> getLoadedKeys() {
@@ -104,9 +81,5 @@ public final class PluginManager<K, P, T> {
 
     public void clearCache() {
         factory.clear();
-    }
-
-    public void evict(K key) {
-        factory.evict(key);
     }
 }
