@@ -2,10 +2,8 @@ package com.consilens.cli.ai.runtime;
 
 import com.consilens.ai.session.AiSessionStore;
 import com.consilens.ai.session.model.AiSession;
-import com.fasterxml.jackson.annotation.JsonInclude;
+import com.consilens.cli.config.CliObjectMappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -28,10 +26,7 @@ public class FileAiSessionStore implements AiSessionStore {
 
     public FileAiSessionStore(AiRuntimePaths paths) {
         this.paths = paths;
-        this.mapper = new ObjectMapper()
-                .registerModule(new JavaTimeModule())
-                .setSerializationInclusion(JsonInclude.Include.NON_NULL)
-                .enable(SerializationFeature.INDENT_OUTPUT);
+        this.mapper = CliObjectMappers.jsonWithJavaTimeIndented();
     }
 
     @Override

@@ -9,6 +9,7 @@ import com.consilens.ai.session.AiArtifactStore;
 import com.consilens.ai.session.model.ArtifactRef;
 import com.consilens.ai.session.model.ArtifactType;
 import com.consilens.cli.ai.runtime.AiRuntimePaths;
+import com.consilens.cli.config.CliObjectMappers;
 import com.consilens.cli.config.ConfigurationManager;
 import com.consilens.cli.model.CliConfiguration;
 import com.consilens.cli.model.CliDiffResult;
@@ -39,7 +40,7 @@ public class DefaultDiffCapability implements DiffCapability {
     private final ObjectMapper objectMapper;
 
     public DefaultDiffCapability(AiArtifactStore artifactStore, AiRuntimePaths runtimePaths) {
-        this(new ConfigurationManager(), new DiffService(), artifactStore, runtimePaths, new ObjectMapper());
+        this(new ConfigurationManager(), new DiffService(), artifactStore, runtimePaths, CliObjectMappers.json());
     }
 
     DefaultDiffCapability(ConfigurationManager configurationManager,

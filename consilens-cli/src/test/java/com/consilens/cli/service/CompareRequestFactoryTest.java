@@ -109,7 +109,6 @@ class CompareRequestFactoryTest {
                 .bisectionFactor(4)
                 .bisectionThreshold(1000L)
                 .batchSize(100)
-                .enableProfiling(false)
                 .maxDifferences(10L)
                 .localCompare(LocalCompareConfig.builder().mode("full").build())
                 .validateUniqueKeys(true)
@@ -133,7 +132,6 @@ class CompareRequestFactoryTest {
                 .bisectionFactor(4)
                 .bisectionThreshold(1000L)
                 .batchSize(100)
-                .enableProfiling(false)
                 .maxDifferences(10L)
                 .localCompare(LocalCompareConfig.builder().mode("full").build())
                 .build());
@@ -156,7 +154,6 @@ class CompareRequestFactoryTest {
                 .bisectionFactor(8)
                 .bisectionThreshold(12_000L)
                 .batchSize(2000)
-                .enableProfiling(true)
                 .maxDifferences(123L)
                 .localCompare(LocalCompareConfig.builder().mode("row-hash").build())
                 .build());
@@ -168,14 +165,12 @@ class CompareRequestFactoryTest {
 
         assertEquals(List.of(
                         ComparePlanTypes.PUSHDOWN_CHECKSUM,
-                        ComparePlanTypes.KEY_HASH,
                         ComparePlanTypes.STREAMING_MERGE),
                 request.getStrategyPreference().getPreferredPlans());
         assertEquals(Boolean.TRUE, request.getStrategyPreference().getAllowFallback());
         assertEquals("xor", request.getExecutionOptions().getChecksumAlgorithm());
         assertEquals(8, request.getExecutionOptions().getBisectionFactor());
         assertEquals(12_000L, request.getExecutionOptions().getBisectionThreshold());
-        assertEquals(Boolean.TRUE, request.getExecutionOptions().getEnableProfiling());
         assertEquals("row-hash", request.getExecutionOptions().getLocalCompareMode());
         // CLI 走开放档：重复键按多重集语义比较（严格档需显式开启）
         assertEquals(Boolean.FALSE, request.getExecutionOptions().getValidateUniqueKeys());

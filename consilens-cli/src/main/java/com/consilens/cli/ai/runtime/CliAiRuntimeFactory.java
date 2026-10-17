@@ -16,7 +16,6 @@ import com.consilens.ai.conversation.engine.TaskActionExecutor;
 import com.consilens.ai.conversation.service.ConversationRuntimeAdapter;
 import com.consilens.ai.conversation.service.DefaultConversationService;
 import com.consilens.ai.spi.ToolRegistryFactory;
-import com.consilens.ai.runtime.orchestrator.AiConversationOrchestrator;
 import com.consilens.ai.runtime.orchestrator.AiConversationRuntime;
 import com.consilens.ai.session.AiArtifactStore;
 import com.consilens.ai.session.AiMemoryStore;

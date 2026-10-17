@@ -24,11 +24,11 @@ import com.consilens.ai.session.AiSessionStore;
 import com.consilens.ai.session.model.AiSession;
 import com.consilens.ai.session.model.ArtifactRef;
 import com.consilens.ai.session.model.ArtifactType;
+import com.consilens.cli.config.CliObjectMappers;
 import com.consilens.cli.model.CliConfiguration;
 import com.consilens.cli.model.ConnectionConfig;
 import com.consilens.sink.api.model.SinkConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 import java.util.List;
 import java.util.Map;
@@ -67,7 +67,7 @@ public class RunDiffTask extends AbstractAiTask implements AiTask {
         this.diffCapability = diffCapability;
         this.diagnoseCapability = diagnoseCapability;
         this.approvalService = approvalService;
-        this.yamlMapper = new ObjectMapper(new YAMLFactory());
+        this.yamlMapper = CliObjectMappers.yaml();
     }
 
     @Override

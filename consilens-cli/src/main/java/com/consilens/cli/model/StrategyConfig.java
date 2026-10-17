@@ -42,10 +42,6 @@ public class StrategyConfig {
     private Integer batchSize = 1000;
 
     @Builder.Default
-    @JsonProperty("enableProfiling")
-    private Boolean enableProfiling = false;
-
-    @Builder.Default
     @JsonProperty("localCompare")
     private LocalCompareConfig localCompare = LocalCompareConfig.builder().mode("full").build();
 

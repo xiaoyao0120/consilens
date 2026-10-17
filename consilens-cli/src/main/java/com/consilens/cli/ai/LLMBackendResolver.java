@@ -15,6 +15,14 @@ import java.util.function.Supplier;
  */
 public class LLMBackendResolver {
 
+    static final String DEFAULT_BACKEND = "noop";
+    static final String DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+    static final String OLLAMA_BASE_URL_ENV = "OLLAMA_BASE_URL";
+    static final String OPENAI_API_KEY_ENV = "OPENAI_API_KEY";
+    static final String DEEPSEEK_API_KEY_ENV = "DEEPSEEK_API_KEY";
+    static final String API_KEY_ENV_OVERRIDE_ENV = "CONSILENS_AI_API_KEY_ENV";
+    static final String BACKEND_DEFAULTS_SOURCE = "backend-defaults.json";
+
     private final Function<String, String> envProvider;
     private final Supplier<Optional<AiBackendDefaults>> backendDefaultsProvider;
 
@@ -60,7 +68,7 @@ public class LLMBackendResolver {
                 effective.getBackend(),
                 env("CONSILENS_AI_BACKEND"),
                 defaults == null ? null : defaults.getDefaultBackend(),
-                "noop");
+                DEFAULT_BACKEND);
         AiBackendDefaults.BackendDefaults backendDefaults = defaults == null ? null : defaults.defaultsFor(backend);
 
         String configuredApiKeyEnv = firstNonBlank(
@@ -107,17 +115,21 @@ public class LLMBackendResolver {
 
     private String backendDefaultBaseUrl(String backend) {
         if ("ollama".equalsIgnoreCase(backend)) {
-            return firstNonBlank(env("OLLAMA_BASE_URL"), "http://localhost:11434");
+            return firstNonBlank(env(OLLAMA_BASE_URL_ENV), DEFAULT_OLLAMA_BASE_URL);
         }
         return null;
     }
 
     private String apiKeyEnvName(String backend) {
+        String override = firstNonBlank(env(API_KEY_ENV_OVERRIDE_ENV));
+        if (override != null) {
+            return override;
+        }
         if ("openai".equalsIgnoreCase(backend)) {
-            return "OPENAI_API_KEY";
+            return OPENAI_API_KEY_ENV;
         }
         if ("deepseek".equalsIgnoreCase(backend)) {
-            return "DEEPSEEK_API_KEY";
+            return DEEPSEEK_API_KEY_ENV;
         }
         return null;
     }
@@ -193,7 +205,7 @@ public class LLMBackendResolver {
             return envName;
         }
         if (profileApiKey != null && !profileApiKey.trim().isEmpty()) {
-            return "backend-defaults.json";
+            return BACKEND_DEFAULTS_SOURCE;
         }
         return null;
     }

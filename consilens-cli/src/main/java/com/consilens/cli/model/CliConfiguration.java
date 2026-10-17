@@ -1,9 +1,8 @@
 package com.consilens.cli.model;
 
+import com.consilens.cli.config.CliObjectMappers;
 import com.consilens.cli.model.normalization.NormalizationConfig;
 import com.consilens.cli.model.normalization.TypeNormalizationRule;
-import com.consilens.common.enums.ChecksumAlgorithm;
-import com.consilens.common.enums.ComparisonStrategy;
 import com.consilens.connector.api.DatabaseDialect;
 import com.consilens.connector.api.DatabaseDialects;
 import com.consilens.core.thread.ConcurrencyConfig;
@@ -39,7 +38,7 @@ import java.util.Set;
 @JsonInclude(JsonInclude.Include.NON_DEFAULT)
 public class CliConfiguration {
 
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final ObjectMapper OBJECT_MAPPER = CliObjectMappers.json();
 
     @JsonProperty("source")
     private ConnectionConfig source;
@@ -63,16 +62,6 @@ public class CliConfiguration {
     private ResultConfig result;
 
     @JsonIgnore
-    public ComparisonStrategy getStrategyEnum() {
-        return ComparisonStrategy.fromString(getStrategyMode());
-    }
-
-    @JsonIgnore
-    public ChecksumAlgorithm getAlgorithmEnum() {
-        return ChecksumAlgorithm.fromString(getAlgorithm());
-    }
-
-    @JsonIgnore
     public String getStrategyMode() {
         return strategy != null ? strategy.getMode() : null;
     }
@@ -89,16 +78,6 @@ public class CliConfiguration {
             return true;
         } catch (ValidationException e) {
             return false;
-        }
-    }
-
-    @JsonIgnore
-    public String getValidationError() {
-        try {
-            validate();
-            return null;
-        } catch (ValidationException e) {
-            return e.getMessage();
         }
     }
 
@@ -148,7 +127,6 @@ public class CliConfiguration {
                         .batchSize(1000)
                         .bisectionFactor(4)
                         .bisectionThreshold(10000L)
-                        .enableProfiling(false)
                         .localCompare(LocalCompareConfig.builder().mode("full").build())
                         .build())
                 .result(ResultConfig.builder()
@@ -240,7 +218,6 @@ public class CliConfiguration {
                         .batchSize(5000)
                         .bisectionFactor(4)
                         .bisectionThreshold(50000L)
-                        .enableProfiling(true)
                         .localCompare(LocalCompareConfig.builder().mode("full").build())
                         .build())
                 .concurrency(concurrencyConfig)
@@ -272,16 +249,6 @@ public class CliConfiguration {
         validateResultSinks();
     }
 
-    public void validateDatabaseConnections() throws ValidationException {
-        ValidationFramework.forContext("数据库连接配置")
-                .validate(source, "source", Objects::nonNull, "source 配置不能为空")
-                .validate(target, "target", Objects::nonNull, "target 配置不能为空")
-                .throwIfInvalid();
-
-        source.validate("source");
-        target.validate("target");
-    }
-
     private void validateResultSinks() {
         if (result == null || result.getSinks() == null) {
             return;
@@ -299,11 +266,15 @@ public class CliConfiguration {
                 throw ValidationException.simple("CONFIGURATION_VALIDATION",
                         "result.sinks[" + i + "].properties.type is required for table sinks");
             }
-            if (!"mysql".equals(databaseType) && !"postgresql".equals(databaseType)) {
+            // 方言合法性完全由 SPI 注册表决定：未注册的方言在此抛出明确错误，
+            // 不再维护一份会与 DatabaseDialectProvider 漂移的白名单
+            DatabaseDialect dialect;
+            try {
+                dialect = DatabaseDialects.require(databaseType);
+            } catch (IllegalArgumentException e) {
                 throw ValidationException.simple("CONFIGURATION_VALIDATION",
-                        "result.sinks[" + i + "].properties.type must be mysql or postgresql");
+                        "result.sinks[" + i + "].properties.type is not a registered dialect: " + databaseType);
             }
-            DatabaseDialect dialect = DatabaseDialects.require(databaseType);
             dialect.getTableWriteCompiler();
             validateTableSinkColumns(i, tableSinkConfig, dialect);
         }

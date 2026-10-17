@@ -32,6 +32,24 @@ final class AiConsoleLoop {
     private static final String ANSI_CYAN = "\u001B[36m";
     private static final String ANSI_DIM = "\u001B[2m";
 
+    /** Maximum sessions shown by {@code /sessions}. */
+    private static final int SESSION_LIST_LIMIT = 20;
+    /** Maximum memories listed on the welcome screen. */
+    private static final int WELCOME_MEMORY_LIMIT = 5;
+    /** Maximum memories shown by {@code /memories}. */
+    private static final int MEMORY_LIST_LIMIT = 10;
+    /** Maximum artifacts shown by {@code /artifacts} without a type filter. */
+    private static final int ARTIFACT_LIST_LIMIT = 20;
+    /** Maximum artifacts fetched before filtering by {@code /artifacts <type>}. */
+    private static final int ARTIFACT_FILTER_LIST_LIMIT = 50;
+    /** Maximum summary lines shown in the startup overview. */
+    private static final int SUMMARY_MAX_LINES = 3;
+    /** Maximum characters per summary line before truncation. */
+    private static final int SUMMARY_MAX_WIDTH = 140;
+    /** Number of leading SHA-256 characters shown for an artifact. */
+    private static final int SHORT_SHA_LENGTH = 12;
+    private static final String ELLIPSIS = "...";
+
     private final Supplier<ConversationService> conversationServiceSupplier;
     private final BufferedReader reader;
     private final PrintStream out;
@@ -68,21 +86,38 @@ final class AiConsoleLoop {
     int start(String preferredSessionId, boolean forceNewSession, String initialRequest, AiConsoleStartupOptions startupOptions) throws IOException {
         ConversationService conversationService = conversationServiceSupplier.get();
         String currentSessionId = conversationService.startSession(preferredSessionId, forceNewSession).getSessionId();
+        Integer startupExitCode = runStartupTurns(conversationService, currentSessionId, initialRequest, startupOptions);
+        if (startupExitCode != null) {
+            return startupExitCode;
+        }
+
+        printWelcome(currentSessionId, conversationService);
+        return runInteractiveLoop(conversationService, currentSessionId, startupOptions);
+    }
+
+    private Integer runStartupTurns(ConversationService conversationService,
+                                    String sessionId,
+                                    String initialRequest,
+                                    AiConsoleStartupOptions startupOptions) {
         if (startupOptions != null && startupOptions.hasConfigPath()) {
-            printResponse(currentSessionId, conversationService.executeCommand(useConfigRequest(currentSessionId, startupOptions.getConfigPath())));
+            printResponse(sessionId, conversationService.executeCommand(useConfigRequest(sessionId, startupOptions.getConfigPath())));
         }
 
         if (initialRequest != null && !initialRequest.isBlank()) {
-            ConversationResponse response = submitNaturalInput(conversationService, currentSessionId, initialRequest.trim(), startupOptions);
-            printResponse(currentSessionId, response);
+            ConversationResponse response = submitNaturalInput(conversationService, sessionId, initialRequest.trim(), startupOptions);
+            printResponse(sessionId, response);
             if (!isInteractiveMode()) {
                 return exitCode(response);
             }
         }
+        return null;
+    }
 
-        printWelcome(currentSessionId, conversationService);
+    private int runInteractiveLoop(ConversationService conversationService,
+                                   String currentSessionId,
+                                   AiConsoleStartupOptions startupOptions) throws IOException {
         while (true) {
-            out.print("consilens ai> ");
+            printPrompt();
             String line = reader.readLine();
             if (line == null) {
                 return 0;
@@ -91,7 +126,7 @@ final class AiConsoleLoop {
             if (trimmed.isEmpty()) {
                 continue;
             }
-            if ("/quit".equalsIgnoreCase(trimmed) || "/exit".equalsIgnoreCase(trimmed) || "exit".equalsIgnoreCase(trimmed)) {
+            if (isExitCommand(trimmed)) {
                 return 0;
             }
             if ("/help".equalsIgnoreCase(trimmed)) {
@@ -99,22 +134,22 @@ final class AiConsoleLoop {
                 continue;
             }
             if ("/sessions".equalsIgnoreCase(trimmed)) {
-                printSessions(conversationService.listSessions(20), currentSessionId);
+                printSessions(conversationService.listSessions(SESSION_LIST_LIMIT), currentSessionId);
                 continue;
             }
             if (trimmed.startsWith("/resume")) {
                 String target = trimmed.substring("/resume".length()).trim();
                 if (target.isBlank()) {
-                    out.println("Session ID is required for /resume.");
+                    printUsage("Session ID is required for /resume.");
                     continue;
                 }
                 currentSessionId = conversationService.resumeSession(target).getSessionId();
-                out.println("Resumed session " + currentSessionId + ".");
+                printResumedSession(currentSessionId);
                 continue;
             }
             if ("/new".equalsIgnoreCase(trimmed)) {
                 currentSessionId = conversationService.startSession(null, true).getSessionId();
-                out.println("Started new session " + currentSessionId + ".");
+                printStartedSession(currentSessionId);
                 continue;
             }
             if ("/approve execute".equalsIgnoreCase(trimmed)) {
@@ -140,7 +175,7 @@ final class AiConsoleLoop {
             if (trimmed.startsWith("/save")) {
                 String targetPath = trimmed.substring("/save".length()).trim();
                 if (targetPath.isBlank()) {
-                    out.println("Usage: /save <path>");
+                    printUsage("Usage: /save <path>");
                     continue;
                 }
                 SaveConfigResponse saved = conversationService.saveCurrentConfig(currentSessionId, targetPath);
@@ -148,23 +183,23 @@ final class AiConsoleLoop {
                 continue;
             }
             if ("/memories".equalsIgnoreCase(trimmed)) {
-                printMemories(conversationService.listMemory(currentSessionId, 10), currentSessionId);
+                printMemories(conversationService.listMemory(currentSessionId, MEMORY_LIST_LIMIT), currentSessionId);
                 continue;
             }
             if ("/artifacts".equalsIgnoreCase(trimmed)) {
-                printArtifacts(conversationService.listArtifacts(currentSessionId, 20), currentSessionId);
+                printArtifacts(conversationService.listArtifacts(currentSessionId, ARTIFACT_LIST_LIMIT), currentSessionId);
                 continue;
             }
             if (trimmed.startsWith("/artifacts ")) {
                 String typeFilter = trimmed.substring("/artifacts".length()).trim();
-                printArtifacts(filterArtifacts(conversationService.listArtifacts(currentSessionId, 50), typeFilter),
+                printArtifacts(filterArtifacts(conversationService.listArtifacts(currentSessionId, ARTIFACT_FILTER_LIST_LIMIT), typeFilter),
                         currentSessionId, typeFilter);
                 continue;
             }
             if (trimmed.startsWith("/artifact")) {
                 String artifactId = trimmed.substring("/artifact".length()).trim();
                 if (artifactId.isBlank()) {
-                    out.println("Usage: /artifact <artifact-id>");
+                    printUsage("Usage: /artifact <artifact-id>");
                     continue;
                 }
                 printArtifact(conversationService.getArtifact(artifactId));
@@ -176,7 +211,7 @@ final class AiConsoleLoop {
                 printCommandProgress(trimmed);
                 ConversationCommandRequest request = toCommandRequest(currentSessionId, trimmed);
                 if (request == null) {
-                    out.println("Unknown command. Use /help to see available commands.");
+                    printUnknownCommand();
                     continue;
                 }
                 response = conversationService.executeCommand(request);
@@ -185,6 +220,30 @@ final class AiConsoleLoop {
             }
             printResponse(currentSessionId, response);
         }
+    }
+
+    private void printPrompt() {
+        out.print("consilens ai> ");
+    }
+
+    private boolean isExitCommand(String trimmed) {
+        return "/quit".equalsIgnoreCase(trimmed) || "/exit".equalsIgnoreCase(trimmed) || "exit".equalsIgnoreCase(trimmed);
+    }
+
+    private void printUsage(String message) {
+        out.println(message);
+    }
+
+    private void printResumedSession(String sessionId) {
+        out.println("Resumed session " + sessionId + ".");
+    }
+
+    private void printStartedSession(String sessionId) {
+        out.println("Started new session " + sessionId + ".");
+    }
+
+    private void printUnknownCommand() {
+        out.println("Unknown command. Use /help to see available commands.");
     }
 
     private ConversationCommandRequest toCommandRequest(String sessionId, String line) {
@@ -211,7 +270,7 @@ final class AiConsoleLoop {
             out.println("State: " + stateLine(snapshot));
             printStartupSummary(snapshot);
         }
-        List<MemoryEntryDto> memories = conversationService.listMemory(sessionId, 5);
+        List<MemoryEntryDto> memories = conversationService.listMemory(sessionId, WELCOME_MEMORY_LIMIT);
         if (!memories.isEmpty()) {
             out.println("Memory: " + memories.size() + " stored facts");
         }
@@ -253,7 +312,7 @@ final class AiConsoleLoop {
         if (snapshot == null || snapshot.getSummary() == null || snapshot.getSummary().isBlank()) {
             return;
         }
-        List<String> lines = summarize(snapshot.getSummary(), 3, 140);
+        List<String> lines = summarize(snapshot.getSummary(), SUMMARY_MAX_LINES, SUMMARY_MAX_WIDTH);
         if (lines.isEmpty()) {
             return;
         }
@@ -394,12 +453,6 @@ final class AiConsoleLoop {
         }
     }
 
-    private String titleSuffix(SessionSnapshot snapshot) {
-        return snapshot == null || snapshot.getSummary() == null || snapshot.getSummary().isBlank()
-                ? ""
-                : " summary=" + snapshot.getSummary();
-    }
-
     private String titleSuffix(SessionSummaryDto session) {
         return session == null || session.getSummary() == null || session.getSummary().isBlank()
                 ? ""
@@ -441,7 +494,7 @@ final class AiConsoleLoop {
             if (trimmed.isEmpty()) {
                 continue;
             }
-            lines.add(trimmed.length() > maxWidth ? trimmed.substring(0, maxWidth - 3) + "..." : trimmed);
+            lines.add(trimmed.length() > maxWidth ? trimmed.substring(0, maxWidth - ELLIPSIS.length()) + ELLIPSIS : trimmed);
             if (lines.size() == maxLines) {
                 break;
             }
@@ -462,7 +515,7 @@ final class AiConsoleLoop {
         if (value == null || value.isBlank()) {
             return "-";
         }
-        return value.length() <= 12 ? value : value.substring(0, 12);
+        return value.length() <= SHORT_SHA_LENGTH ? value : value.substring(0, SHORT_SHA_LENGTH);
     }
 
     private List<ArtifactEntryDto> filterArtifacts(List<ArtifactEntryDto> artifacts, String typeFilter) {

@@ -3,6 +3,7 @@ package com.consilens.cli.ai;
 import com.consilens.ai.model.AnalysisResult;
 import com.consilens.ai.model.PatternMatch;
 import com.consilens.ai.spi.AIAnalyzer;
+import com.consilens.cli.config.CliObjectMappers;
 import com.consilens.core.diff.DiffOperation;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
@@ -24,8 +25,7 @@ public class AIDiagnoseService {
     private final AIAnalyzer analyzer;
 
     public AIDiagnoseService(AIAnalyzer analyzer) {
-        this.objectMapper = new ObjectMapper();
-        this.objectMapper.findAndRegisterModules();
+        this.objectMapper = CliObjectMappers.jsonWithDiscoveredModules();
         this.analyzer = analyzer;
     }
 

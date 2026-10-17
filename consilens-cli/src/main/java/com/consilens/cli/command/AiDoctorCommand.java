@@ -10,6 +10,7 @@ import com.consilens.cli.ai.AiBackendDefaultsStore;
 import com.consilens.cli.ai.LLMBackendResolver;
 import com.consilens.cli.ai.ResolvedBackendSettings;
 import com.consilens.cli.ai.runtime.AiRuntimePaths;
+import com.consilens.cli.config.CliObjectMappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
@@ -94,7 +95,7 @@ public class AiDoctorCommand implements Callable<Integer> {
                 AiDoctorCommand::resolveBackendSettings,
                 System::getenv,
                 () -> new AiBackendDefaultsStore(new AiRuntimePaths()).location(),
-                new ObjectMapper()
+                CliObjectMappers.json()
         );
     }
 

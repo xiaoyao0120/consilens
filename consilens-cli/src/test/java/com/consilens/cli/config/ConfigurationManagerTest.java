@@ -57,8 +57,7 @@ class ConfigurationManagerTest {
                 "    \"algorithm\": \"xor\",\n" +
                 "    \"bisectionFactor\": 8,\n" +
                 "    \"bisectionThreshold\": 8000,\n" +
-                "    \"batchSize\": 1000,\n" +
-                "    \"enableProfiling\": true\n" +
+                "    \"batchSize\": 1000\n" +
                 "  },\n" +
                 "  \"concurrency\": {\n" +
                 "    \"io\": {\n" +
@@ -150,8 +149,7 @@ class ConfigurationManagerTest {
                 "    \"algorithm\": \"xor\",\n" +
                 "    \"bisectionFactor\": 8,\n" +
                 "    \"bisectionThreshold\": 8000,\n" +
-                "    \"batchSize\": 1000,\n" +
-                "    \"enableProfiling\": true\n" +
+                "    \"batchSize\": 1000\n" +
                 "  },\n" +
                 "  \"concurrency\": {\n" +
                 "    \"io\": {\n" +
@@ -339,8 +337,8 @@ class ConfigurationManagerTest {
                 "    - format: table\n" +
                 "      type: result\n" +
                 "      properties:\n" +
-                "        type: oracle\n" +
-                "        url: jdbc:oracle:thin:@localhost:1521/xe\n" +
+                "        type: db2\n" +
+                "        url: jdbc:db2://localhost:50000/sample\n" +
                 "        tableName: diff_result\n");
 
         ConfigurationManager configurationManager = new ConfigurationManager();
@@ -348,7 +346,7 @@ class ConfigurationManagerTest {
         ConfigurationException exception = assertThrows(ConfigurationException.class,
                 () -> configurationManager.loadConfiguration(configFile.toString(), false));
 
-        assertTrue(exception.getMessage().contains("properties.type must be mysql or postgresql"));
+        assertTrue(exception.getMessage().contains("is not a registered dialect: db2"));
     }
 
     @Test

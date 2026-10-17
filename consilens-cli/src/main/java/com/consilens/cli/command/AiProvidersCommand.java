@@ -2,6 +2,7 @@ package com.consilens.cli.command;
 
 import com.consilens.ai.spi.AIAnalyzerManager;
 import com.consilens.ai.spi.LLMBackendManager;
+import com.consilens.cli.config.CliObjectMappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
@@ -42,12 +43,12 @@ public class AiProvidersCommand implements Callable<Integer> {
         this(
                 () -> AIAnalyzerManager.getInstance().supportedNames(),
                 () -> LLMBackendManager.getInstance().supportedNames(),
-                new ObjectMapper()
+                CliObjectMappers.json()
         );
     }
 
     AiProvidersCommand(Supplier<Set<String>> analyzerNames, Supplier<Set<String>> backendNames) {
-        this(analyzerNames, backendNames, new ObjectMapper());
+        this(analyzerNames, backendNames, CliObjectMappers.json());
     }
 
     AiProvidersCommand(Supplier<Set<String>> analyzerNames,

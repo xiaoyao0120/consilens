@@ -1,7 +1,5 @@
 package com.consilens.cli.command;
 
-import com.consilens.cli.config.ConfigurationManager;
-import com.consilens.cli.service.CompareRequestFactory;
 import com.consilens.cluster.api.ClusterSubmission;
 import com.consilens.cluster.api.ClusterSubmitRequest;
 import com.consilens.cluster.api.ClusterSubmitter;
@@ -35,9 +33,7 @@ class SubmitKubernetesCommandTest {
 
     @Test
     void shouldBuildRedactedRequestAndPrintJobReceipt() throws Exception {
-        Path configurationFile = temporaryDirectory.resolve("compare.yaml");
         String password = "password-that-must-not-be-published";
-        Files.writeString(configurationFile, configuration(password));
         AtomicReference<ClusterSubmitRequest> captured = new AtomicReference<>();
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         ByteArrayOutputStream error = new ByteArrayOutputStream();
@@ -49,7 +45,6 @@ class SubmitKubernetesCommandTest {
                 .build());
 
         int exitCode = commandLine(command, output, error).execute(
-                "-c", configurationFile.toString(),
                 "--image", "registry.example/consilens:1.0.0",
                 "--descriptor-uri", "https://quality-configs.example/consilens/orders.json",
                 "--namespace", "data-quality", "--name", "consilens-orders",
@@ -81,8 +76,6 @@ class SubmitKubernetesCommandTest {
 
     @Test
     void shouldUseClusterComparisonCoordinatorByDefault() throws Exception {
-        Path configurationFile = temporaryDirectory.resolve("compare.yaml");
-        Files.writeString(configurationFile, configuration("${env.CLUSTER_ONLY_PASSWORD}"));
         AtomicReference<ClusterSubmitRequest> captured = new AtomicReference<>();
 
         int exitCode = commandLine(command(captured, () -> ClusterSubmission.builder()
@@ -90,7 +83,6 @@ class SubmitKubernetesCommandTest {
                 .executionMode(ExecutionMode.KUBERNETES)
                 .clusterApplicationId("default/consilens-submission-kubernetes-1")
                 .build()), new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
-                "-c", configurationFile.toString(),
                 "--image", "registry.example/consilens:1.0.0",
                 "--descriptor-uri", "https://configs.example/consilens/submission.yaml");
 
@@ -101,10 +93,8 @@ class SubmitKubernetesCommandTest {
 
     @Test
     void shouldRejectMissingRequiredKubernetesOptionsBeforeSubmitterCall() throws Exception {
-        Path configurationFile = temporaryDirectory.resolve("compare.yaml");
-        Files.writeString(configurationFile, configuration("password"));
         AtomicBoolean called = new AtomicBoolean();
-        SubmitKubernetesCommand command = new SubmitKubernetesCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        SubmitKubernetesCommand command = new SubmitKubernetesCommand(
                 () -> {
                     called.set(true);
                     return request -> ClusterSubmission.builder().build();
@@ -112,7 +102,7 @@ class SubmitKubernetesCommandTest {
         ByteArrayOutputStream error = new ByteArrayOutputStream();
 
         int exitCode = commandLine(command, new ByteArrayOutputStream(), error)
-                .execute("-c", configurationFile.toString(), "--image", "registry.example/consilens:1.0.0");
+                .execute("--image", "registry.example/consilens:1.0.0");
 
         assertEquals(1, exitCode);
         assertFalse(called.get());
@@ -121,31 +111,26 @@ class SubmitKubernetesCommandTest {
 
     @Test
     void shouldPreflightInvalidKubernetesParametersBeforeCreatingSubmitter() throws Exception {
-        Path configurationFile = temporaryDirectory.resolve("compare.yaml");
-        Files.writeString(configurationFile, configuration("password"));
         AtomicBoolean factoryCalled = new AtomicBoolean();
-        SubmitKubernetesCommand command = new SubmitKubernetesCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        SubmitKubernetesCommand command = new SubmitKubernetesCommand(
                 () -> {
                     factoryCalled.set(true);
                     return request -> ClusterSubmission.builder().build();
                 }, () -> "submission-kubernetes-3");
 
         int invalidUriExitCode = commandLine(command, new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
-                "-c", configurationFile.toString(),
                 "--image", "registry.example/consilens:1.0.0",
                 "--descriptor-uri", "s3a://quality-configs/orders.json");
 
         assertEquals(1, invalidUriExitCode);
         assertFalse(factoryCalled.get());
 
-        SubmitKubernetesCommand attemptsCommand = new SubmitKubernetesCommand(new ConfigurationManager(),
-                new CompareRequestFactory(), () -> {
+        SubmitKubernetesCommand attemptsCommand = new SubmitKubernetesCommand(() -> {
                     factoryCalled.set(true);
                     return request -> ClusterSubmission.builder().build();
                 }, () -> "submission-kubernetes-4");
         int invalidAttemptsExitCode = commandLine(attemptsCommand, new ByteArrayOutputStream(),
                 new ByteArrayOutputStream()).execute(
-                "-c", configurationFile.toString(),
                 "--image", "registry.example/consilens:1.0.0",
                 "--descriptor-uri", "https://quality-configs.example/orders.json",
                 "--max-attempts", "0");
@@ -156,17 +141,14 @@ class SubmitKubernetesCommandTest {
 
     @Test
     void shouldHideSecretWhenSubmitterFactoryFails() throws Exception {
-        Path configurationFile = temporaryDirectory.resolve("compare.yaml");
         String password = "password-that-must-not-be-logged";
-        Files.writeString(configurationFile, configuration(password));
         ByteArrayOutputStream error = new ByteArrayOutputStream();
-        SubmitKubernetesCommand command = new SubmitKubernetesCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        SubmitKubernetesCommand command = new SubmitKubernetesCommand(
                 () -> {
                     throw new IllegalStateException(password);
                 }, () -> "submission-kubernetes-5");
 
         int exitCode = commandLine(command, new ByteArrayOutputStream(), error).execute(
-                "-c", configurationFile.toString(),
                 "--image", "registry.example/consilens:1.0.0",
                 "--descriptor-uri", "https://quality-configs.example/orders.json");
 
@@ -276,7 +258,7 @@ class SubmitKubernetesCommandTest {
         Path descriptorFile = temporaryDirectory.resolve("malformed.yaml");
         Files.writeString(descriptorFile, "source: [not: valid: yaml");
         AtomicBoolean factoryCalled = new AtomicBoolean();
-        SubmitKubernetesCommand command = new SubmitKubernetesCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        SubmitKubernetesCommand command = new SubmitKubernetesCommand(
                 () -> {
                     factoryCalled.set(true);
                     return request -> ClusterSubmission.builder().build();
@@ -292,7 +274,7 @@ class SubmitKubernetesCommandTest {
 
     private SubmitKubernetesCommand command(AtomicReference<ClusterSubmitRequest> captured,
                                              Supplier<ClusterSubmission> receiptFactory) {
-        return new SubmitKubernetesCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        return new SubmitKubernetesCommand(
                 () -> new RecordingSubmitter(captured, receiptFactory), () -> "submission-kubernetes-1");
     }
 

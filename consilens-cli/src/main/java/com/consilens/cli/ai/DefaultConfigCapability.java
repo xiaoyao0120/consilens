@@ -9,12 +9,13 @@ import com.consilens.ai.execution.model.DryRunReport;
 import com.consilens.ai.execution.model.ExplainReport;
 import com.consilens.ai.execution.model.GeneratedConfig;
 import com.consilens.ai.execution.model.ValidationReport;
+import com.consilens.cli.config.CliObjectMappers;
+import com.consilens.cli.config.ConfigurationException;
 import com.consilens.cli.config.ConfigurationManager;
 import com.consilens.cli.model.CliConfiguration;
 import com.consilens.cli.model.CliDiffResult;
 import com.consilens.cli.service.DiffService;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
@@ -50,7 +51,7 @@ public class DefaultConfigCapability implements ConfigCapability {
         this.configurationManager = configurationManager;
         this.diffService = diffService;
         this.explainService = explainService;
-        this.rawYamlMapper = new ObjectMapper(new YAMLFactory());
+        this.rawYamlMapper = CliObjectMappers.yaml();
     }
 
     @Override
@@ -103,9 +104,8 @@ public class DefaultConfigCapability implements ConfigCapability {
     }
 
     private boolean isMissingEnvironmentVariable(Exception e) {
-        return e instanceof com.consilens.cli.config.ConfigurationException
-                && e.getMessage() != null
-                && e.getMessage().startsWith("Missing required environment variable");
+        return e instanceof ConfigurationException
+                && ((ConfigurationException) e).hasCode(ConfigurationException.CODE_MISSING_ENV_VAR);
     }
 
     @Override

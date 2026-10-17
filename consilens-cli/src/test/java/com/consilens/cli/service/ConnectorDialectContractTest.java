@@ -102,9 +102,6 @@ class ConnectorDialectContractTest {
         assertSql(type, "distinct count", sql.getDistinctCountSQL("regression", "orders", columns, "id > 0"));
         assertSql(type, "distinct count from SQL resource", sql.getDistinctCountSQLFromSql(
                 sourceSql, columns, "id > 0"));
-        assertSql(type, "full outer join", sql.getFullOuterJoinSQL("source_orders", "target_orders", keys, "id > 0"));
-        assertSql(type, "left outer join", sql.getLeftOuterJoinSQL("source_orders", "target_orders", keys, "id > 0"));
-        assertSql(type, "right outer join", sql.getRightOuterJoinSQL("source_orders", "target_orders", keys, "id > 0"));
         assertSql(type, "insert", sql.getInsertSQL("orders", columns));
         assertSql(type, "batch insert", sql.getBatchInsertSQL("orders", columns, 2));
         assertSql(type, "drop table", sql.getDropTableSQL("orders", true));

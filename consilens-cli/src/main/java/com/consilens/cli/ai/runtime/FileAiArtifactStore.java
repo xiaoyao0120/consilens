@@ -3,11 +3,9 @@ package com.consilens.cli.ai.runtime;
 import com.consilens.ai.session.AiArtifactStore;
 import com.consilens.ai.session.model.ArtifactRef;
 import com.consilens.ai.session.model.ArtifactType;
-import com.fasterxml.jackson.annotation.JsonInclude;
+import com.consilens.cli.config.CliObjectMappers;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -32,10 +30,7 @@ public class FileAiArtifactStore implements AiArtifactStore {
 
     public FileAiArtifactStore(AiRuntimePaths paths) {
         this.paths = paths;
-        this.mapper = new ObjectMapper()
-                .registerModule(new JavaTimeModule())
-                .setSerializationInclusion(JsonInclude.Include.NON_NULL)
-                .enable(SerializationFeature.INDENT_OUTPUT);
+        this.mapper = CliObjectMappers.jsonWithJavaTimeIndented();
     }
 
     @Override

@@ -3,8 +3,8 @@ package com.consilens.cli.command;
 import com.consilens.ai.session.model.AiMemory;
 import com.consilens.cli.ai.runtime.AiRuntimePaths;
 import com.consilens.cli.ai.runtime.FileAiMemoryStore;
+import com.consilens.cli.config.CliObjectMappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Option;
@@ -106,6 +106,6 @@ public class AiMemoriesCommand implements Callable<Integer> {
     }
 
     private static ObjectMapper defaultObjectMapper() {
-        return new ObjectMapper().registerModule(new JavaTimeModule());
+        return CliObjectMappers.jsonWithJavaTime();
     }
 }

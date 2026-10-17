@@ -1,7 +1,5 @@
 package com.consilens.cli.command;
 
-import com.consilens.cli.config.ConfigurationManager;
-import com.consilens.cli.service.CompareRequestFactory;
 import com.consilens.cluster.api.ClusterSubmission;
 import com.consilens.cluster.api.ClusterSubmitRequest;
 import com.consilens.cluster.api.ClusterSubmitter;
@@ -96,7 +94,7 @@ class SubmitYarnCommandTest {
         Path configurationFile = temporaryDirectory.resolve("compare.yaml");
         Files.writeString(configurationFile, configuration("password"));
         AtomicReference<Boolean> called = new AtomicReference<>(false);
-        SubmitYarnCommand command = new SubmitYarnCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        SubmitYarnCommand command = new SubmitYarnCommand(
                 () -> request -> {
                     called.set(true);
                     return ClusterSubmission.builder().build();
@@ -116,7 +114,7 @@ class SubmitYarnCommandTest {
         Path configurationFile = temporaryDirectory.resolve("compare.yaml");
         Files.writeString(configurationFile, configuration("password"));
         AtomicReference<Boolean> called = new AtomicReference<>(false);
-        SubmitYarnCommand command = new SubmitYarnCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        SubmitYarnCommand command = new SubmitYarnCommand(
                 () -> request -> {
                     called.set(true);
                     return ClusterSubmission.builder().build();
@@ -140,7 +138,7 @@ class SubmitYarnCommandTest {
         String password = "password-that-must-not-be-logged";
         Files.writeString(configurationFile, configuration(password));
         ByteArrayOutputStream error = new ByteArrayOutputStream();
-        SubmitYarnCommand command = new SubmitYarnCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        SubmitYarnCommand command = new SubmitYarnCommand(
                 () -> request -> {
                     throw new IllegalStateException(password);
                 }, () -> "submission-yarn-3");
@@ -160,7 +158,7 @@ class SubmitYarnCommandTest {
         Path configurationFile = temporaryDirectory.resolve("compare.yaml");
         Files.writeString(configurationFile, configuration("password"));
         AtomicBoolean factoryCalled = new AtomicBoolean();
-        SubmitYarnCommand command = new SubmitYarnCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        SubmitYarnCommand command = new SubmitYarnCommand(
                 () -> {
                     factoryCalled.set(true);
                     return request -> ClusterSubmission.builder().build();
@@ -176,7 +174,7 @@ class SubmitYarnCommandTest {
         assertFalse(factoryCalled.get());
         assertTrue(error.toString(StandardCharsets.UTF_8).contains("YARN submission failed"));
 
-        SubmitYarnCommand attemptsCommand = new SubmitYarnCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        SubmitYarnCommand attemptsCommand = new SubmitYarnCommand(
                 () -> {
                     factoryCalled.set(true);
                     return request -> ClusterSubmission.builder().build();
@@ -198,7 +196,7 @@ class SubmitYarnCommandTest {
         String password = "password-that-must-not-be-logged-during-initialization";
         Files.writeString(configurationFile, configuration(password));
         ByteArrayOutputStream error = new ByteArrayOutputStream();
-        SubmitYarnCommand command = new SubmitYarnCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        SubmitYarnCommand command = new SubmitYarnCommand(
                 () -> {
                     throw new IllegalStateException(password);
                 }, () -> "submission-yarn-6");
@@ -295,7 +293,7 @@ class SubmitYarnCommandTest {
 
     private SubmitYarnCommand command(AtomicReference<ClusterSubmitRequest> captured,
                                       Supplier<ClusterSubmission> receiptFactory) {
-        return new SubmitYarnCommand(new ConfigurationManager(), new CompareRequestFactory(),
+        return new SubmitYarnCommand(
                 () -> new RecordingSubmitter(captured, receiptFactory), () -> "submission-yarn-1");
     }
 

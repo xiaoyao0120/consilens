@@ -5,8 +5,6 @@ import com.consilens.cli.model.CliDiffResult;
 import com.consilens.cli.model.ComparisonConfig;
 import com.consilens.cli.model.ConnectionConfig;
 import com.consilens.cli.model.TableMetadata;
-import com.consilens.cli.model.normalization.NormalizationConfig;
-import com.consilens.cli.model.normalization.TypeNormalizationRule;
 import com.consilens.connector.api.config.ConnectorConfig;
 import com.consilens.connector.api.config.ReadOptions;
 import com.consilens.connector.api.model.ComparisonSpec;
@@ -14,14 +12,8 @@ import com.consilens.connector.api.model.KeySpec;
 import com.consilens.connector.api.model.PredicateSpec;
 import com.consilens.connector.api.model.ResourceLocator;
 import com.consilens.connector.api.model.TablePath;
-import com.consilens.connector.api.normalization.MatchSpec;
-import com.consilens.connector.api.normalization.NormalizationRule;
-import com.consilens.connector.api.normalization.NormalizationSpec;
-import com.consilens.connector.api.planner.CompareExecutionOptions;
-import com.consilens.connector.api.planner.ComparePlanTypes;
 import com.consilens.connector.api.planner.CompareRequest;
 import com.consilens.connector.api.planner.CompareSegment;
-import com.consilens.connector.api.planner.CompareStrategyPreference;
 import com.consilens.core.compare.CompareRuntime;
 import com.consilens.core.compare.DefaultCompareRuntime;
 import com.consilens.core.diff.DiffResult;
@@ -37,7 +29,6 @@ import lombok.extern.slf4j.Slf4j;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -266,26 +257,6 @@ public class DiffService {
         return compareRequestFactory.create(config);
     }
 
-    private CompareStrategyPreference toStrategyPreference(CliConfiguration config) {
-        List<String> preferredPlans;
-        boolean allowFallback;
-        if ("join".equalsIgnoreCase(config.getStrategyMode())) {
-            preferredPlans = List.of(ComparePlanTypes.SERVER_JOIN);
-            allowFallback = false;
-        } else {
-            preferredPlans = List.of(
-                    ComparePlanTypes.PUSHDOWN_CHECKSUM,
-                    ComparePlanTypes.KEY_HASH,
-                    ComparePlanTypes.STREAMING_MERGE);
-            allowFallback = true;
-        }
-
-        return CompareStrategyPreference.builder()
-                .preferredPlans(preferredPlans)
-                .allowFallback(allowFallback)
-                .build();
-    }
-
     private boolean isTableResource(ConnectionConfig connectionConfig) {
         return connectionConfig != null
                 && connectionConfig.getResource() != null
@@ -306,153 +277,6 @@ public class DiffService {
             return resource.getName() != null ? resource.getName() : "";
         }
         return resource.getPath() != null ? resource.getPath() : "";
-    }
-
-    private CompareExecutionOptions toExecutionOptions(CliConfiguration config) {
-        Map<String, Object> attributes = new LinkedHashMap<>();
-        if (config.getConcurrency() != null) {
-            attributes.put("concurrencyConfig", config.getConcurrency());
-        }
-        if (config.getStrategy().getMaxDifferences() != null) {
-            attributes.put("maxDifferences", config.getStrategy().getMaxDifferences());
-        }
-
-        return CompareExecutionOptions.builder()
-                .bisectionFactor(config.getStrategy().getBisectionFactor())
-                .bisectionThreshold(resolveBisectionThreshold(config))
-                .enableProfiling(Boolean.TRUE.equals(config.getStrategy().getEnableProfiling()))
-                .checksumAlgorithm(config.getAlgorithm())
-                .localCompareMode(config.getStrategy().getLocalCompare() != null
-                        ? config.getStrategy().getLocalCompare().getMode()
-                        : null)
-                // 键唯一档位走配置：默认开放档（重复键按多重集语义比较），严格档在 strategy 里显式打开
-                .validateUniqueKeys(Boolean.TRUE.equals(config.getStrategy().getValidateUniqueKeys()))
-                .maxDifferences(config.getStrategy().getMaxDifferences())
-                .attributes(attributes.isEmpty() ? null : attributes)
-                .build();
-    }
-
-    private NormalizationSpec toNormalizationSpec(NormalizationConfig normalizationConfig) {
-        if (normalizationConfig == null) {
-            return null;
-        }
-        return NormalizationSpec.builder()
-                .global(toNormalizationRules(normalizationConfig.getGlobal()))
-                .source(toNormalizationRules(normalizationConfig.getSource()))
-                .target(toNormalizationRules(normalizationConfig.getTarget()))
-                .build();
-    }
-
-    private List<NormalizationRule> toNormalizationRules(Map<String, TypeNormalizationRule> rules) {
-        if (rules == null || rules.isEmpty()) {
-            return null;
-        }
-        List<NormalizationRule> result = new ArrayList<>();
-        for (Map.Entry<String, TypeNormalizationRule> entry : rules.entrySet()) {
-            String canonicalType = NormalizationTypeMapper.toMatchType(entry.getKey());
-            TypeNormalizationRule rule = entry.getValue();
-            if (canonicalType == null || rule == null) {
-                continue;
-            }
-            result.addAll(toNormalizationRules(canonicalType, rule));
-        }
-        return result.isEmpty() ? null : result;
-    }
-
-    private List<NormalizationRule> toNormalizationRules(String type, TypeNormalizationRule rule) {
-        List<NormalizationRule> result = new ArrayList<>();
-
-        if (rule.getPrecision() != null || rule.getRounding() != null) {
-            Map<String, Object> params = new LinkedHashMap<>();
-            if (rule.getPrecision() != null) {
-                params.put("precision", rule.getPrecision());
-            }
-            if (rule.getRounding() != null) {
-                params.put("rounding", rule.getRounding());
-            }
-            result.add(normalizationRule(type, "format_number", params));
-        }
-
-        if (rule.getFormat() != null || rule.getTimezone() != null || rule.getComparisonMode() != null) {
-            Map<String, Object> params = new LinkedHashMap<>();
-            if (rule.getFormat() != null) {
-                params.put("format", rule.getFormat());
-            }
-            if (rule.getTimezone() != null) {
-                params.put("timezone", rule.getTimezone());
-            }
-            if (rule.getComparisonMode() != null) {
-                params.put("comparisonMode", rule.getComparisonMode());
-            }
-            result.add(normalizationRule(type, "format_datetime", params));
-        }
-
-        if (rule.getEncoding() != null || rule.getUppercase() != null) {
-            Map<String, Object> params = new LinkedHashMap<>();
-            if (rule.getEncoding() != null) {
-                params.put("encoding", rule.getEncoding());
-            }
-            if (rule.getUppercase() != null) {
-                params.put("uppercase", rule.getUppercase());
-            }
-            result.add(normalizationRule(type, "encode", params));
-        }
-
-        if ("boolean".equals(type)
-                && (rule.getTrueValue() != null || rule.getFalseValue() != null || rule.getNullValue() != null)) {
-            Map<String, Object> params = new LinkedHashMap<>();
-            if (rule.getTrueValue() != null) {
-                params.put("trueValue", rule.getTrueValue());
-            }
-            if (rule.getFalseValue() != null) {
-                params.put("falseValue", rule.getFalseValue());
-            }
-            if (rule.getNullValue() != null) {
-                params.put("nullValue", rule.getNullValue());
-            }
-            result.add(normalizationRule(type, "map_boolean", params));
-        } else if ("string".equals(type) && rule.getNullValue() != null) {
-            Map<String, Object> params = new LinkedHashMap<>();
-            params.put("nullValue", rule.getNullValue());
-            result.add(normalizationRule(type, "normalize_string", params));
-        }
-
-        return result;
-    }
-
-    private NormalizationRule normalizationRule(String type, String operation, Map<String, Object> params) {
-        return NormalizationRule.builder()
-                .match(MatchSpec.builder().type(type).build())
-                .operation(operation)
-                .params(params)
-                .build();
-    }
-
-    private long resolveBisectionThreshold(CliConfiguration config) {
-        if (config.getStrategy().getBisectionThreshold() != null) {
-            return config.getStrategy().getBisectionThreshold();
-        }
-        if (config.getStrategy().getBatchSize() != null) {
-            return config.getStrategy().getBatchSize() * 10L;
-        }
-        return 10000L;
-    }
-
-    private String stringValue(Object value) {
-        return value instanceof String ? (String) value : null;
-    }
-
-    private Integer integerValue(Object value) {
-        if (value instanceof Integer) {
-            return (Integer) value;
-        }
-        if (value instanceof Number) {
-            return ((Number) value).intValue();
-        }
-        if (value instanceof String && !((String) value).trim().isEmpty()) {
-            return Integer.parseInt(((String) value).trim());
-        }
-        return null;
     }
 
     /**
@@ -496,13 +320,6 @@ public class DiffService {
             log.error("Dry run failed", e);
             throw new Exception("Dry run failed: " + e.getMessage(), e);
         }
-    }
-
-    /**
-     * Shutdown the service.
-     */
-    public void shutdown() {
-        log.info("DiffService shutdown");
     }
 
     private String formatInfoTree(DiffResult.InfoTree infoTree) {

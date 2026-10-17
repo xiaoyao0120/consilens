@@ -14,10 +14,10 @@ import com.consilens.ai.session.AiMemoryStore;
 import com.consilens.ai.session.AiSessionStore;
 import com.consilens.ai.session.model.ArtifactRef;
 import com.consilens.ai.session.model.ArtifactType;
+import com.consilens.cli.config.CliObjectMappers;
 import com.consilens.cli.model.CliConfiguration;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -45,7 +45,7 @@ public class RepairTask extends AbstractAiTask implements AiTask {
                       AiMemoryStore memoryStore) {
         super(sessionStore, artifactStore, memoryStore);
         this.configCapability = configCapability;
-        this.yamlMapper = new ObjectMapper(new YAMLFactory());
+        this.yamlMapper = CliObjectMappers.yaml();
     }
 
     @Override

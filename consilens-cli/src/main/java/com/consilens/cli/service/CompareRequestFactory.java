@@ -326,7 +326,6 @@ public class CompareRequestFactory {
         } else {
             preferredPlans = List.of(
                     ComparePlanTypes.PUSHDOWN_CHECKSUM,
-                    ComparePlanTypes.KEY_HASH,
                     ComparePlanTypes.STREAMING_MERGE);
             allowFallback = true;
         }
@@ -349,7 +348,6 @@ public class CompareRequestFactory {
         return CompareExecutionOptions.builder()
                 .bisectionFactor(config.getStrategy().getBisectionFactor())
                 .bisectionThreshold(resolveBisectionThreshold(config))
-                .enableProfiling(Boolean.TRUE.equals(config.getStrategy().getEnableProfiling()))
                 .checksumAlgorithm(config.getAlgorithm())
                 .localCompareMode(config.getStrategy().getLocalCompare() != null
                         ? config.getStrategy().getLocalCompare().getMode()

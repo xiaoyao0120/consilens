@@ -10,9 +10,9 @@ import com.consilens.ai.config.model.StrategyDraft;
 import com.consilens.ai.conversation.engine.ExampleTemplate;
 import com.consilens.ai.conversation.engine.ExampleTemplateStore;
 import com.consilens.ai.spi.LLMBackend;
+import com.consilens.cli.config.CliObjectMappers;
 import com.consilens.cli.model.CliConfiguration;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
 import java.util.Arrays;
 import java.util.List;
@@ -57,7 +57,7 @@ public class AIConfigService {
         this.compiler = compiler;
         this.backendResolver = backendResolver;
         this.exampleTemplateStore = exampleTemplateStore;
-        this.yamlMapper = new ObjectMapper(new YAMLFactory());
+        this.yamlMapper = CliObjectMappers.yaml();
     }
 
     public AIConfigResult generate(AIConfigRequest request) {

@@ -1,7 +1,5 @@
 package com.consilens.cli.command;
 
-import com.consilens.cli.config.ConfigurationManager;
-import com.consilens.cli.service.CompareRequestFactory;
 import com.consilens.cluster.api.ClusterApplicationResult;
 import com.consilens.cluster.api.ClusterComparisonDescription;
 import com.consilens.cluster.api.ClusterExecutionDescription;
@@ -21,7 +19,6 @@ import java.io.InputStream;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -119,13 +116,6 @@ public class SubmitYarnCommand implements Callable<Integer> {
                       Supplier<String> submissionIdFactory) {
         this.submitterFactory = submitterFactory;
         this.submissionIdFactory = submissionIdFactory;
-    }
-
-    SubmitYarnCommand(ConfigurationManager configurationManager,
-                      CompareRequestFactory compareRequestFactory,
-                      Supplier<ClusterSubmitter> submitterFactory,
-                      Supplier<String> submissionIdFactory) {
-        this(submitterFactory, submissionIdFactory);
     }
 
     @Override

@@ -1,7 +1,5 @@
 package com.consilens.cli.command;
 
-import com.consilens.cli.config.ConfigurationManager;
-import com.consilens.cli.service.CompareRequestFactory;
 import com.consilens.cluster.api.ClusterApplicationResult;
 import com.consilens.cluster.api.ClusterComparisonDescription;
 import com.consilens.cluster.api.ClusterExecutionDescription;
@@ -22,7 +20,6 @@ import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -56,10 +53,6 @@ public class SubmitKubernetesCommand implements Callable<Integer> {
 
     private final Supplier<ClusterSubmitter> submitterFactory;
     private final Supplier<String> submissionIdFactory;
-
-    @Option(names = {"-c", "--config"},
-            description = "Optional local descriptor reference retained for compatibility; cluster runtime reads the descriptor")
-    private String configFile;
 
     @Option(names = "--image", required = true,
             description = "Container image containing the consilens coordinator runtime at /opt/consilens/runtime")
@@ -130,13 +123,6 @@ public class SubmitKubernetesCommand implements Callable<Integer> {
         this.submissionIdFactory = submissionIdFactory;
     }
 
-    SubmitKubernetesCommand(ConfigurationManager configurationManager,
-                            CompareRequestFactory compareRequestFactory,
-                            Supplier<ClusterSubmitter> submitterFactory,
-                            Supplier<String> submissionIdFactory) {
-        this(submitterFactory, submissionIdFactory);
-    }
-
     @Override
     public Integer call() {
         ClusterSubmitter submitter = null;
@@ -155,13 +141,15 @@ public class SubmitKubernetesCommand implements Callable<Integer> {
                     .execution(ClusterExecutionDescription.builder()
                             .executionMode(ExecutionMode.KUBERNETES)
                             .maxAttempts(maxAttempts)
-                            .kubernetesNamespace(stringSetting(namespace, settings.get("namespace"), "default"))
+                            .kubernetesNamespace(stringSetting(namespace, settings.get("namespace"),
+                                    KubernetesSubmissionSpec.DEFAULT_NAMESPACE))
                             .kubernetesImage(image)
                             .build())
                     .build();
             String resolvedJobName = firstNonBlank(jobName, settings.get("name"), "consilens-" + submissionId);
             submissionRequest.setKubernetesSubmission(KubernetesSubmissionSpec.builder()
-                    .namespace(stringSetting(namespace, settings.get("namespace"), "default"))
+                    .namespace(stringSetting(namespace, settings.get("namespace"),
+                            KubernetesSubmissionSpec.DEFAULT_NAMESPACE))
                     .jobName(resolvedJobName)
                     .image(image)
                     .descriptorUri(descriptorUri)

@@ -1,8 +1,8 @@
 package com.consilens.cli.ai;
 
 import com.consilens.cli.ai.runtime.AiRuntimePaths;
+import com.consilens.cli.config.CliObjectMappers;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,7 +18,7 @@ public class AiBackendDefaultsStore {
 
     public AiBackendDefaultsStore(AiRuntimePaths paths) {
         this.paths = paths;
-        this.mapper = new ObjectMapper().registerModule(new JavaTimeModule());
+        this.mapper = CliObjectMappers.jsonWithJavaTime();
     }
 
     public Optional<AiBackendDefaults> load() {
