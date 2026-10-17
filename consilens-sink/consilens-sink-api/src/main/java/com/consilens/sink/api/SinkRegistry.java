@@ -30,10 +30,6 @@ public class SinkRegistry {
         return provider.create();
     }
 
-    public boolean supports(String format, String type) {
-        return providers.containsKey(buildKey(format, type));
-    }
-
     private String buildKey(String format, String type) {
         return format.toLowerCase() + ":" + type.toLowerCase();
     }

@@ -4,7 +4,6 @@ import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
 import com.consilens.core.lifecycle.DiffLifecycle;
-import com.consilens.core.lifecycle.SegmentResult;
 import com.consilens.sink.api.model.ResultConfig;
 import lombok.extern.slf4j.Slf4j;
 
@@ -26,11 +25,6 @@ public class DefaultDiffLifecycle implements DiffLifecycle {
     @Override
     public void onDiffStart(DiffContext context) throws Exception {
         sinkManager.open(context);
-    }
-
-    @Override
-    public void onSegmentComplete(SegmentResult result) throws Exception {
-        sinkManager.onSegmentComplete(result);
     }
 
     @Override

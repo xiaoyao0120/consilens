@@ -62,7 +62,7 @@ class ChecksumDifferPostgresITest {
         TestDatabaseHelper.insertStandardData(sourceAdapter, "source_identical");
         TestDatabaseHelper.insertStandardData(targetAdapter, "target_identical");
 
-        DifferConfig config = new DifferConfig(4, 100, false, ChecksumAlgorithm.CONCAT);
+        DifferConfig config = new DifferConfig(4, 100, ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()
                 .database(sourceAdapter)
@@ -103,7 +103,7 @@ class ChecksumDifferPostgresITest {
         TestDatabaseHelper.updateRow(targetAdapter, "target_modified", 3, "modified_item", 999.99);
         TestDatabaseHelper.updateRow(targetAdapter, "target_modified", 7, "another_modified", 888.88);
 
-        DifferConfig config = new DifferConfig(4, 100, false, ChecksumAlgorithm.CONCAT);
+        DifferConfig config = new DifferConfig(4, 100, ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()
                 .database(sourceAdapter)
@@ -147,7 +147,7 @@ class ChecksumDifferPostgresITest {
         TestDatabaseHelper.createTestTable(sourceAdapter, "source_empty");
         TestDatabaseHelper.createTestTable(targetAdapter, "target_empty");
 
-        DifferConfig config = new DifferConfig(4, 100, false, ChecksumAlgorithm.CONCAT);
+        DifferConfig config = new DifferConfig(4, 100, ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()
                 .database(sourceAdapter)

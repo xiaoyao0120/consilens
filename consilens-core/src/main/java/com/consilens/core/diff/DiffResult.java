@@ -151,7 +151,7 @@ public class DiffResult {
                 statistics.getSourceMissingCount(),
                 statistics.getTargetMissingCount(),
                 statistics.getMismatchCount(),
-                statistics.getDifferencePercentage() * 100
+                statistics.getDifferencePercentage()
         );
     }
 
@@ -200,19 +200,30 @@ public class DiffResult {
             return this;
         }
 
-        List<DiffRow> mergedDifferences = new ArrayList<>(this.differences);
-        mergedDifferences.addAll(other.differences);
+        // builder 构造的对象这几个字段可以是 null，合并前先归一化
+        List<DiffRow> mergedDifferences = new ArrayList<>(
+                this.differences == null ? List.of() : this.differences);
+        if (other.differences != null) {
+            mergedDifferences.addAll(other.differences);
+        }
 
-        DiffStatistics mergedStats = statistics.merge(other.statistics);
+        DiffStatistics mergedStats = statistics == null ? other.statistics : statistics.merge(other.statistics);
 
-        Map<String, Object> mergedMetadata = new HashMap<>(this.metadata);
-        mergedMetadata.putAll(other.metadata);
+        Map<String, Object> mergedMetadata = new HashMap<>(
+                this.metadata == null ? Map.of() : this.metadata);
+        if (other.metadata != null) {
+            mergedMetadata.putAll(other.metadata);
+        }
+
+        Instant mergedCompletedAt = completedAt == null ? other.completedAt
+                : other.completedAt == null || completedAt.isAfter(other.completedAt) ? completedAt
+                : other.completedAt;
 
         return builder()
                 .differences(mergedDifferences)
                 .statistics(mergedStats)
                 .infoTree(Optional.empty()) // Would need to merge info trees
-                .completedAt(completedAt.isAfter(other.completedAt) ? completedAt : other.completedAt)
+                .completedAt(mergedCompletedAt)
                 .metadata(mergedMetadata)
                 .sourceTablePath(sourceTablePath)
                 .targetTablePath(targetTablePath)
@@ -265,7 +276,6 @@ public class DiffResult {
         private final long totalDifferences;
         private final long processingTimeMs;
         private final long unchangedCount;
-        private final double differencePercentage;
 
         public static DiffStatistics empty() {
             return builder()
@@ -277,7 +287,6 @@ public class DiffResult {
                     .totalDifferences(0)
                     .processingTimeMs(0)
                     .unchangedCount(0)
-                    .differencePercentage(0.0)
                     .build();
         }
 
@@ -285,9 +294,13 @@ public class DiffResult {
             return sourceMissingCount + targetMissingCount + mismatchCount;
         }
 
+        /**
+         * 差异占比，0..100：全站（前端进度条/matchScore 阈值、DiffReportSupport、
+         * percentageFromCounts）统一按百分数消费。
+         */
         public double getDifferencePercentage() {
             long totalRows = Math.max(sourceRowCount, targetRowCount);
-            return totalRows > 0 ? (double) getTotalDifferences() / totalRows : 0.0;
+            return totalRows > 0 ? (double) getTotalDifferences() / totalRows * 100.0 : 0.0;
         }
 
         public long getUnchangedCount() {

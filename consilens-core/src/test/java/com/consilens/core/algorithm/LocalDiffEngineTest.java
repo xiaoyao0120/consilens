@@ -164,4 +164,46 @@ public class LocalDiffEngineTest {
                 assertEquals(1, differences.size());
                 assertEquals(DiffOperation.MISMATCH, differences.get(0).getOperation());
         }
+
+        @Test
+        public void testSortedKeysAtShardBoundary() {
+                List<String> keyColumns = Collections.singletonList("id");
+                List<String> extraColumns = Collections.singletonList("name");
+
+                // 两侧都按键升序输出，相邻分片在边界键 3 处重叠（前片尾部、后片头部各出现一次）。
+                List<Object[]> shard1Rows1 = Arrays.<Object[]>asList(
+                                new Object[] { 1, "a" },
+                                new Object[] { 2, "b" },
+                                new Object[] { 3, "c" });
+                List<Object[]> shard1Rows2 = Arrays.<Object[]>asList(
+                                new Object[] { 1, "a" },
+                                new Object[] { 2, "b" },
+                                new Object[] { 3, "c" });
+
+                List<DiffRow> boundaryEqual = LocalDiffEngine.findDifferences(
+                                shard1Rows1, shard1Rows2, keyColumns, extraColumns, keyColumns, extraColumns);
+                assertTrue(boundaryEqual.isEmpty(), "边界键在两侧相同且值一致时不应产生差异");
+
+                // 后片：边界键 3 在目标侧缺失，4 两侧相同 -> 只报 3 的 TARGET_MISSING。
+                List<Object[]> shard2Rows1 = Arrays.<Object[]>asList(
+                                new Object[] { 3, "c" },
+                                new Object[] { 4, "d" });
+                List<Object[]> shard2Rows2Missing = Collections.<Object[]>singletonList(new Object[] { 4, "d" });
+
+                List<DiffRow> boundaryMissing = LocalDiffEngine.findDifferences(
+                                shard2Rows1, shard2Rows2Missing, keyColumns, extraColumns, keyColumns, extraColumns);
+                assertEquals(1, boundaryMissing.size());
+                assertEquals(DiffOperation.TARGET_MISSING, boundaryMissing.get(0).getOperation());
+                assertEquals(3, boundaryMissing.get(0).getPrimaryKey().get(0));
+
+                // 边界键两侧都存在但值不同 -> MISMATCH（键相同不代表行相同）。
+                List<Object[]> shard2Rows2Changed = Arrays.<Object[]>asList(
+                                new Object[] { 3, "C" },
+                                new Object[] { 4, "d" });
+                List<DiffRow> boundaryMismatch = LocalDiffEngine.findDifferences(
+                                shard2Rows1, shard2Rows2Changed, keyColumns, extraColumns, keyColumns, extraColumns);
+                assertEquals(1, boundaryMismatch.size());
+                assertEquals(DiffOperation.MISMATCH, boundaryMismatch.get(0).getOperation());
+                assertEquals(3, boundaryMismatch.get(0).getPrimaryKey().get(0));
+        }
 }

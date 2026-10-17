@@ -98,7 +98,7 @@ class CrossDatabaseMysqlOracleITest {
         TestDatabaseHelper.insertStandardData(mysqlAdapter, "cross_source");
         TestDatabaseHelper.insertStandardData(oracleAdapter, "CROSS_TARGET");
 
-        DifferConfig config = new DifferConfig(4, 100, false,
+        DifferConfig config = new DifferConfig(4, 100,
                 ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()
@@ -142,7 +142,7 @@ class CrossDatabaseMysqlOracleITest {
         // Insert row 11 on the Oracle side
         TestDatabaseHelper.insertExtraRow(oracleAdapter, "CROSS_DIFF_TARGET", 11, "oracle_extra", 111.11);
 
-        DifferConfig config = new DifferConfig(4, 100, false,
+        DifferConfig config = new DifferConfig(4, 100,
                 ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()
@@ -192,7 +192,7 @@ class CrossDatabaseMysqlOracleITest {
         // Insert an extra row on the source (MySQL) side
         TestDatabaseHelper.insertExtraRow(mysqlAdapter, "cross_target_miss_src", 11, "mysql_only", 222.22);
 
-        DifferConfig config = new DifferConfig(4, 100, false,
+        DifferConfig config = new DifferConfig(4, 100,
                 ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()

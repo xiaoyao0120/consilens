@@ -190,86 +190,15 @@ public abstract class TableDiffer implements DiffEmitter {
     }
 
     /**
-     * Bisect and diff segments using recursive divide-and-conquer.
+     * Length-prefix key parts so segment identifiers stay unambiguous and collision-free.
      */
-    protected CompletableFuture<Void> bisectAndDiffSegments(
-            TableSegment table1,
-            TableSegment table2,
-            InfoTreeRecorder infoTreeRecorder,
-            int level) {
-
-        if (!table1.isBounded() || !table2.isBounded()) {
-            throw new IllegalArgumentException("Both segments must be bounded for bisection");
+    protected static String encodeKeyParts(String... parts) {
+        StringBuilder key = new StringBuilder();
+        for (String part : parts) {
+            String value = part != null ? part : "null";
+            key.append(value.length()).append(':').append(value).append('|');
         }
-
-        long size1 = table1.approximateSize();
-        long size2 = table2.approximateSize();
-        
-        // If approximateSize returns -1 (unknown), use actual count
-        if (size1 < 0) {
-            try {
-                size1 = table1.count();
-            } catch (Exception e) {
-                log.warn("Failed to get count for table1, using default", e);
-                size1 = config.getBisectionThreshold() * 2;
-            }
-        }
-        if (size2 < 0) {
-            try {
-                size2 = table2.count();
-            } catch (Exception e) {
-                log.warn("Failed to get count for table2, using default", e);
-                size2 = config.getBisectionThreshold() * 2;
-            }
-        }
-
-        log.debug("Bisecting segments at level {}, size: table1 <= {}, table2 <= {}",
-                level, size1, size2);
-
-        // Choose checkpoints for segmentation
-        // Split the table with larger estimated range to keep partitions aligned
-        TableSegment largerTable = size1 >= size2 ? table1 : table2;
-        List<List<Object>> checkpoints = largerTable.chooseCheckpoints(config.getBisectionFactor() - 1);
-
-        // Create segmented tables
-        List<TableSegment> segmented1 = table1.segmentByCheckpoints(checkpoints);
-        List<TableSegment> segmented2 = table2.segmentByCheckpoints(checkpoints);
-
-        // Kick off recursive diffing for each paired child segment
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-
-        for (int i = 0; i < segmented1.size(); i++) {
-            TableSegment t1 = segmented1.get(i);
-            TableSegment t2 = segmented2.get(i);
-
-            long segSize1 = t1.approximateSize();
-            long segSize2 = t2.approximateSize();
-            
-            // If approximateSize returns -1 (unknown), use actual count
-            if (segSize1 < 0) {
-                try {
-                    segSize1 = t1.count();
-                } catch (Exception e) {
-                    segSize1 = config.getBisectionThreshold();
-                }
-            }
-            if (segSize2 < 0) {
-                try {
-                    segSize2 = t2.count();
-                } catch (Exception e) {
-                    segSize2 = config.getBisectionThreshold();
-                }
-            }
-            
-            long maxRows = Math.max(segSize1, segSize2);
-
-            // Delegate the actual comparison for this slice to the concrete implementation
-            CompletableFuture<Void> future = diffSegments(t1, t2, infoTreeRecorder, maxRows, level + 1);
-            futures.add(future);
-        }
-
-        // Wait for all segments to complete
-        return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+        return key.toString();
     }
 
     /**
@@ -279,7 +208,6 @@ public abstract class TableDiffer implements DiffEmitter {
     public static class DifferConfig {
         private final int bisectionFactor;
         private final long bisectionThreshold;
-        private final boolean enableProfiling;
         private final int maxDepth;
         private final ChecksumAlgorithm checksumAlgorithm;
         private final LocalCompareMode localCompareMode;
@@ -288,13 +216,12 @@ public abstract class TableDiffer implements DiffEmitter {
         private final boolean validateUniqueKeys;
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,
-                           boolean enableProfiling, ChecksumAlgorithm checksumAlgorithm,
+                           ChecksumAlgorithm checksumAlgorithm,
                            LocalCompareMode localCompareMode,
                            ConcurrencyConfig concurrencyConfig,
                            long maxDifferences, boolean validateUniqueKeys) {
             this.bisectionFactor = bisectionFactor;
             this.bisectionThreshold = bisectionThreshold;
-            this.enableProfiling = enableProfiling;
             this.maxDepth = 10;
             this.checksumAlgorithm = checksumAlgorithm != null ? checksumAlgorithm : ChecksumAlgorithm.CONCAT;
             this.localCompareMode = localCompareMode != null ? localCompareMode : LocalCompareMode.FULL;
@@ -304,11 +231,11 @@ public abstract class TableDiffer implements DiffEmitter {
         }
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,
-                           boolean enableProfiling, ChecksumAlgorithm checksumAlgorithm,
+                           ChecksumAlgorithm checksumAlgorithm,
                            LocalCompareMode localCompareMode,
                            ConcurrencyConfig concurrencyConfig,
                            long maxDifferences) {
-            this(bisectionFactor, bisectionThreshold, enableProfiling, checksumAlgorithm,
+            this(bisectionFactor, bisectionThreshold, checksumAlgorithm,
                  localCompareMode, concurrencyConfig, maxDifferences, false);
         }
 
@@ -318,28 +245,28 @@ public abstract class TableDiffer implements DiffEmitter {
         }
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,
-                           boolean enableProfiling, ChecksumAlgorithm checksumAlgorithm,
+                           ChecksumAlgorithm checksumAlgorithm,
                            LocalCompareMode localCompareMode,
                            ConcurrencyConfig concurrencyConfig) {
-            this(bisectionFactor, bisectionThreshold, enableProfiling,
+            this(bisectionFactor, bisectionThreshold,
                  checksumAlgorithm, localCompareMode, concurrencyConfig, 1_000_000L);
         }
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,
-                           boolean enableProfiling, ChecksumAlgorithm checksumAlgorithm) {
-            this(bisectionFactor, bisectionThreshold, enableProfiling,
+                           ChecksumAlgorithm checksumAlgorithm) {
+            this(bisectionFactor, bisectionThreshold,
                  checksumAlgorithm, LocalCompareMode.FULL, ConcurrencyConfig.defaultConfig());
         }
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,
-                           boolean enableProfiling, ChecksumAlgorithm checksumAlgorithm,
+                           ChecksumAlgorithm checksumAlgorithm,
                            ConcurrencyConfig concurrencyConfig) {
-            this(bisectionFactor, bisectionThreshold, enableProfiling,
+            this(bisectionFactor, bisectionThreshold,
                  checksumAlgorithm, LocalCompareMode.FULL, concurrencyConfig);
         }
 
         public static DifferConfig defaultConfig() {
-            return new DifferConfig(32, 16384, false, ChecksumAlgorithm.CONCAT,
+            return new DifferConfig(32, 16384, ChecksumAlgorithm.CONCAT,
                     LocalCompareMode.FULL, ConcurrencyConfig.defaultConfig());
         }
 

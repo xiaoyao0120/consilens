@@ -1,5 +1,6 @@
 package com.consilens.core.algorithm;
 
+import com.consilens.connector.api.DataTypeHandler;
 import com.consilens.connector.api.model.DataType;
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.diff.DiffOperation;
@@ -59,6 +60,26 @@ public class LocalDiffEngine {
             List<String> extraColumns2,
             Map<String, DataType> columnTypes1,
             Map<String, DataType> columnTypes2) {
+        return findDifferences(rows1, rows2, keyColumns1, extraColumns1, keyColumns2, extraColumns2,
+                columnTypes1, columnTypes2, null, null);
+    }
+
+    /**
+     * Find differences with dialect-aware value normalization. Each side's
+     * {@link DataTypeHandler} maps driver-specific representations onto the
+     * common comparison form (e.g. MySQL YEAR as {@code java.sql.Date}).
+     */
+    public static List<DiffRow> findDifferences(
+            List<Object[]> rows1,
+            List<Object[]> rows2,
+            List<String> keyColumns1,
+            List<String> extraColumns1,
+            List<String> keyColumns2,
+            List<String> extraColumns2,
+            Map<String, DataType> columnTypes1,
+            Map<String, DataType> columnTypes2,
+            DataTypeHandler dataTypeHandler1,
+            DataTypeHandler dataTypeHandler2) {
 
         log.info("Finding differences between {} and {} rows", rows1.size(), rows2.size());
 
@@ -67,8 +88,8 @@ public class LocalDiffEngine {
         // with different physical types (INT vs VARCHAR), and comparing raw values would make
         // Integer(21) and String("21") distinct keys, so every row would be reported as
         // one-sided missing.
-        Map<String, PrimaryKeyGroup> rowsByPk1 = groupRowsByPrimaryKey(rows1, keyColumns1, columnTypes1);
-        Map<String, PrimaryKeyGroup> rowsByPk2 = groupRowsByPrimaryKey(rows2, keyColumns2, columnTypes2);
+        Map<String, PrimaryKeyGroup> rowsByPk1 = groupRowsByPrimaryKey(rows1, keyColumns1, columnTypes1, dataTypeHandler1);
+        Map<String, PrimaryKeyGroup> rowsByPk2 = groupRowsByPrimaryKey(rows2, keyColumns2, columnTypes2, dataTypeHandler2);
 
         List<DiffRow> differences = new ArrayList<>();
 
@@ -91,7 +112,7 @@ public class LocalDiffEngine {
             List<String> columnNames2 = new ArrayList<>(keyColumns2);
             columnNames2.addAll(extraColumns2);
             List<DiffRow> pkDifferences = findPrimaryKeyDifferences(pk, pkRows1, pkRows2, relevantRows1, relevantRows2,
-                    columnNames1, columnNames2, columnTypes1, columnTypes2);
+                    columnNames1, columnNames2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2);
             differences.addAll(pkDifferences);
         }
 
@@ -107,7 +128,8 @@ public class LocalDiffEngine {
             List<String> columnNames2 = new ArrayList<>(keyColumns2);
             columnNames2.addAll(extraColumns2);
             List<DiffRow> pkDifferences = findPrimaryKeyDifferences(group2.rawKey, Collections.emptyList(), pkRows2,
-                    Collections.emptyList(), relevantRows2, columnNames1, columnNames2, columnTypes1, columnTypes2);
+                    Collections.emptyList(), relevantRows2, columnNames1, columnNames2, columnTypes1, columnTypes2,
+                    dataTypeHandler1, dataTypeHandler2);
             differences.addAll(pkDifferences);
         }
 
@@ -133,12 +155,12 @@ public class LocalDiffEngine {
      * keys (see {@link ValueNormalizer}), then joined on the normalized form.
      */
     private static Map<String, PrimaryKeyGroup> groupRowsByPrimaryKey(List<Object[]> rows,
-            List<String> keyColumns, Map<String, DataType> columnTypes) {
+            List<String> keyColumns, Map<String, DataType> columnTypes, DataTypeHandler dataTypeHandler) {
         Map<String, PrimaryKeyGroup> groupedRows = new LinkedHashMap<>();
         int keyColumnCount = keyColumns.size();
 
         for (Object[] row : rows) {
-            String normalizedKey = normalizedKey(row, keyColumns, columnTypes);
+            String normalizedKey = normalizedKey(row, keyColumns, columnTypes, dataTypeHandler);
             PrimaryKeyGroup group = groupedRows.get(normalizedKey);
             if (group == null) {
                 // Copy only the PK portion so duplicate rows with the same key compress into the same bucket.
@@ -152,13 +174,14 @@ public class LocalDiffEngine {
     }
 
     private static String normalizedKey(Object[] row, List<String> keyColumns,
-            Map<String, DataType> columnTypes) {
+            Map<String, DataType> columnTypes, DataTypeHandler dataTypeHandler) {
         StringBuilder builder = new StringBuilder();
         int keyColumnCount = keyColumns.size();
         for (int index = 0; index < keyColumnCount; index++) {
             String column = keyColumns.get(index);
             DataType dataType = columnTypes == null ? null : columnTypes.get(column);
-            builder.append(ValueNormalizer.normalizeValue(row[index],
+            Object value = normalizeForComparison(row[index], dataType, dataTypeHandler);
+            builder.append(ValueNormalizer.normalizeValue(value,
                     dataType == null ? DataType.UNKNOWN : dataType));
             builder.append('\u0001');
         }
@@ -193,7 +216,9 @@ public class LocalDiffEngine {
             List<String> columnNames1,
             List<String> columnNames2,
             Map<String, DataType> columnTypes1,
-            Map<String, DataType> columnTypes2) {
+            Map<String, DataType> columnTypes2,
+            DataTypeHandler dataTypeHandler1,
+            DataTypeHandler dataTypeHandler2) {
 
         List<DiffRow> differences = new ArrayList<>();
 
@@ -221,14 +246,15 @@ public class LocalDiffEngine {
                 // Single row in each - compare values
                 Object[] row1 = relevantRows1.get(0);
                 Object[] row2 = relevantRows2.get(0);
-                if (!rowsEqualNormalized(row1, row2, columnNames1, columnTypes1, columnTypes2)) {
+                if (!rowsEqualNormalized(row1, row2, columnNames1, columnTypes1, columnTypes2,
+                        dataTypeHandler1, dataTypeHandler2)) {
                     // Values differ - identify which columns changed separately for each table
                     List<String> changedColumns1 = new ArrayList<>();
                     List<String> changedColumns2 = new ArrayList<>();
                     // Use columnNames1 for finding changed columns since both tables should have
                     // same structure for comparison
                     findChangedColumnsWithDetails(row1, row2, columnNames1, changedColumns1, changedColumns2,
-                            columnTypes1, columnTypes2);
+                            columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2);
                     log.debug("Creating modified diff row with changed columns1: {}, columns2: {} for PK: {}",
                             changedColumns1, changedColumns2, primaryKey);
                     // Normalize values for output to ensure consistent formatting
@@ -267,7 +293,7 @@ public class LocalDiffEngine {
                     List<String> changedColumns1 = new ArrayList<>();
                     List<String> changedColumns2 = new ArrayList<>();
                     findChangedColumnsWithDetails(row1, row2, columnNames1, changedColumns1, changedColumns2,
-                            columnTypes1, columnTypes2);
+                            columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2);
                     DiffRow diff = DiffRow.modified(primaryKey,
                             normalizeRowValues(row1, columnNames1, columnTypes1),
                             normalizeRowValues(row2, columnNames2, columnTypes2),
@@ -289,15 +315,6 @@ public class LocalDiffEngine {
         }
 
         return differences;
-    }
-
-    /**
-     * Find which columns have changed between two rows.
-     */
-    private static List<Integer> findChangedColumns(Object[] row1, Object[] row2) {
-        List<String> changedColumns1 = new ArrayList<>();
-        List<String> changedColumns2 = new ArrayList<>();
-        return findChangedColumnsWithDetails(row1, row2, null, changedColumns1, changedColumns2);
     }
 
     /**
@@ -354,7 +371,8 @@ public class LocalDiffEngine {
     private static List<Integer> findChangedColumnsWithDetails(
             Object[] row1, Object[] row2, List<String> columnNames,
             List<String> changedColumns1, List<String> changedColumns2,
-            Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2) {
+            Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2,
+            DataTypeHandler dataTypeHandler1, DataTypeHandler dataTypeHandler2) {
 
         List<Integer> changedColumnIndices = new ArrayList<>();
 
@@ -377,11 +395,13 @@ public class LocalDiffEngine {
         }
 
         for (int i = 0; i < row1.length; i++) {
-            Object val1 = row1[i];
-            Object val2 = row2[i];
+            String columnName = (columnNames != null && i < columnNames.size()) ? columnNames.get(i) : null;
+            DataType dataType1 = columnTypes1 != null && columnName != null ? columnTypes1.get(columnName) : null;
+            DataType dataType2 = columnTypes2 != null && columnName != null ? columnTypes2.get(columnName) : null;
+            Object val1 = normalizeForComparison(row1[i], dataType1, dataTypeHandler1);
+            Object val2 = normalizeForComparison(row2[i], dataType2, dataTypeHandler2);
 
             boolean changed = false;
-            String columnName = (columnNames != null && i < columnNames.size()) ? columnNames.get(i) : null;
 
             // CRITICAL: In NONE mode, rows contain database-normalized values (strings)
             // Direct string comparison is sufficient - no need for ValueNormalizer
@@ -405,34 +425,6 @@ public class LocalDiffEngine {
     }
 
     /**
-     * Check if two rows are equal.
-     */
-    private static boolean rowsEqual(Object[] row1, Object[] row2) {
-        if (row1.length != row2.length) {
-            return false;
-        }
-
-        for (int i = 0; i < row1.length; i++) {
-            Object val1 = row1[i];
-            Object val2 = row2[i];
-
-            if (val1 == null && val2 == null) {
-                continue;
-            }
-            if (val1 == null || val2 == null) {
-                return false;
-            }
-
-            // Handle special comparison cases
-            if (!valuesEqual(val1, val2)) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /**
      * Compare two values with special handling for different types.
      */
     private static boolean valuesEqual(Object val1, Object val2) {
@@ -452,15 +444,6 @@ public class LocalDiffEngine {
         }
         if (val1 == null || val2 == null) {
             return false;
-        }
-
-        // Handle YEAR column: java.sql.Date (MySQL) vs Integer (PostgreSQL)
-        // MySQL YEAR returns Date like "2092-01-01", PostgreSQL returns Integer 2092
-        if ((val1 instanceof java.sql.Date && val2 instanceof Number) ||
-            (val1 instanceof Number && val2 instanceof java.sql.Date)) {
-            int year1 = extractYear(val1);
-            int year2 = extractYear(val2);
-            return year1 == year2;
         }
 
         // Handle numeric types with tolerance
@@ -506,20 +489,13 @@ public class LocalDiffEngine {
         return Objects.equals(val1, val2);
     }
 
-    /**
-     * Extract year from Date or Number object.
-     * Used for comparing MySQL YEAR (returns Date) with PostgreSQL SMALLINT (returns Integer).
-     */
-    private static int extractYear(Object value) {
-        if (value instanceof java.sql.Date) {
-            // MySQL YEAR returns Date like "2092-01-01"
-            return ((java.sql.Date) value).toLocalDate().getYear();
-        } else if (value instanceof Number) {
-            // PostgreSQL SMALLINT returns Integer like 2092
-            return ((Number) value).intValue();
-        } else {
-            throw new IllegalArgumentException("Cannot extract year from: " + value.getClass());
+    private static Object normalizeForComparison(Object value, DataType dataType,
+            DataTypeHandler dataTypeHandler) {
+        if (dataTypeHandler == null) {
+            return value;
         }
+        return dataTypeHandler.normalizeValueForComparison(value,
+                dataType != null ? dataType : DataType.UNKNOWN);
     }
 
     /**
@@ -628,7 +604,9 @@ public class LocalDiffEngine {
             Object[] row2,
             List<String> columnNames,
             Map<String, DataType> columnTypes1,
-            Map<String, DataType> columnTypes2) {
+            Map<String, DataType> columnTypes2,
+            DataTypeHandler dataTypeHandler1,
+            DataTypeHandler dataTypeHandler2) {
 
         if (row1.length != row2.length) {
             return false;
@@ -637,137 +615,19 @@ public class LocalDiffEngine {
         // CRITICAL: Rows already contain database-normalized values
         // Direct comparison is sufficient
         for (int i = 0; i < row1.length; i++) {
-            Object val1 = row1[i];
-            Object val2 = row2[i];
+            String columnName = i < columnNames.size() ? columnNames.get(i) : null;
+            DataType dataType1 = columnTypes1 != null && columnName != null ? columnTypes1.get(columnName) : null;
+            DataType dataType2 = columnTypes2 != null && columnName != null ? columnTypes2.get(columnName) : null;
+            Object val1 = normalizeForComparison(row1[i], dataType1, dataTypeHandler1);
+            Object val2 = normalizeForComparison(row2[i], dataType2, dataTypeHandler2);
 
             if (!valuesEqual(val1, val2)) {
-                String columnName = i < columnNames.size() ? columnNames.get(i) : String.valueOf(i);
-                log.trace("Column {} values differ: '{}' vs '{}'", columnName, val1, val2);
+                String logColumn = columnName != null ? columnName : String.valueOf(i);
+                log.trace("Column {} values differ: '{}' vs '{}'", logColumn, val1, val2);
                 return false;
             }
         }
 
         return true;
-    }
-
-    /**
-     * Advanced diff engine with additional optimizations.
-     */
-    public static class AdvancedDiffEngine {
-
-        /**
-         * Find differences with memory-efficient streaming approach for large datasets.
-         */
-        public static List<DiffRow> findDifferencesStreaming(
-                Iterator<Object[]> rows1Iterator,
-                Iterator<Object[]> rows2Iterator,
-                int keyColumnCount,
-                List<String> columnNames1,
-                List<String> columnNames2) {
-
-            Map<List<Object>, Object[]> rows1Map = new HashMap<>();
-            Map<List<Object>, Object[]> rows2Map = new HashMap<>();
-
-            // Stream first dataset
-            while (rows1Iterator.hasNext()) {
-                Object[] row = rows1Iterator.next();
-                List<Object> pk = Arrays.asList(Arrays.copyOf(row, keyColumnCount));
-                rows1Map.put(pk, row);
-            }
-
-            // Stream second dataset and find differences
-            List<DiffRow> differences = new ArrayList<>();
-
-            while (rows2Iterator.hasNext()) {
-                Object[] row2 = rows2Iterator.next();
-                List<Object> pk = Arrays.asList(Arrays.copyOf(row2, keyColumnCount));
-
-                Object[] row1 = rows1Map.remove(pk);
-
-                if (row1 == null) {
-                    // Row only exists in table 2
-                    List<Object> values = Arrays.asList(row2);
-                    differences.add(DiffRow.added(pk, values, columnNames2));
-                } else {
-                    // Row exists in both - compare
-                    if (!rowsEqual(row1, row2)) {
-                        List<String> changedColumns1 = new ArrayList<>();
-                        List<String> changedColumns2 = new ArrayList<>();
-                        findChangedColumnsWithDetails(row1, row2, columnNames1, changedColumns1, changedColumns2);
-                        log.debug(
-                                "AdvancedDiffEngine: Creating modified diff row with changed columns1: {}, columns2: {} for PK: {}",
-                                changedColumns1, changedColumns2, pk);
-                        List<Object> sourceValues = Arrays.asList(row1);
-                        List<Object> targetValues = Arrays.asList(row2);
-                        differences.add(DiffRow.modified(pk, sourceValues, targetValues, columnNames1, columnNames2,
-                                changedColumns1, changedColumns2));
-                    }
-                }
-            }
-
-            // Remaining rows only exist in table 1
-            for (Map.Entry<List<Object>, Object[]> entry : rows1Map.entrySet()) {
-                List<Object> values = Arrays.asList(entry.getValue());
-                differences.add(DiffRow.removed(entry.getKey(), values, columnNames1));
-            }
-
-            return differences;
-        }
-
-        /**
-         * Find differences with parallel processing for large datasets.
-         */
-        public static List<DiffRow> findDifferencesParallel(
-                List<Object[]> rows1,
-                List<Object[]> rows2,
-                int keyColumnCount,
-                int parallelism,
-                List<String> columnNames1,
-                List<String> columnNames2) {
-
-            // Partition data by primary key ranges for parallel processing
-            Map<Integer, List<Object[]>> partitioned1 = partitionByPkHash(rows1, keyColumnCount, parallelism);
-            Map<Integer, List<Object[]>> partitioned2 = partitionByPkHash(rows2, keyColumnCount, parallelism);
-
-            List<DiffRow> allDifferences = new ArrayList<>();
-
-            // Process partitions in parallel
-            partitioned1.entrySet().parallelStream().forEach(entry -> {
-                int partitionId = entry.getKey();
-                List<Object[]> partition1Rows = entry.getValue();
-                List<Object[]> partition2Rows = partitioned2.getOrDefault(partitionId, Collections.emptyList());
-
-                List<DiffRow> partitionDifferences = findDifferences(
-                        partition1Rows, partition2Rows,
-                        Collections.nCopies(keyColumnCount, "key" + partitionId),
-                        Collections.emptyList(),
-                        Collections.nCopies(keyColumnCount, "key" + partitionId),
-                        Collections.emptyList());
-
-                synchronized (allDifferences) {
-                    allDifferences.addAll(partitionDifferences);
-                }
-            });
-
-            return allDifferences;
-        }
-
-        /**
-         * Partition rows by primary key hash for parallel processing.
-         */
-        private static Map<Integer, List<Object[]>> partitionByPkHash(
-                List<Object[]> rows, int keyColumnCount, int partitions) {
-
-            Map<Integer, List<Object[]>> partitioned = new HashMap<>();
-
-            for (Object[] row : rows) {
-                List<Object> pk = Arrays.asList(Arrays.copyOf(row, keyColumnCount));
-                int partitionId = Math.abs(pk.hashCode() % partitions);
-
-                partitioned.computeIfAbsent(partitionId, k -> new ArrayList<>()).add(row);
-            }
-
-            return partitioned;
-        }
     }
 }

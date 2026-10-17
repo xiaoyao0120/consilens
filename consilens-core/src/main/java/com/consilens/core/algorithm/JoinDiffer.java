@@ -1,6 +1,7 @@
 package com.consilens.core.algorithm;
 
 import com.consilens.connector.api.ConnectorException;
+import com.consilens.connector.api.DataTypeHandler;
 import com.consilens.connector.api.model.DataType;
 import com.consilens.connector.api.model.TableSchema;
 import com.consilens.core.segment.TableSegment;
@@ -91,11 +92,10 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
                                 () -> compareWholeTableLocally(table1, table2, infoTreeRecorder),
                                 executorProvider.getCpuExecutor());
                     } else {
-                        // Build the main join query（开放档：where 收窄到"两侧键都唯一"的子集）
-                        JoinQueryPlan queryPlan = buildJoinQueryPlan(table1, table2, "t1", "t2",
-                                split.joinWhere(table1, table2, true), split.joinWhere(table1, table2, false));
-                        performanceMonitor.recordStage("query_plan_built");
-                        diffFuture = executeJoinDiff(queryPlan, table1, table2, infoTreeRecorder)
+                        // Execute the segment diff directly; a root-level query plan would be
+                        // discarded because each segment builds its own plan.
+                        performanceMonitor.recordStage("join_started");
+                        diffFuture = diffSegments(table1, table2, infoTreeRecorder, 0L, 0)
                                 .thenAccept(result -> {
                                     // 重复键子集：本地多重集配对（结果与 checksum/streaming 逐数字一致）
                                     if (split.hasDuplicates()) {
@@ -283,7 +283,8 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
                 rows1, rows2,
                 table1.getKeyColumns(), table1.getExtraColumns(),
                 table2.getKeyColumns(), table2.getExtraColumns(),
-                extractColumnTypes(table1), extractColumnTypes(table2));
+                extractColumnTypes(table1), extractColumnTypes(table2),
+                dataTypeHandler(table1), dataTypeHandler(table2));
         long sourceMissingDelta = 0;
         long targetMissingDelta = 0;
         long mismatchDelta = 0;
@@ -322,7 +323,8 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
                 rows1, rows2,
                 table1.getKeyColumns(), table1.getExtraColumns(),
                 table2.getKeyColumns(), table2.getExtraColumns(),
-                extractColumnTypes(table1), extractColumnTypes(table2));
+                extractColumnTypes(table1), extractColumnTypes(table2),
+                dataTypeHandler(table1), dataTypeHandler(table2));
         long sourceMissingDelta = 0;
         long targetMissingDelta = 0;
         long mismatchDelta = 0;
@@ -347,6 +349,20 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
 
     /**
      * 开放档下重复键的划分谓词。
+     *
+     * <p>字段按构造器参数出现顺序：
+     * <ol>
+     *   <li>{@code duplicates}：两侧是否存在重复键，需要走多重集配对；</li>
+     *   <li>{@code localOnly}：方言不支持键多重性过滤器，整表本地多重集配对（不做 SQL join）；</li>
+     *   <li>{@code where1}：表1 的基础过滤条件；</li>
+     *   <li>{@code where2}：表2 的基础过滤条件；</li>
+     *   <li>{@code unique1}：表1 中"本侧键唯一"的行谓词；</li>
+     *   <li>{@code unique2}：表2 中"本侧键唯一"的行谓词；</li>
+     *   <li>{@code dup1}：表1 中"本侧键重复"的行谓词；</li>
+     *   <li>{@code dup2}：表2 中"本侧键重复"的行谓词；</li>
+     *   <li>{@code otherDupFor1}：对侧键重复、但外层限定为表1 的过滤谓词；</li>
+     *   <li>{@code otherDupFor2}：对侧键重复、但外层限定为表2 的过滤谓词。</li>
+     * </ol>
      */
     private static final class DupKeySplit {
         private final boolean duplicates;
@@ -477,6 +493,16 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
     }
 
     /**
+     * 本地比较使用的值归一化器：由方言决定驱动特定类型（如 MySQL YEAR）的比较形态。
+     */
+    private DataTypeHandler dataTypeHandler(TableSegment segment) {
+        if (segment == null || segment.getDatabase() == null || segment.getDatabase().getDialect() == null) {
+            return null;
+        }
+        return segment.getDatabase().getDialect().getDataTypeHandler();
+    }
+
+    /**
      * 取段内相关列的归一化类型；schema 不可用时返回空表（比较退化为原始列值）。
      */
     private Map<String, DataType> extractColumnTypes(TableSegment segment) {
@@ -494,22 +520,6 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
         return types;
     }
 
-    /**
-     * Build comprehensive join query for difference detection.
-     */
-
-    /**
-     * Execute the join diff operation.
-     */
-    private CompletableFuture<Void> executeJoinDiff(
-            JoinQueryPlan queryPlan, TableSegment table1, TableSegment table2, InfoTreeRecorder infoTreeRecorder) {
-
-        return diffSegments(table1, table2, infoTreeRecorder, 0L, 0);
-    }
-
-    /**
-     * Validate unique key constraints.
-     */
     /**
      * Collect statistics.
      */
@@ -719,9 +729,6 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
         long targetMissing = targetMissingCount.get();
         long mismatched = mismatchCount.get();
         long totalDifferences = sourceMissing + targetMissing + mismatched;
-        double differencePercentage = (sourceRowCount + targetRowCount > 0)
-                ? (double) totalDifferences / Math.max(sourceRowCount, targetRowCount) * 100.0
-                : 0.0;
 
         DiffResult.DiffStatistics diffStatistics = DiffResult.DiffStatistics.builder()
                 .sourceRowCount(sourceRowCount)
@@ -732,7 +739,6 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
                 .totalDifferences(totalDifferences)
                 .processingTimeMs((Long) performanceMonitor.getMetrics().getOrDefault("root_duration", 0L))
                 .unchangedCount(Math.max(0, Math.min(sourceRowCount, targetRowCount) - mismatched))
-                .differencePercentage(differencePercentage)
                 .build();
 
         completeDiff(diffStatistics);
@@ -786,13 +792,7 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
         if (!hasIdentity) {
             return "seg" + segmentSequence.incrementAndGet();
         }
-        String raw = String.join("|",
-                String.valueOf(minKey),
-                String.valueOf(maxKey),
-                String.valueOf(where),
-                String.valueOf(limitOffset),
-                String.valueOf(index));
-        return "seg" + Integer.toHexString(Objects.hash(raw));
+        return "seg" + encodeKeyParts(minKey, maxKey, where, limitOffset, String.valueOf(index));
     }
 
     /**
@@ -835,10 +835,6 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
 
         public JoinDifferOptions(boolean validateUniqueKeys) {
             this.validateUniqueKeys = validateUniqueKeys;
-        }
-
-        public static JoinDifferOptions defaultOptions() {
-            return new JoinDifferOptions(false);
         }
 
     }

@@ -86,10 +86,28 @@ public class KeyVector {
     }
 
     /**
-     * Convert to array.
+     * Create a key vector from a raw bound value (a scalar or a list of scalars).
      */
-    public Object[] toArray() {
-        return values.toArray();
+    public static KeyVector fromKeyObject(Object keyObject) {
+        if (keyObject == null) {
+            return null;
+        }
+        if (keyObject instanceof List) {
+            List<?> keyList = (List<?>) keyObject;
+            List<Comparable> comparableValues = new ArrayList<>();
+            for (Object value : keyList) {
+                if (value instanceof Comparable) {
+                    comparableValues.add((Comparable<?>) value);
+                } else {
+                    throw new IllegalArgumentException("Key values must be comparable: " + value);
+                }
+            }
+            return new KeyVector(comparableValues);
+        } else if (keyObject instanceof Comparable) {
+            return new KeyVector((Comparable<?>) keyObject);
+        } else {
+            throw new IllegalArgumentException("Unsupported key object type: " + keyObject.getClass());
+        }
     }
 
     /**
@@ -97,24 +115,6 @@ public class KeyVector {
      */
     public List<Comparable> toList() {
         return new ArrayList<>(values);
-    }
-
-    /**
-     * Create a copy with updated value at specified index.
-     */
-    public KeyVector withValue(int index, Comparable value) {
-        List<Comparable> newValues = new ArrayList<>(values);
-        newValues.set(index, value);
-        return new KeyVector(newValues);
-    }
-
-    /**
-     * Create a new vector with the same values but in reverse order.
-     */
-    public KeyVector reverse() {
-        List<Comparable> reversed = new ArrayList<>(values);
-        java.util.Collections.reverse(reversed);
-        return new KeyVector(reversed);
     }
 
     /**

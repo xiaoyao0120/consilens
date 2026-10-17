@@ -103,7 +103,7 @@ class ChecksumDifferOracleITest {
         TestDatabaseHelper.insertStandardData(sourceAdapter, TBL_SOURCE_IDENTICAL);
         TestDatabaseHelper.insertStandardData(targetAdapter, TBL_TARGET_IDENTICAL);
 
-        DifferConfig config = new DifferConfig(4, 100, false,
+        DifferConfig config = new DifferConfig(4, 100,
                 ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()
@@ -144,7 +144,7 @@ class ChecksumDifferOracleITest {
         TestDatabaseHelper.insertStandardData(targetAdapter, TBL_TARGET_ADDED);
         TestDatabaseHelper.insertExtraRow(targetAdapter, TBL_TARGET_ADDED, 11, "extra_item", 999.99);
 
-        DifferConfig config = new DifferConfig(4, 100, false,
+        DifferConfig config = new DifferConfig(4, 100,
                 ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()
@@ -188,7 +188,7 @@ class ChecksumDifferOracleITest {
         TestDatabaseHelper.insertStandardData(targetAdapter, TBL_TARGET_REMOVED);
         TestDatabaseHelper.deleteRow(targetAdapter, TBL_TARGET_REMOVED, 5);
 
-        DifferConfig config = new DifferConfig(4, 100, false,
+        DifferConfig config = new DifferConfig(4, 100,
                 ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()
@@ -233,7 +233,7 @@ class ChecksumDifferOracleITest {
         TestDatabaseHelper.updateRow(targetAdapter, TBL_TARGET_MODIFIED, 3, "modified_item", 999.99);
         TestDatabaseHelper.updateRow(targetAdapter, TBL_TARGET_MODIFIED, 7, "another_modified", 888.88);
 
-        DifferConfig config = new DifferConfig(4, 100, false,
+        DifferConfig config = new DifferConfig(4, 100,
                 ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()
@@ -287,7 +287,7 @@ class ChecksumDifferOracleITest {
         // Insert row 11 into target table
         TestDatabaseHelper.insertExtraRow(targetAdapter, TBL_TARGET_MIXED, 11, "new_item", 110.00);
 
-        DifferConfig config = new DifferConfig(4, 100, false,
+        DifferConfig config = new DifferConfig(4, 100,
                 ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()
@@ -327,7 +327,7 @@ class ChecksumDifferOracleITest {
         TestDatabaseHelper.createTestTable(sourceAdapter, TBL_SOURCE_EMPTY);
         TestDatabaseHelper.createTestTable(targetAdapter, TBL_TARGET_EMPTY);
 
-        DifferConfig config = new DifferConfig(4, 100, false,
+        DifferConfig config = new DifferConfig(4, 100,
                 ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()

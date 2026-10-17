@@ -21,6 +21,12 @@ import java.util.*;
 @Slf4j
 public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
 
+    /**
+     * 行哈希流式扫描的 JDBC fetch size：1000 行足以摊薄往返开销，又不会让
+     * 驱动/服务端为单次批量预取过多行而抬高内存占用。
+     */
+    private static final int ROW_HASH_FETCH_SIZE = 1000;
+
     protected final ConnectionPool connectionPool;
     protected final DatabaseDialect dialect;
     protected final String name;
@@ -62,52 +68,7 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
 
     @Override
     public <T> List<T> query(String sql, Class<T> resultType) {
-        return query(sql, (rs, rowNum) -> {
-            try {
-                if (resultType == String.class) {
-                    return resultType.cast(rs.getString(1));
-                } else if (resultType == Integer.class || resultType == int.class) {
-                    return resultType.cast(rs.getInt(1));
-                } else if (resultType == Long.class || resultType == long.class) {
-                    return resultType.cast(rs.getLong(1));
-                } else if (resultType == Double.class || resultType == double.class) {
-                    return resultType.cast(rs.getDouble(1));
-                } else if (resultType == Boolean.class || resultType == boolean.class) {
-                    return resultType.cast(rs.getBoolean(1));
-                } else if (resultType == java.sql.Date.class) {
-                    return resultType.cast(rs.getDate(1));
-                } else if (resultType == java.util.Date.class) {
-                    return resultType.cast(rs.getTimestamp(1));
-                } else if (resultType.isArray() && resultType.getComponentType() == Object.class) {
-                    // Handle Object[] case - read all columns into array
-                    ResultSetMetaData metaData = rs.getMetaData();
-                    int columnCount = metaData.getColumnCount();
-                    Object[] row = new Object[columnCount];
-                    for (int i = 0; i < columnCount; i++) {
-                        // CRITICAL: Use getString() instead of getObject() to ensure
-                        // normalized values (especially BLOB/HEX conversions) are read as strings
-                        // This prevents byte[] from being returned for BLOB columns that were
-                        // converted to HEX strings in the SQL query
-                        String value = rs.getString(i + 1);
-                        row[i] = value;
-                        
-                        // Debug log for DECIMAL and BLOB columns
-                        String columnName = metaData.getColumnLabel(i + 1);
-                        if (columnName != null && (columnName.toLowerCase().contains("decimal") || 
-                                                   columnName.toLowerCase().contains("numeric") ||
-                                                   columnName.toLowerCase().contains("blob"))) {
-                            log.debug("Read column {} (type={}): value=[{}]", 
-                                    columnName, metaData.getColumnTypeName(i + 1), value);
-                        }
-                    }
-                    return resultType.cast(row);
-                } else {
-                    return resultType.cast(rs.getObject(1));
-                }
-            } catch (SQLException e) {
-                throw new RuntimeException("Error mapping result to type " + resultType, e);
-            }
-        });
+        return query(sql, createResultSetMapper(resultType));
     }
 
     @Override
@@ -408,19 +369,8 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
 
         // Extract column data types from the schema
         Map<String, DataType> columnDataTypes = new HashMap<>();
-        TableSchema tableSchema;
-        // If segment doesn't have schema, fetch it from database
-        if (segment.getSchema().isPresent()) {
-            tableSchema = segment.getSchema().get();
-        } else {
-            if (segment.hasRelationSource()) {
-                throw new IllegalStateException("Schema is required for SQL relation segment: " + segment.getDisplayName());
-            }
-            // Fetch schema from database
-            List<String> tablePathComponents = segment.getTablePath().getComponents();
-            tableSchema = getTableSchema(tablePathComponents);
-            segment.withSchema(tableSchema);
-        }
+        segment = resolveSegmentSchema(segment);
+        TableSchema tableSchema = segment.getSchema().orElseThrow();
         // Now extract data types for all columns
         for (String column : columns) {
             DataType dataType = tableSchema.getColumnType(column);
@@ -635,7 +585,7 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
 
             try (Connection connection = getConnection();
                  PreparedStatement statement = connection.prepareStatement(rowHashQuery)) {
-                statement.setFetchSize(1000);
+                statement.setFetchSize(ROW_HASH_FETCH_SIZE);
                 try (ResultSet resultSet = statement.executeQuery()) {
                     int keyColumnCount = segment.getKeyColumns().size();
                     int rowCount = 0;
@@ -1038,20 +988,6 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
         return selectSql(segment, relevantColumns, whereClause, keyColumns);
     }
 
-    /**
-     * Extract key values from query result.
-     */
-    private List<Object> extractKeyValues(Object[] result, int startIndex, int count) {
-        List<Object> keyValues = new ArrayList<>();
-        int endIndex = Math.min(startIndex + count, result.length);
-
-        for (int i = startIndex; i < endIndex; i++) {
-            keyValues.add(result[i]);
-        }
-
-        return keyValues;
-    }
-
     // Helper methods
 
     protected <T> RowMapper<T> createResultSetMapper(Class<T> resultType) {
@@ -1071,6 +1007,29 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
                     return resultType.cast(rs.getDate(1));
                 } else if (resultType == java.util.Date.class) {
                     return resultType.cast(rs.getTimestamp(1));
+                } else if (resultType.isArray() && resultType.getComponentType() == Object.class) {
+                    // Handle Object[] case - read all columns into array
+                    ResultSetMetaData metaData = rs.getMetaData();
+                    int columnCount = metaData.getColumnCount();
+                    Object[] row = new Object[columnCount];
+                    for (int i = 0; i < columnCount; i++) {
+                        // CRITICAL: Use getString() instead of getObject() to ensure
+                        // normalized values (especially BLOB/HEX conversions) are read as strings
+                        // This prevents byte[] from being returned for BLOB columns that were
+                        // converted to HEX strings in the SQL query
+                        String value = rs.getString(i + 1);
+                        row[i] = value;
+
+                        // Debug log for DECIMAL and BLOB columns
+                        String columnName = metaData.getColumnLabel(i + 1);
+                        if (columnName != null && (columnName.toLowerCase().contains("decimal") ||
+                                                   columnName.toLowerCase().contains("numeric") ||
+                                                   columnName.toLowerCase().contains("blob"))) {
+                            log.debug("Read column {} (type={}): value=[{}]",
+                                    columnName, metaData.getColumnTypeName(i + 1), value);
+                        }
+                    }
+                    return resultType.cast(row);
                 } else {
                     return resultType.cast(rs.getObject(1));
                 }
@@ -1135,6 +1094,22 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
 
 
     /**
+     * 取出 segment 已携带的 schema；没有则查一次元数据并回填到返回的副本上。
+     * 注意 withSchema 返回副本而非原地修改，必须接收返回值，否则 schema 丢失、
+     * 同一 segment 后续每次构建查询都会重复查元数据。
+     */
+    private TableSegment resolveSegmentSchema(TableSegment segment) {
+        if (segment.getSchema().isPresent()) {
+            return segment;
+        }
+        if (segment.hasRelationSource()) {
+            throw new IllegalStateException("Schema is required for SQL relation segment: " + segment.getDisplayName());
+        }
+        List<String> tablePathComponents = segment.getTablePath().getComponents();
+        return segment.withSchema(getTableSchema(tablePathComponents));
+    }
+
+    /**
      * Build the SQL query for row-hash based local comparison.
      */
     protected String buildRowHashQuery(TableSegment segment) {
@@ -1144,17 +1119,8 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
 
         // Retrieve column data types
         Map<String, DataType> columnDataTypes = new HashMap<>();
-        TableSchema tableSchema;
-        if (segment.getSchema().isPresent()) {
-            tableSchema = segment.getSchema().get();
-        } else {
-            if (segment.hasRelationSource()) {
-                throw new IllegalStateException("Schema is required for SQL relation segment: " + segment.getDisplayName());
-            }
-            List<String> tablePathComponents = segment.getTablePath().getComponents();
-            tableSchema = getTableSchema(tablePathComponents);
-            segment.withSchema(tableSchema);
-        }
+        segment = resolveSegmentSchema(segment);
+        TableSchema tableSchema = segment.getSchema().orElseThrow();
 
         for (String column : columns) {
             DataType dataType = tableSchema.getColumnType(column);

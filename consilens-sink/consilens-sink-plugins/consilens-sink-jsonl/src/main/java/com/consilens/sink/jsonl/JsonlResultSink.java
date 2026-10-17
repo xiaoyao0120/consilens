@@ -52,7 +52,7 @@ public class JsonlResultSink implements Sink {
     @Override
     public void onResult(DiffResult result, DiffContext context) throws IOException {
         Map<String, Object> summary = new LinkedHashMap<>();
-        summary.put("serialNo", context.getTaskId());
+        summary.put("taskId", context.getTaskId());
         summary.put("hasDifferences", result != null && result.hasDifferences());
         summary.put("differenceCount", result != null ? result.getDifferenceCount() : 0L);
         summary.put("statistics", result != null ? result.getStatisticsMap() : Map.of());

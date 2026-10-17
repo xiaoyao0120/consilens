@@ -51,7 +51,7 @@ class ChecksumDifferTest {
 
         @BeforeEach
         void setUp() {
-                config = new TableDiffer.DifferConfig(4, 1000, false, ChecksumAlgorithm.CONCAT);
+                config = new TableDiffer.DifferConfig(4, 1000, ChecksumAlgorithm.CONCAT);
                 differ = new ChecksumDiffer(config);
 
                 // Create test table segments
@@ -76,7 +76,7 @@ class ChecksumDifferTest {
                         // When & Then
                         IllegalArgumentException exception = assertThrows(
                                         IllegalArgumentException.class,
-                                        () -> new ChecksumDiffer(new TableDiffer.DifferConfig(10, 5, false,
+                                        () -> new ChecksumDiffer(new TableDiffer.DifferConfig(10, 5,
                                                 ChecksumAlgorithm.CONCAT)));
                         assertTrue(exception.getMessage().contains("Bisection factor must be lower than threshold"));
                 }
@@ -88,7 +88,7 @@ class ChecksumDifferTest {
                         // When & Then
                         IllegalArgumentException exception = assertThrows(
                                         IllegalArgumentException.class,
-                                        () -> new ChecksumDiffer(new TableDiffer.DifferConfig(1, 10, false,
+                                        () -> new ChecksumDiffer(new TableDiffer.DifferConfig(1, 10,
                                                 ChecksumAlgorithm.CONCAT)));
                         assertTrue(exception.getMessage().contains("Bisection factor must be at least 2"));
                 }
@@ -98,7 +98,7 @@ class ChecksumDifferTest {
                 void testBisectionThresholdMustBePositive() {
                         IllegalArgumentException exception = assertThrows(
                                         IllegalArgumentException.class,
-                                        () -> new ChecksumDiffer(new TableDiffer.DifferConfig(4, 0, false,
+                                        () -> new ChecksumDiffer(new TableDiffer.DifferConfig(4, 0,
                                                 ChecksumAlgorithm.CONCAT)));
                         assertTrue(exception.getMessage().contains("Bisection threshold must be greater than 0"));
                 }
@@ -109,7 +109,7 @@ class ChecksumDifferTest {
                         // Given: bisectionFactor=4 < bisectionThreshold=100 (valid)
                         // When & Then
                         assertDoesNotThrow(() -> new ChecksumDiffer(
-                                        new TableDiffer.DifferConfig(100, 1000, false,
+                                        new TableDiffer.DifferConfig(100, 1000,
                                                 ChecksumAlgorithm.CONCAT)));
                 }
         }
@@ -192,7 +192,6 @@ class ChecksumDifferTest {
                         differ = new ChecksumDiffer(new TableDiffer.DifferConfig(
                                         4,
                                         1000,
-                                        false,
                                         ChecksumAlgorithm.CONCAT,
                                         LocalCompareMode.ROW_HASH,
                                         ConcurrencyConfig.defaultConfig()));

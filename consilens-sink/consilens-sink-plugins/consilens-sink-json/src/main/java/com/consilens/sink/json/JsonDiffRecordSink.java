@@ -2,7 +2,6 @@ package com.consilens.sink.json;
 
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
-import com.consilens.core.lifecycle.SegmentResult;
 import com.consilens.sink.api.ColumnValueInterpolator;
 import com.consilens.sink.api.Sink;
 import com.consilens.sink.api.model.ColumnMapping;
@@ -160,9 +159,6 @@ public class JsonDiffRecordSink implements Sink {
         }
         return map;
     }
-
-    @Override
-    public void onSegmentComplete(SegmentResult segmentResult) {}
 
     @Override
     public void onError(DiffContext context, Throwable error) {

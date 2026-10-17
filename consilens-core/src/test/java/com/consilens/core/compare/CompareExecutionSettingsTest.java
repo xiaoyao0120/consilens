@@ -23,7 +23,6 @@ class CompareExecutionSettingsTest {
 
         assertEquals(32, settings.getBisectionFactor());
         assertEquals(16_384L, settings.getBisectionThreshold());
-        assertFalse(settings.isEnableProfiling());
         assertEquals(ChecksumAlgorithm.CONCAT, settings.getChecksumAlgorithm());
         assertEquals(LocalCompareMode.FULL, settings.getLocalCompareMode());
         // 默认开放档：重复键走多重集配对；严格档（命中重复键即失败）需显式开启
@@ -41,7 +40,6 @@ class CompareExecutionSettingsTest {
                 .executionOptions(CompareExecutionOptions.builder()
                         .bisectionFactor(8)
                         .bisectionThreshold(512L)
-                        .enableProfiling(true)
                         .checksumAlgorithm("xor")
                         .localCompareMode("row-hash")
                         .validateUniqueKeys(false)
@@ -54,7 +52,6 @@ class CompareExecutionSettingsTest {
 
         assertEquals(8, settings.getBisectionFactor());
         assertEquals(512L, settings.getBisectionThreshold());
-        assertTrue(settings.isEnableProfiling());
         assertEquals(ChecksumAlgorithm.XOR, settings.getChecksumAlgorithm());
         assertEquals(LocalCompareMode.ROW_HASH, settings.getLocalCompareMode());
         assertFalse(settings.isValidateUniqueKeys());

@@ -95,13 +95,23 @@ public class JsonlDiffRecordSink implements Sink {
 
     private LinkedHashMap<String, Object> buildDefaultRecord(DiffRow row) {
         LinkedHashMap<String, Object> record = new LinkedHashMap<>();
-        record.put("operation", row.getOperation().getCode());
-        record.put("primaryKey", row.getPrimaryKey());
-        record.put("metadata", row.getMetadata());
+        for (String field : DEFAULT_FIELDS) {
+            switch (field) {
+                case "operation":
+                    record.put(field, row.getOperation().getCode());
+                    break;
+                case "primaryKey":
+                    record.put(field, row.getPrimaryKey());
+                    break;
+                case "metadata":
+                    record.put(field, row.getMetadata());
+                    break;
+                default:
+                    throw new IllegalStateException("Unsupported default field: " + field);
+            }
+        }
         // 字段值：完整列名 + 两边行值（与 primaryKey/metadata 一同落盘，供差异明细展示且不截断）
-        List<String> names1 = row.getColumnNames1();
-        List<String> names2 = row.getColumnNames2();
-        List<String> columnNames = !names1.isEmpty() ? names1 : names2;
+        List<String> columnNames = row.resolvedColumnNames();
         if (!columnNames.isEmpty()) {
             record.put("columnNames", columnNames);
         }

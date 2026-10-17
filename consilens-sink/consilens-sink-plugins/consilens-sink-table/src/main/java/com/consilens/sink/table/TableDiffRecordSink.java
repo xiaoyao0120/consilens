@@ -13,7 +13,6 @@ import com.consilens.connector.api.write.TypedOutputRow;
 import com.consilens.connector.api.write.TypedOutputValue;
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
-import com.consilens.core.lifecycle.SegmentResult;
 import com.consilens.sink.api.Sink;
 import com.consilens.sink.api.model.ColumnMapping;
 import com.consilens.sink.api.model.SinkConfig;
@@ -105,11 +104,6 @@ public class TableDiffRecordSink implements Sink {
                 throw e;
             }
         }
-    }
-
-    @Override
-    public void onSegmentComplete(SegmentResult segmentResult) {
-        log.debug("TableDiffRecordSink segment={} done", segmentResult.getSegmentIndex());
     }
 
     @Override

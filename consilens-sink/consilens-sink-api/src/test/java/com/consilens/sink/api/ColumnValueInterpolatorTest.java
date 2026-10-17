@@ -33,7 +33,6 @@ class ColumnValueInterpolatorTest {
                         .mismatchCount(1L)
                         .processingTimeMs(0L)
                         .unchangedCount(1999999L)
-                        .differencePercentage(0.0D)
                         .build())
                 .build();
 
@@ -62,7 +61,6 @@ class ColumnValueInterpolatorTest {
                         .mismatchCount(0L)
                         .processingTimeMs(0L)
                         .unchangedCount(128L)
-                        .differencePercentage(0.0D)
                         .build())
                 .build();
 

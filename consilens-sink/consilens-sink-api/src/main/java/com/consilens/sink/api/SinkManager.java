@@ -3,7 +3,6 @@ package com.consilens.sink.api;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
-import com.consilens.core.lifecycle.SegmentResult;
 import com.consilens.sink.api.model.ResultConfig;
 import com.consilens.sink.api.model.SinkConfig;
 import lombok.extern.slf4j.Slf4j;
@@ -17,8 +16,8 @@ import java.util.List;
 @Slf4j
 public class SinkManager {
 
-    private final List<SinkHolder> diffRecordSinks = new ArrayList<>();
-    private final List<SinkHolder> resultSinks = new ArrayList<>();
+    private final List<Sink> diffRecordSinks = new ArrayList<>();
+    private final List<Sink> resultSinks = new ArrayList<>();
     private final SinkRegistry registry = new SinkRegistry();
     private final ResultConfig config;
 
@@ -37,11 +36,10 @@ public class SinkManager {
             try {
                 Sink sink = registry.create(sinkConfig.getFormat(), sinkConfig.getType());
                 sink.open(sinkConfig, context);
-                SinkHolder holder = new SinkHolder(sinkConfig, sink);
-                if ("diff-record".equalsIgnoreCase(sinkConfig.getType())) {
-                    diffRecordSinks.add(holder);
-                } else if ("result".equalsIgnoreCase(sinkConfig.getType())) {
-                    resultSinks.add(holder);
+                if (SinkTypes.DIFF_RECORD.equalsIgnoreCase(sinkConfig.getType())) {
+                    diffRecordSinks.add(sink);
+                } else if (SinkTypes.RESULT.equalsIgnoreCase(sinkConfig.getType())) {
+                    resultSinks.add(sink);
                 }
             } catch (Exception exception) {
                 handleSinkFailure(exception);
@@ -50,40 +48,31 @@ public class SinkManager {
     }
 
     public void onDiffRecords(List<DiffRow> rows, DiffContext context) {
-        diffRecordSinks.forEach(holder -> safeRun(() -> holder.sink().onDiffRecords(rows, context)));
+        diffRecordSinks.forEach(sink -> safeRun(() -> sink.onDiffRecords(rows, context)));
     }
 
     public void onResult(DiffResult result, DiffContext context) {
-        resultSinks.forEach(holder -> safeRun(() -> holder.sink().onResult(result, context)));
-    }
-
-    public void onSegmentComplete(SegmentResult segmentResult) {
-        diffRecordSinks.forEach(holder -> safeRun(() -> holder.sink().onSegmentComplete(segmentResult)));
-        resultSinks.forEach(holder -> safeRun(() -> holder.sink().onSegmentComplete(segmentResult)));
+        resultSinks.forEach(sink -> safeRun(() -> sink.onResult(result, context)));
     }
 
     public void onError(DiffContext context, Throwable error) {
-        resultSinks.forEach(holder -> safeRun(() -> holder.sink().onError(context, error)));
+        resultSinks.forEach(sink -> safeRun(() -> sink.onError(context, error)));
     }
 
     public void close() {
-        for (SinkHolder holder : diffRecordSinks) {
-            safeRun(() -> holder.sink().close());
-        }
-        for (SinkHolder holder : resultSinks) {
-            safeRun(() -> holder.sink().close());
-        }
+        diffRecordSinks.forEach(sink -> safeRun(sink::close));
+        resultSinks.forEach(sink -> safeRun(sink::close));
     }
 
     public long diffRecordCount() {
         return diffRecordSinks.stream()
-                .mapToLong(holder -> holder.sink().writtenRecordCount())
+                .mapToLong(Sink::writtenRecordCount)
                 .filter(count -> count >= 0)
                 .sum();
     }
 
     public boolean diffRecordTruncated() {
-        return diffRecordSinks.stream().anyMatch(holder -> holder.sink().isTruncated());
+        return diffRecordSinks.stream().anyMatch(Sink::isTruncated);
     }
 
     private void safeRun(ThrowingRunnable runnable) {
@@ -99,20 +88,6 @@ public class SinkManager {
             throw new RuntimeException("Sink execution failed", exception);
         }
         log.warn("Sink execution failed: {}", exception.getMessage(), exception);
-    }
-
-    private static class SinkHolder {
-        private final SinkConfig config;
-        private final Sink sink;
-
-        SinkHolder(SinkConfig config, Sink sink) {
-            this.config = config;
-            this.sink = sink;
-        }
-
-        Sink sink() {
-            return sink;
-        }
     }
 
     @FunctionalInterface

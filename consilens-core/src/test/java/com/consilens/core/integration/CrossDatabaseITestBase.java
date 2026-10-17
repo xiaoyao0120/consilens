@@ -213,7 +213,7 @@ public abstract class CrossDatabaseITestBase {
      * Runs a checksum diff between two segments and returns the result.
      */
     protected static DiffResult runChecksumDiff(TableSegment seg1, TableSegment seg2) throws Exception {
-        DifferConfig config = new DifferConfig(4, 100, false, ChecksumAlgorithm.CONCAT);
+        DifferConfig config = new DifferConfig(4, 100, ChecksumAlgorithm.CONCAT);
         try (ChecksumDiffer differ = new ChecksumDiffer(config)) {
             return differ.diffTables(seg1, seg2).get(60, TimeUnit.SECONDS);
         }

@@ -3,7 +3,6 @@ package com.consilens.sink.console;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
-import com.consilens.core.lifecycle.SegmentResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
@@ -63,17 +62,6 @@ final class ConsoleOutputSupport {
         if (result != null && result.getMetadata() != null && !result.getMetadata().isEmpty()) {
             payload.put("metadata", result.getMetadata());
         }
-        return payload;
-    }
-
-    static Map<String, Object> segmentPayload(SegmentResult segmentResult) {
-        LinkedHashMap<String, Object> payload = basePayload("segment-complete", segmentResult.getContext());
-        payload.put("segmentIndex", segmentResult.getSegmentIndex());
-        payload.put("sourceRowsScanned", segmentResult.getSourceRowsScanned());
-        payload.put("targetRowsScanned", segmentResult.getTargetRowsScanned());
-        payload.put("differencesFound", segmentResult.getDifferencesFound());
-        payload.put("totalDifferencesAccumulated", segmentResult.getTotalDifferencesAccumulated());
-        payload.put("durationMs", segmentResult.getDuration() != null ? segmentResult.getDuration().toMillis() : null);
         return payload;
     }
 

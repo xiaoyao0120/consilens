@@ -11,6 +11,7 @@ import com.consilens.core.diff.DiffOperation;
 import com.consilens.core.diff.InfoTreeRecorder;
 import com.consilens.core.thread.ConcurrencyConfig;
 import com.consilens.core.thread.ExecutorProvider;
+import com.consilens.connector.api.DataTypeHandler;
 import com.consilens.connector.api.model.DataType;
 import com.consilens.connector.api.model.TableSchema;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -40,9 +41,9 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     private final ChecksumCache checksumCache;
     private final PerformanceMonitor performanceMonitor;
     private final AtomicLong sourceMissingCount = new AtomicLong(0);
-    // 最近一次 Initial bounds（尾扫用）：每个 diff 任务新建 ChecksumDiffer 实例
-    private ChecksumResult lastBounds1;
-    private ChecksumResult lastBounds2;
+    // 初始 bounds（尾扫用）：每个 diff 任务新建 ChecksumDiffer 实例，写入后只读
+    private ChecksumResult initialBounds1;
+    private ChecksumResult initialBounds2;
     private InfoTreeRecorder tailInfoRecorder;
     private final AtomicLong targetMissingCount = new AtomicLong(0);
     private final AtomicLong mismatchCount = new AtomicLong(0);
@@ -50,7 +51,38 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     private final AtomicLong segmentSequence = new AtomicLong(0);
     private final Map<DatabaseAdapter, TableSegmenter> segmenterCache = new ConcurrentHashMap<>();
     private final SegmentPermitController activeSegmentBudget;
+
+    /**
+     * 按主键回查差异行时每批绑定的主键个数。单条 SQL 的 IN 列表过长会触及部分数据库的
+     * 表达式/参数上限（Oracle 1000 个表达式）并放大解析开销；500 留出一半余量，
+     * 同时避免批次过小导致往返次数显著放大。
+     */
     private static final int KEY_QUERY_BATCH_SIZE = 500;
+
+    /**
+     * 尾扫取数失败后的最大尝试次数。瞬时失败（如 ClickHouse QUERY_WAS_CANCELLED、
+     * 查询超时）通常在下一次重试时恢复；3 次足以覆盖单次抖动，又不会让暂时不可用的
+     * 对端把失败路径拖得过长。
+     */
+    private static final int TAIL_SCAN_MAX_ATTEMPTS = 3;
+
+    /**
+     * 尾扫重试的线性退避基数（毫秒）：第 attempt 次失败后等待 base * attempt
+     * （500ms、1000ms），3 次上限内总等待 1.5s，足以等待瞬时取消/超时恢复。
+     */
+    private static final long TAIL_RETRY_BASE_DELAY_MS = 500L;
+
+    /**
+     * 自适应分段的"大数据量"阈值：超过 100 万行时把初始扇出加倍（上限 64），
+     * 让超大表的顶层分段更快收敛、减少后续二分轮数。
+     */
+    private static final long LARGE_TABLE_ROW_THRESHOLD = 1_000_000L;
+
+    /**
+     * 自适应分段的"中等数据量"阈值：10 万~100 万行沿用配置扇出；低于 10 万行时
+     * 扇出减半（下限 4），避免小表被切得过碎、增加空段与往返开销。
+     */
+    private static final long MEDIUM_TABLE_ROW_THRESHOLD = 100_000L;
 
     /**
      * Creates a new ChecksumDiffer with the given configuration.
@@ -84,8 +116,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         int segmentBudget = resolveSegmentBudget(config);
         this.activeSegmentBudget = new SegmentPermitController(segmentBudget);
         
-        log.info("ChecksumDiffer initialized with checksumAlgorithm: {}, local comparison mode: auto, segmentBudget={}",
-                config.getChecksumAlgorithm(), segmentBudget);
+        log.info("ChecksumDiffer initialized with checksumAlgorithm: {}, local comparison mode: {}, segmentBudget={}",
+                config.getChecksumAlgorithm(), config.getLocalCompareMode(), segmentBudget);
     }
 
     @Override
@@ -424,8 +456,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                 log.info("Initial bounds established - Table2: count={}, minKey={}, maxKey={}", 
                         bounds2.getCount(), bounds2.getMinKey(), bounds2.getMaxKey());
 
-                lastBounds1 = bounds1;
-                lastBounds2 = bounds2;
+                initialBounds1 = bounds1;
+                initialBounds2 = bounds2;
                 tailInfoRecorder = infoTreeRecorder;
                 return new InitialBounds(bounds1, bounds2, maxRows);
             } catch (Exception e) {
@@ -781,6 +813,16 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     /**
      * Perform full data comparison.
      */
+    /**
+     * 本地比较使用的值归一化器：由方言决定驱动特定类型（如 MySQL YEAR）的比较形态。
+     */
+    private static DataTypeHandler dataTypeHandler(TableSegment segment) {
+        if (segment == null || segment.getDatabase() == null || segment.getDatabase().getDialect() == null) {
+            return null;
+        }
+        return segment.getDatabase().getDialect().getDataTypeHandler();
+    }
+
     private CompletableFuture<Void> performFullDataComparison(
             TableSegment table1, TableSegment table2, InfoTreeRecorder infoTreeRecorder, String segmentId) {
 
@@ -804,7 +846,9 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                                 table2.getKeyColumns(),
                                 table2.getExtraColumns(),
                                 columnTypes1,
-                                columnTypes2);
+                                columnTypes2,
+                                dataTypeHandler(table1),
+                                dataTypeHandler(table2));
 
                         performanceMonitor.recordLocalComparison(segmentId,
                                 snapshot.rows1.size(), snapshot.rows2.size(), differences.size());
@@ -1266,10 +1310,10 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         int adaptiveFactor;
 
         // Adjust factor based on size
-        if (maxSize > 1000000) {
+        if (maxSize > LARGE_TABLE_ROW_THRESHOLD) {
             adaptiveFactor = Math.min(config.getBisectionFactor() * 2, 64);
             log.debug("Large dataset ({}), using adaptive factor: {} (base factor * 2)", maxSize, adaptiveFactor);
-        } else if (maxSize > 100000) {
+        } else if (maxSize > MEDIUM_TABLE_ROW_THRESHOLD) {
             adaptiveFactor = config.getBisectionFactor();
             log.debug("Medium dataset ({}), using adaptive factor: {} (base factor)", maxSize, adaptiveFactor);
         } else {
@@ -1628,15 +1672,16 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         // QUERY_WAS_CANCELLED 一次即少 1 条 SM）。瞬时失败（查询被取消/超时）重试几次再放弃。
         List<Object[]> rows = null;
         RuntimeException lastError = null;
-        for (int attempt = 1; attempt <= 3; attempt++) {
+        for (int attempt = 1; attempt <= TAIL_SCAN_MAX_ATTEMPTS; attempt++) {
             try {
                 rows = bounded.getValues();
                 break;
             } catch (RuntimeException e) {
                 lastError = e;
-                log.warn("Tail scan [{}] fetch attempt {}/3 failed: {}", segmentId, attempt, e.getMessage());
+                log.warn("Tail scan [{}] fetch attempt {}/{} failed: {}",
+                        segmentId, attempt, TAIL_SCAN_MAX_ATTEMPTS, e.getMessage());
                 try {
-                    Thread.sleep(500L * attempt);
+                    Thread.sleep(TAIL_RETRY_BASE_DELAY_MS * attempt);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     break;
@@ -1705,18 +1750,15 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             long targetRowCount, long durationMs) {
         // 所有 main-flow 分支的必经点：在此统一补扫"超出对端键范围"的行，
         // 保证任何分段策略下尾部行差异都不会漏检。
-        if (lastBounds1 != null && lastBounds2 != null && tailInfoRecorder != null) {
-            scanAndStoreTailDifferences(table1, table2, tailInfoRecorder, lastBounds1, lastBounds2,
-                    lastBounds1.getCount() >= lastBounds2.getCount() ? table1 : table2);
+        if (initialBounds1 != null && initialBounds2 != null && tailInfoRecorder != null) {
+            scanAndStoreTailDifferences(table1, table2, tailInfoRecorder, initialBounds1, initialBounds2,
+                    initialBounds1.getCount() >= initialBounds2.getCount() ? table1 : table2);
         }
 
         long sourceMissing = sourceMissingCount.get();
         long targetMissing = targetMissingCount.get();
         long mismatched = mismatchCount.get();
         long totalDifferences = sourceMissing + targetMissing + mismatched;
-        double differencePercentage = (sourceRowCount + targetRowCount > 0)
-                ? (double) totalDifferences / Math.max(sourceRowCount, targetRowCount) * 100.0
-                : 0.0;
 
         DiffResult.DiffStatistics statistics = DiffResult.DiffStatistics.builder()
                 .sourceRowCount(sourceRowCount)
@@ -1727,7 +1769,6 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                 .totalDifferences(totalDifferences)
                 .processingTimeMs(durationMs)
                 .unchangedCount(Math.max(0, Math.min(sourceRowCount, targetRowCount) - mismatched))
-                .differencePercentage(differencePercentage)
                 .build();
 
         completeDiff(statistics);
@@ -1819,15 +1860,6 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                 segment.getMinKey().map(Object::toString).orElse("null"),
                 segment.getMaxKey().map(Object::toString).orElse("null"),
                 segment.getWhereClause().orElse("null"));
-    }
-
-    private String encodeKeyParts(String... parts) {
-        StringBuilder key = new StringBuilder();
-        for (String part : parts) {
-            String value = part != null ? part : "null";
-            key.append(value.length()).append(':').append(value).append('|');
-        }
-        return key.toString();
     }
 
     @Override

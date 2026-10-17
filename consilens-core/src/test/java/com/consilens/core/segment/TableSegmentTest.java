@@ -1,5 +1,6 @@
 package com.consilens.core.segment;
 
+import com.consilens.connector.api.DatabaseDialect;
 import com.consilens.core.database.adpter.DatabaseAdapter;
 import com.consilens.connector.api.model.ColumnInfo;
 import com.consilens.connector.api.model.DataType;
@@ -310,10 +311,22 @@ public class TableSegmentTest {
 
     @Test
     public void testBuildWhereClauseWithLocalDateKeyUsesQuotedLiteralForSqlServer() {
+        DatabaseDialect sqlServerDialect = (DatabaseDialect) java.lang.reflect.Proxy.newProxyInstance(
+                DatabaseDialect.class.getClassLoader(),
+                new Class<?>[]{DatabaseDialect.class},
+                (proxy, method, args) -> "usesAnsiTemporalLiterals".equals(method.getName()) ? false : null);
         DatabaseAdapter sqlServerAdapter = (DatabaseAdapter) java.lang.reflect.Proxy.newProxyInstance(
                 DatabaseAdapter.class.getClassLoader(),
                 new Class<?>[]{DatabaseAdapter.class},
-                (proxy, method, args) -> "getConnectorType".equals(method.getName()) ? "sqlserver" : null);
+                (proxy, method, args) -> {
+                    if ("getConnectorType".equals(method.getName())) {
+                        return "sqlserver";
+                    }
+                    if ("getDialect".equals(method.getName())) {
+                        return sqlServerDialect;
+                    }
+                    return null;
+                });
 
         TableSegment segment = TableSegment.builder()
                 .database(sqlServerAdapter)

@@ -1,8 +1,10 @@
 package com.consilens.core.compare;
 
 import com.consilens.connector.api.ConnectorException;
+import com.consilens.connector.api.DatabaseDialect;
 import com.consilens.connector.api.config.ConnectorConfig;
 import com.consilens.connector.api.dataset.DatasetHandle;
+import com.consilens.connector.api.dataset.RelationalDatasetSupport;
 import com.consilens.connector.api.model.ComparisonSpec;
 import com.consilens.connector.api.model.KeySpec;
 import com.consilens.connector.api.model.PredicateSpec;
@@ -64,8 +66,8 @@ public class DefaultCompareRuntime implements CompareRuntime {
             sourceDataset = sourceConnector.openDataset(sourceConfig.getResource(), sourceConfig.getReadOptions());
             targetDataset = targetConnector.openDataset(targetConfig.getResource(), targetConfig.getReadOptions());
 
-            validateDorisPartitionRequirement("source", request.getSourceFilter(), sourceDataset);
-            validateDorisPartitionRequirement("target", request.getTargetFilter(), targetDataset);
+            validatePartitionRequirement("source", request.getSourceFilter(), sourceDataset);
+            validatePartitionRequirement("target", request.getTargetFilter(), targetDataset);
 
             CompareSegment sourceSegment = buildSegment(
                     sourceDataset,
@@ -149,16 +151,21 @@ public class DefaultCompareRuntime implements CompareRuntime {
         }
     }
 
-    private void validateDorisPartitionRequirement(String side,
-                                                   PredicateSpec filter,
-                                                   DatasetHandle dataset) {
+    private void validatePartitionRequirement(String side,
+                                              PredicateSpec filter,
+                                              DatasetHandle dataset) {
         if (dataset == null || dataset.getMetadata() == null || dataset.getMetadata().getAttributes() == null) {
             return;
         }
+        DatabaseDialect dialect = dataset.getSupport(RelationalDatasetSupport.class)
+                .map(RelationalDatasetSupport::getDialect)
+                .orElse(null);
+        if (dialect == null || !dialect.discoversPartitionAttributes()) {
+            return;
+        }
         Map<String, Object> attributes = dataset.getMetadata().getAttributes();
-        String databaseType = stringValue(attributes.get("databaseType"));
         boolean partitioned = Boolean.TRUE.equals(attributes.get("partitioned"));
-        if (!"doris".equalsIgnoreCase(databaseType) || !partitioned) {
+        if (!partitioned) {
             return;
         }
         @SuppressWarnings("unchecked")
@@ -172,14 +179,10 @@ public class DefaultCompareRuntime implements CompareRuntime {
                     .allMatch(key -> normalizedFilter.contains(key.toLowerCase(java.util.Locale.ROOT)));
         }
         if (!resolved) {
-            throw new ConnectorException("Doris " + side
+            throw new ConnectorException(dialect.getConnectorType() + " " + side
                     + " table is partitioned but no partition predicate can be resolved. "
                     + "Please include partition keys in comparison.filters." + side + ".");
         }
-    }
-
-    private String stringValue(Object value) {
-        return value instanceof String ? (String) value : null;
     }
 
     private ConnectorConfig withNormalization(ConnectorConfig config, CompareRequest request, String side) {

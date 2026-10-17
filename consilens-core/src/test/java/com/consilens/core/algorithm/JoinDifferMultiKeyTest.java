@@ -38,8 +38,8 @@ class JoinDifferMultiKeyTest {
 
     @BeforeEach
     void setUp() {
-        config = new TableDiffer.DifferConfig(1000, 16384, false, ChecksumAlgorithm.CONCAT);
-        differ = new JoinDiffer(config, JoinDiffer.JoinDifferOptions.defaultOptions());
+        config = new TableDiffer.DifferConfig(1000, 16384, ChecksumAlgorithm.CONCAT);
+        differ = new JoinDiffer(config, new JoinDiffer.JoinDifferOptions(false));
         mockSqlQueryGenerator = mock(SqlQueryGenerator.class);
 
         ConnectionPool pool1 = mock(ConnectionPool.class);

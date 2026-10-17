@@ -1,5 +1,6 @@
 package com.consilens.core.segment;
 
+import com.consilens.connector.api.DatabaseDialect;
 import com.consilens.core.database.adpter.DatabaseAdapter;
 import com.consilens.connector.api.model.TableSchema;
 import com.consilens.connector.api.model.DataType;
@@ -295,16 +296,6 @@ public class TableSegment {
      */
     public List<Object[]> getValues() {
         return database.querySegment(this);
-    }
-
-    /**
-     * Get row hashes for this segment (primary key + row hash only).
-     * This is much more efficient than getValues() for large segments with many columns.
-     * 
-     * @return Map of primary key values to row hash (MD5 hex string)
-     */
-    public java.util.Map<List<Object>, String> getRowHashes() {
-        return database.querySegmentRowHashes(this);
     }
 
     /**
@@ -767,12 +758,13 @@ public class TableSegment {
     }
 
     /**
-     * Format a temporal value as a SQL literal. SQL Server does not understand
-     * ANSI DATE/TIMESTAMP literals, so use a plain quoted string there; other
-     * dialects (Presto, Trino, Oracle, PostgreSQL) keep the ANSI literal form.
+     * Format a temporal value as a SQL literal. Dialects may opt out of ANSI
+     * temporal literals (SQL Server only accepts plain quoted strings); the
+     * decision belongs to the dialect, not to this segment.
      */
     private String formatTemporalLiteral(String value) {
-        if (database != null && isSqlServerConnector(database.getConnectorType())) {
+        DatabaseDialect dialect = database != null ? database.getDialect() : null;
+        if (dialect != null && !dialect.usesAnsiTemporalLiterals()) {
             return "'" + escapeSQL(value) + "'";
         }
         if (value.matches("\\d{4}-\\d{2}-\\d{2}")) {
@@ -781,11 +773,6 @@ public class TableSegment {
         // Presto/Trino TIMESTAMP literals require a space separator, while
         // LocalDateTime.toString() uses 'T'; normalize to the ANSI form.
         return "TIMESTAMP '" + value.replace('T', ' ') + "'";
-    }
-
-    private boolean isSqlServerConnector(String connectorType) {
-        return "sqlserver".equalsIgnoreCase(connectorType)
-                || "mssql".equalsIgnoreCase(connectorType);
     }
 
     private String escapeSQL(String value) {

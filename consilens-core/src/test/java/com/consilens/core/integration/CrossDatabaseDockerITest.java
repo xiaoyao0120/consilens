@@ -232,7 +232,7 @@ class CrossDatabaseDockerITest {
                                 DatabaseAdapter tgtAdapter, TablePath tgtPath,
                                 String srcKey, String tgtKey,
                                 List<String> srcExtraCols, List<String> tgtExtraCols) throws Exception {
-        DifferConfig config = new DifferConfig(4, 100, false, ChecksumAlgorithm.CONCAT);
+        DifferConfig config = new DifferConfig(4, 100, ChecksumAlgorithm.CONCAT);
 
         TableSegment seg1 = TableSegment.builder()
                 .database(srcAdapter)

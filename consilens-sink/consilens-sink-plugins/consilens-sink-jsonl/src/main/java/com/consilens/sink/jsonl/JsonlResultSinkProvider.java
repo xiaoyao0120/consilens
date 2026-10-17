@@ -2,6 +2,7 @@ package com.consilens.sink.jsonl;
 
 import com.consilens.sink.api.Sink;
 import com.consilens.sink.api.SinkProvider;
+import com.consilens.sink.api.SinkTypes;
 
 public class JsonlResultSinkProvider implements SinkProvider {
 
@@ -12,7 +13,7 @@ public class JsonlResultSinkProvider implements SinkProvider {
 
     @Override
     public String getType() {
-        return "result";
+        return SinkTypes.RESULT;
     }
 
     @Override

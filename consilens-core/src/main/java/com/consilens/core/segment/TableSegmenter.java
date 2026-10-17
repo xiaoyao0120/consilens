@@ -39,9 +39,7 @@ public class TableSegmenter {
         this.config = config;
         this.intelligentSegmenter = new IntelligentSegmenter(
                 database,
-                buildCheckpointSelector(config),
-                config.getSampleSize(),
-                true);
+                buildCheckpointSelector(config));
         this.rangeStrategy = new RangeSegmentStrategy(intelligentSegmenter);
         this.rowSampleStrategy = new RowSampleSegmentStrategy();
         this.fallbackStrategy = new FallbackSegmentStrategy(config);

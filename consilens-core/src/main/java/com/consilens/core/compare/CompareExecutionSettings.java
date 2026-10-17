@@ -21,7 +21,6 @@ public class CompareExecutionSettings {
 
     private final int bisectionFactor;
     private final long bisectionThreshold;
-    private final boolean enableProfiling;
     private final ChecksumAlgorithm checksumAlgorithm;
     private final LocalCompareMode localCompareMode;
     private final ConcurrencyConfig concurrencyConfig;
@@ -40,7 +39,6 @@ public class CompareExecutionSettings {
                 .bisectionThreshold(executionOptions != null && executionOptions.getBisectionThreshold() != null
                         ? executionOptions.getBisectionThreshold()
                         : DEFAULT_BISECTION_THRESHOLD)
-                .enableProfiling(executionOptions != null && Boolean.TRUE.equals(executionOptions.getEnableProfiling()))
                 .checksumAlgorithm(executionOptions != null
                         ? ChecksumAlgorithm.fromString(executionOptions.getChecksumAlgorithm())
                         : ChecksumAlgorithm.CONCAT)
@@ -59,7 +57,6 @@ public class CompareExecutionSettings {
         return new TableDiffer.DifferConfig(
                 bisectionFactor,
                 bisectionThreshold,
-                enableProfiling,
                 checksumAlgorithm,
                 localCompareMode,
                 concurrencyConfig,
@@ -74,7 +71,6 @@ public class CompareExecutionSettings {
         return CompareExecutionSettings.builder()
                 .bisectionFactor(bisectionFactor)
                 .bisectionThreshold(bisectionThreshold)
-                .enableProfiling(enableProfiling)
                 .checksumAlgorithm(checksumAlgorithm)
                 .localCompareMode(localCompareMode)
                 .concurrencyConfig(concurrencyConfig)

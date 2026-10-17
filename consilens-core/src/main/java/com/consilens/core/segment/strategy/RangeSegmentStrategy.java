@@ -6,7 +6,6 @@ import com.consilens.core.segmentation.KeyVector;
 import com.consilens.core.segmentation.SegmentStatistics;
 import lombok.extern.slf4j.Slf4j;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
@@ -31,8 +30,8 @@ public class RangeSegmentStrategy implements SegmentStrategy {
             return false;
         }
 
-        KeyVector minKey = extractKeyVector(table.getMinKey().orElse(null));
-        KeyVector maxKey = extractKeyVector(table.getMaxKey().orElse(null));
+        KeyVector minKey = KeyVector.fromKeyObject(table.getMinKey().orElse(null));
+        KeyVector maxKey = KeyVector.fromKeyObject(table.getMaxKey().orElse(null));
         if (minKey == null || maxKey == null) {
             return false;
         }
@@ -62,28 +61,5 @@ public class RangeSegmentStrategy implements SegmentStrategy {
                     log.info("Range-based segmentation completed: {}", stats.getSummary());
                     return segments;
                 });
-    }
-
-    private KeyVector extractKeyVector(Object keyObject) {
-        if (keyObject == null) {
-            return null;
-        }
-
-        if (keyObject instanceof List) {
-            List<?> keyList = (List<?>) keyObject;
-            List<Comparable> comparableValues = new ArrayList<>();
-            for (Object value : keyList) {
-                if (value instanceof Comparable) {
-                    comparableValues.add((Comparable<?>) value);
-                } else {
-                    throw new IllegalArgumentException("Key values must be comparable: " + value);
-                }
-            }
-            return new KeyVector(comparableValues);
-        } else if (keyObject instanceof Comparable) {
-            return new KeyVector((Comparable<?>) keyObject);
-        } else {
-            throw new IllegalArgumentException("Unsupported key object type: " + keyObject.getClass());
-        }
     }
 }

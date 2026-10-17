@@ -3,7 +3,6 @@ package com.consilens.sink.api;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
-import com.consilens.core.lifecycle.SegmentResult;
 import com.consilens.sink.api.model.SinkConfig;
 
 import java.util.List;
@@ -18,8 +17,6 @@ public interface Sink extends AutoCloseable {
     default void onDiffRecords(List<DiffRow> rows, DiffContext context) throws Exception {}
 
     default void onResult(DiffResult result, DiffContext context) throws Exception {}
-
-    default void onSegmentComplete(SegmentResult segmentResult) throws Exception {}
 
     default void onError(DiffContext context, Throwable error) throws Exception {}
 

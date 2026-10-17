@@ -4,7 +4,6 @@ import com.consilens.connector.api.model.TablePath;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
-import com.consilens.core.lifecycle.SegmentResult;
 import com.consilens.sink.api.model.SinkConfig;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,7 +16,6 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -84,18 +82,9 @@ class ConsoleSinkStructuredOutputTest {
 
         sink.open(config, context);
         sink.onDiffRecords(List.of(diffRow(), diffRow()), context);
-        sink.onSegmentComplete(SegmentResult.builder()
-                .segmentIndex(3)
-                .sourceRowsScanned(10)
-                .targetRowsScanned(10)
-                .differencesFound(1)
-                .totalDifferencesAccumulated(1)
-                .duration(Duration.ofMillis(25))
-                .context(context)
-                .build());
 
         List<JsonNode> lines = readJsonLines(out);
-        assertEquals(3, lines.size());
+        assertEquals(2, lines.size());
         assertEquals("diff-record", lines.get(0).get("event").asText());
         assertEquals("mismatch", lines.get(0).get("operation").asText());
         assertEquals("42", lines.get(0).get("primaryKeyString").asText());
@@ -103,9 +92,6 @@ class ConsoleSinkStructuredOutputTest {
 
         assertEquals("diff-record-truncated", lines.get(1).get("event").asText());
         assertEquals(1, lines.get(1).get("maxRows").asInt());
-
-        assertEquals("segment-complete", lines.get(2).get("event").asText());
-        assertEquals(3, lines.get(2).get("segmentIndex").asInt());
 
         String plainOutput = out.toString(StandardCharsets.UTF_8);
         assertFalse(plainOutput.contains("[DIFF RESULT]"));
@@ -152,7 +138,6 @@ class ConsoleSinkStructuredOutputTest {
                         .mismatchCount(1)
                         .unchangedCount(99)
                         .totalDifferences(1)
-                        .differencePercentage(0.01d)
                         .processingTimeMs(12L)
                         .build())
                 .infoTree(Optional.empty())
