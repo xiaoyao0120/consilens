@@ -11,7 +11,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 配置绑定回归测试：application.yaml 的 {@code consilens.server.artifact.*} 必须真的落到
  * 属性对象上（嵌套类需要 setter，Lombok {@code @Data} 丢失时绑定会静默失效，只留代码里的默认值）。
  */
-@SpringBootTest
+@SpringBootTest(properties = "spring.profiles.active=local")
 @TestPropertySource(properties = {
         "consilens.server.scheduler.enabled=false",
         "consilens.server.security.enabled=false",

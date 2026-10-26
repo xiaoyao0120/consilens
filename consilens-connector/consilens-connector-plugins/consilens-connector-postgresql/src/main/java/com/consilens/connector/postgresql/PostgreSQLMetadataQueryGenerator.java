@@ -142,12 +142,13 @@ public class PostgreSQLMetadataQueryGenerator extends BaseMetadataQueryGenerator
     }
 
     /**
-     * Escape string values to prevent SQL injection.
+     * PostgreSQL 默认 standard_conforming_strings=on：反斜杠不是转义符，
+     * 只把单引号翻倍即可；再翻倍反斜杠会改变实际匹配的名称。
      */
     private String escapeString(String value) {
         if (value == null) {
             return "";
         }
-        return value.replace("\\", "\\\\").replace("'", "''");
+        return value.replace("'", "''");
     }
 }

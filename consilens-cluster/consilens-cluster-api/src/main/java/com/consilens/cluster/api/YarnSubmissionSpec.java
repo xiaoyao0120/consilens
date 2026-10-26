@@ -26,6 +26,7 @@ public class YarnSubmissionSpec implements Serializable {
 
     private static final Pattern JAVA_CLASS_NAME = Pattern.compile("[A-Za-z_$][A-Za-z0-9_$.]*");
     private static final Pattern YARN_QUEUE_NAME = Pattern.compile("[A-Za-z0-9_.-]+");
+    private static final Pattern SAFE_ALIAS = Pattern.compile("[A-Za-z0-9._-]+");
 
     /**
      * Coordinator launched inside the ApplicationMaster; an implementation
@@ -153,6 +154,14 @@ public class YarnSubmissionSpec implements Serializable {
         if (completionPollSeconds <= 0) {
             throw new IllegalArgumentException("completionPollSeconds must be positive for YARN submission");
         }
+        if (isBlank(runtimeJarDestination)) {
+            runtimeJarDestination = DEFAULT_RUNTIME_JAR_DESTINATION;
+        }
+        // 该名字会进入 AM 启动命令的 -cp 参数（双引号内），必须限制字符集
+        if (!SAFE_ALIAS.matcher(runtimeJarDestination).matches()) {
+            throw new IllegalArgumentException(
+                    "runtimeJarDestination must match [A-Za-z0-9._-]+: " + runtimeJarDestination);
+        }
         if (tags != null) {
             for (String tag : tags) {
                 if (tag == null || tag.trim().isEmpty()) {
@@ -197,6 +206,11 @@ public class YarnSubmissionSpec implements Serializable {
             if (alias != null && isBlank(alias)) {
                 throw new IllegalArgumentException(name + " entry has a blank alias: " + reference);
             }
+            // alias 会进入 AM 启动命令的 -cp 参数：限制字符集，避免 shell 注入
+            if (alias != null && !SAFE_ALIAS.matcher(alias).matches()) {
+                throw new IllegalArgumentException(
+                        name + " alias must match [A-Za-z0-9._-]+: " + alias);
+            }
             String uriPart = referenceUri(reference);
             URI uri;
             try {
@@ -213,6 +227,12 @@ public class YarnSubmissionSpec implements Serializable {
             String destinationName = alias != null ? alias : baseName(uriPart);
             if (isBlank(destinationName)) {
                 throw new IllegalArgumentException(name + " entry has no file name: " + uriPart);
+            }
+            // 派生文件名同样会进入 -cp 双引号参数；URI.getPath() 会解码 %22/%3B 等，
+            // 只校验显式 alias 不够，必须对最终落盘名统一限制字符集。
+            if (!SAFE_ALIAS.matcher(destinationName).matches()) {
+                throw new IllegalArgumentException(
+                        name + " destination name must match [A-Za-z0-9._-]+: " + destinationName);
             }
             if (RESERVED_DESTINATION_NAMES.contains(destinationName) || destinationName.startsWith("submission-descriptor.")) {
                 throw new IllegalArgumentException(name + " entry overlaps a reserved localization name: " + destinationName);

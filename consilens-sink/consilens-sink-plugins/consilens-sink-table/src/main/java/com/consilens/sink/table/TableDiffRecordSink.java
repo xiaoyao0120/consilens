@@ -33,6 +33,8 @@ import java.util.Map;
 @Slf4j
 public class TableDiffRecordSink implements Sink {
 
+    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
+
     private HikariDataSource dataSource;
     private TableSinkConfig sinkConfig;
     private String tableName;
@@ -54,7 +56,7 @@ public class TableDiffRecordSink implements Sink {
         }
         TableColumnNames.validateUniqueSanitizedColumns(sinkConfig.getColumns(), "TableDiffRecordSink columns");
         dataSource = createDataSource(sinkConfig);
-        tableName = sinkConfig.resolveTableName();
+        tableName = sinkConfig.resolveTableName("diff", context.getTaskId());
 
         sourceColumns = context.getSourceColumnNames() != null ? context.getSourceColumnNames() : new ArrayList<>();
         targetColumns = context.getTargetColumnNames() != null ? context.getTargetColumnNames() : new ArrayList<>();
@@ -296,15 +298,11 @@ public class TableDiffRecordSink implements Sink {
         if (list == null || list.isEmpty()) {
             return "[]";
         }
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < list.size(); i++) {
-            if (i > 0) {
-                sb.append(",");
-            }
-            sb.append("\"").append(list.get(i).replace("\\", "\\\\").replace("\"", "\\\"")).append("\"");
+        try {
+            return JSON_MAPPER.writeValueAsString(list);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize changed columns", e);
         }
-        sb.append("]");
-        return sb.toString();
     }
 
     private TableSinkConfig parseConfig(String properties) throws Exception {

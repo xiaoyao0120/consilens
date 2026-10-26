@@ -296,13 +296,14 @@ public class ColumnValueInterpolator {
     }
 
     private static String toJsonArray(List<String> list) {
-        if (list == null || list.isEmpty()) return "[]";
-        StringBuilder sb = new StringBuilder("[");
-        for (int i = 0; i < list.size(); i++) {
-            if (i > 0) sb.append(",");
-            sb.append("\"").append(list.get(i).replace("\\", "\\\\").replace("\"", "\\\"")).append("\"");
+        if (list == null || list.isEmpty()) {
+            return "[]";
         }
-        sb.append("]");
-        return sb.toString();
+        try {
+            // 手写拼接漏掉换行/制表/控制字符的转义，会写出非法 JSON
+            return OBJECT_MAPPER.writeValueAsString(list);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize changed columns", e);
+        }
     }
 }

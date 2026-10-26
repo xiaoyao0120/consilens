@@ -1,5 +1,6 @@
 package com.consilens.cluster.kubernetes;
 
+import com.consilens.cluster.api.ClusterApplicationResult;
 import com.consilens.cluster.api.ClusterComparisonDescription;
 import com.consilens.cluster.api.ClusterExecutionDescription;
 import com.consilens.cluster.api.ClusterSubmission;
@@ -23,6 +24,7 @@ import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -208,6 +210,139 @@ class KubernetesClusterSubmitterTest {
         assertNull(gateway.deletedJobName);
     }
 
+    @Test
+    void shouldDeleteDescriptorConfigMapAfterJobCompletes() {
+        RecordingGateway gateway = new RecordingGateway();
+        KubernetesSubmissionSpec spec = KubernetesSubmissionSpec.builder()
+                .namespace("default")
+                .jobName("consilens-descriptor-cleanup")
+                .image("registry.example/consilens:latest")
+                .descriptorData(Map.of("comparison.yaml", "source: {}"))
+                .descriptorConfigMapName("consilens-descriptor-cleanup-descriptor")
+                .descriptorMountPath("/opt/consilens/descriptor")
+                .coordinatorMainClass("com.consilens.runtime.KubernetesCoordinator")
+                .memoryMiB(1024)
+                .cpuMilli(500)
+                .build();
+        KubernetesClusterSubmitter submitter = new KubernetesClusterSubmitter(gateway);
+
+        ClusterSubmission submission = submitter.submit(kubernetesRequest(spec, 1));
+        gateway.completionStatus = "Complete";
+        submitter.awaitCompletion(submission, java.time.Duration.ofMillis(200));
+
+        assertEquals("default", gateway.deletedConfigMapNamespace);
+        assertEquals("consilens-descriptor-cleanup-descriptor", gateway.deletedConfigMapName);
+    }
+
+    @Test
+    void shouldPassCoordinatorSummaryFromPodLogsAsDiagnostics() {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.completionStatus = "Complete";
+        gateway.logs = "starting coordinator\n"
+                + "{\"submissionId\":\"submission-kubernetes-1\",\"statistics\":{\"sourceRowCount\":3,\"targetRowCount\":3}}\n"
+                + "done";
+
+        ClusterApplicationResult result = new KubernetesClusterSubmitter(gateway)
+                .awaitCompletion(submission("default/consilens-compare"), java.time.Duration.ofMillis(200));
+
+        assertNotNull(result);
+        assertEquals("SUCCEEDED", result.getFinalStatus());
+        assertNotNull(result.getDiagnostics());
+        assertTrue(result.getDiagnostics().contains("\"statistics\""), result.getDiagnostics());
+    }
+
+    @Test
+    void shouldNotInventDiagnosticsWhenPodLogsHaveNoSummary() {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.completionStatus = "Complete";
+        gateway.logs = "plain log line without json";
+
+        ClusterApplicationResult result = new KubernetesClusterSubmitter(gateway)
+                .awaitCompletion(submission("default/consilens-compare"), java.time.Duration.ofMillis(200));
+
+        assertNotNull(result);
+        assertNull(result.getDiagnostics());
+    }
+
+    @Test
+    void shouldNotFailCompletedJobWhenLogRetrievalFails() {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.completionStatus = "Complete";
+        gateway.failLogs = true;
+
+        ClusterApplicationResult result = new KubernetesClusterSubmitter(gateway)
+                .awaitCompletion(submission("default/consilens-compare"), java.time.Duration.ofMillis(200));
+
+        assertNotNull(result);
+        assertEquals("SUCCEEDED", result.getFinalStatus());
+        assertNull(result.getDiagnostics());
+    }
+
+    @Test
+    void shouldPassFailureLogTailAsDiagnostics() {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.completionStatus = "Failed";
+        gateway.logs = "starting coordinator\n"
+                + "Cluster comparison failed: java.net.ConnectException: Connection refused\n"
+                + "\tat example.Coordinator.run(Coordinator.java:1)\n"
+                + "\tat example.Coordinator.main(Coordinator.java:2)\n";
+
+        ClusterApplicationResult result = new KubernetesClusterSubmitter(gateway)
+                .awaitCompletion(submission("default/consilens-compare"), java.time.Duration.ofMillis(200));
+
+        assertNotNull(result);
+        assertEquals("FAILED", result.getFinalStatus());
+        assertNotNull(result.getDiagnostics());
+        assertTrue(result.getDiagnostics().contains("Cluster comparison failed"), result.getDiagnostics());
+        assertTrue(result.getDiagnostics().contains("ConnectException"), result.getDiagnostics());
+        assertTrue(result.getDiagnostics().contains("Coordinator.main"), result.getDiagnostics());
+    }
+
+    @Test
+    void shouldIncludeJobAndPodFailureDetailsWhenLogsAreUnavailable() {
+        RecordingGateway gateway = new RecordingGateway();
+        gateway.completionStatus = "Failed";
+        gateway.failureDetails = "job: BackoffLimitExceeded - Job has reached the specified backoff limit; "
+                + "pod compare/worker terminated: OOMKilled - exitCode=137";
+        gateway.failLogs = true;
+
+        ClusterApplicationResult result = new KubernetesClusterSubmitter(gateway)
+                .awaitCompletion(submission("default/consilens-compare"), java.time.Duration.ofMillis(200));
+
+        assertNotNull(result);
+        assertEquals("FAILED", result.getFinalStatus());
+        assertNotNull(result.getDiagnostics());
+        assertTrue(result.getDiagnostics().contains("BackoffLimitExceeded"), result.getDiagnostics());
+        assertTrue(result.getDiagnostics().contains("OOMKilled"), result.getDiagnostics());
+    }
+
+    @Test
+    void shouldCombineJobFailureDetailsWithLogTail() {
+        String diagnostics = KubernetesClusterSubmitter.failureDiagnostics(
+                "noise\nCluster comparison failed: boom\n\tat example.Main.run(Main.java:1)",
+                "job: BackoffLimitExceeded - limit reached");
+
+        assertTrue(diagnostics.startsWith("job: BackoffLimitExceeded"), diagnostics);
+        assertTrue(diagnostics.contains("Cluster comparison failed: boom"), diagnostics);
+        assertTrue(diagnostics.contains("example.Main.run"), diagnostics);
+    }
+
+    @Test
+    void shouldFallBackToLogTailWithoutFailureMarker() {
+        String diagnostics = KubernetesClusterSubmitter.failureDiagnostics(
+                "line-1\nline-2\njava.lang.IllegalStateException: still visible", null);
+
+        assertTrue(diagnostics.contains("IllegalStateException"), diagnostics);
+    }
+
+    private ClusterSubmission submission(String applicationId) {
+        return ClusterSubmission.builder()
+                .submissionId("submission-kubernetes-1")
+                .clusterApplicationId(applicationId)
+                .submittedAt(java.time.Instant.now())
+                .build();
+    }
+
     private KubernetesSubmissionSpec validSpec() {
         return KubernetesSubmissionSpec.builder()
                 .namespace("default")
@@ -264,10 +399,42 @@ class KubernetesClusterSubmitterTest {
             return configMap;
         }
 
+        private String completionStatus;
+        private String logs;
+        private String failureDetails;
+        private boolean failLogs;
+
+        @Override
+        public java.util.Optional<String> jobCompletionStatus(String namespace, String jobName) {
+            return java.util.Optional.ofNullable(completionStatus);
+        }
+
+        @Override
+        public java.util.Optional<String> jobLogs(String namespace, String jobName) {
+            if (failLogs) {
+                throw new RuntimeException("log backend unavailable");
+            }
+            return java.util.Optional.ofNullable(logs);
+        }
+
+        @Override
+        public java.util.Optional<String> jobFailureDetails(String namespace, String jobName) {
+            return java.util.Optional.ofNullable(failureDetails);
+        }
+
         @Override
         public void deleteJob(String namespace, String jobName) {
             deletedNamespace = namespace;
             deletedJobName = jobName;
+        }
+
+        private String deletedConfigMapNamespace;
+        private String deletedConfigMapName;
+
+        @Override
+        public void deleteConfigMap(String namespace, String configMapName) {
+            deletedConfigMapNamespace = namespace;
+            deletedConfigMapName = configMapName;
         }
 
         @Override

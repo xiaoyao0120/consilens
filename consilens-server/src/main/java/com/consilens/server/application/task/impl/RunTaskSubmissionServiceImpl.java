@@ -3,6 +3,8 @@ package com.consilens.server.application.task.impl;
 import com.consilens.server.api.dto.RunRequest;
 import com.consilens.server.api.dto.TaskAcceptedResponse;
 import com.consilens.server.application.task.RunTaskSubmissionService;
+import com.consilens.server.application.capability.config.SinkSecretSupport;
+import com.consilens.server.application.connection.DatasourceConnectionPolicy;
 import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.exception.ConflictException;
@@ -17,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.Map;
 import java.util.UUID;
@@ -170,6 +173,7 @@ public class RunTaskSubmissionServiceImpl implements RunTaskSubmissionService {
                     if (connection instanceof Map) {
                         Map<String, Object> connectionMap =
                                 new java.util.LinkedHashMap<>((Map<String, Object>) connection);
+                        rejectSensitiveConnectionProperties(connectionMap);
                         if (connectionMap.containsKey("password")) {
                             Object rawPassword = connectionMap.get("password");
                             if (rawPassword != null) {
@@ -185,7 +189,79 @@ public class RunTaskSubmissionServiceImpl implements RunTaskSubmissionService {
                     continue;
                 }
             }
+            if ("hints".equals(entry.getKey()) && value instanceof Map) {
+                result.put("hints", transformHintPasswords((Map<String, Object>) value, fixedMask));
+                continue;
+            }
             result.put((String) entry.getKey(), value);
+        }
+        SinkSecretSupport.transformConfigSinkPasswords(result, password -> {
+            if (fixedMask != null) {
+                return fixedMask;
+            }
+            return password != null && password.startsWith("v2:")
+                    ? password : secretProtector.protect(password);
+        });
+        return result;
+    }
+
+    /**
+     * properties 会随 requestPayload 落库；敏感键（password/token/secret 等）不能明文保存。
+     * 字符串形式再做一次字符白名单校验，防止借 properties 注入连接参数。
+     */
+    @SuppressWarnings("unchecked")
+    private void rejectSensitiveConnectionProperties(Map<String, Object> connection) {
+        Object raw = connection.get("properties");
+        if (raw == null) {
+            return;
+        }
+        if (raw instanceof String) {
+            String text = (String) raw;
+            if (!text.isBlank()) {
+                try {
+                    DatasourceConnectionPolicy.validateProperties(text);
+                } catch (IllegalArgumentException exception) {
+                    throw new InvalidInputException(exception.getMessage());
+                }
+            }
+            return;
+        }
+        if (raw instanceof Map) {
+            for (Object key : ((Map<?, ?>) raw).keySet()) {
+                if (DatasourceConnectionPolicy.isSensitivePropertyKey(String.valueOf(key))) {
+                    throw new InvalidInputException(
+                            "connection.properties contains sensitive key: " + key);
+                }
+            }
+            return;
+        }
+        throw new InvalidInputException("connection.properties must be a string or object");
+    }
+
+    /** hints 里的 sourcePassword/targetPassword/*Connection.password 同样不能明文落库。 */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> transformHintPasswords(Map<String, Object> hints, String fixedMask) {
+        Map<String, Object> result = new java.util.LinkedHashMap<>(hints);
+        for (String key : List.of("sourcePassword", "targetPassword")) {
+            Object value = result.get(key);
+            if (value != null) {
+                result.put(key, fixedMask != null
+                        ? fixedMask : secretProtector.protect(String.valueOf(value)));
+            }
+        }
+        for (String key : List.of("sourceConnection", "targetConnection")) {
+            Object connection = result.get(key);
+            if (!(connection instanceof Map)) {
+                continue;
+            }
+            Map<String, Object> copy = new java.util.LinkedHashMap<>((Map<String, Object>) connection);
+            rejectSensitiveConnectionProperties(copy);
+            Object value = copy.get("password");
+            if (value != null) {
+                copy.put("password", fixedMask != null
+                        ? fixedMask : secretProtector.protect(String.valueOf(value)));
+            }
+            result.put(key, copy);
         }
         return result;
     }

@@ -37,6 +37,12 @@ class OracleSqlQueryGeneratorTest {
     }
 
     @Test
+    void testSingleArgumentLimitClauseUsesOracleFetchSyntax() {
+        // 复合键边界查询只传 limit；基类的 LIMIT n 在 Oracle 上会报 ORA-00933
+        assertEquals("FETCH FIRST 1 ROWS ONLY", generator.getLimitClause(1));
+    }
+
+    @Test
     void testGetCountSQL() {
         String sql = generator.getCountSQL("SYSTEM", "users", null);
         assertTrue(sql.contains("COUNT(*)"));

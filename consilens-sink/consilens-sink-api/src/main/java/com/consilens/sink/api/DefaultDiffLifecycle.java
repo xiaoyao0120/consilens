@@ -59,4 +59,13 @@ public class DefaultDiffLifecycle implements DiffLifecycle {
     public boolean isTruncated() {
         return sinkManager.diffRecordTruncated();
     }
+
+    /** sink 部分失败（failOnSinkError=false 时被吞掉，但结果必须标注）。 */
+    public int sinkFailureCount() {
+        return sinkManager.failureCount();
+    }
+
+    public boolean hasSinkFailures() {
+        return sinkManager.hasFailures();
+    }
 }

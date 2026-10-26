@@ -30,6 +30,57 @@ class ApiKeyAuthenticationFilterTest {
     }
 
     @Test
+    void shouldRejectApiRootWhenApiKeyIsMissing() throws Exception {
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        properties.getSecurity().setApiKey("secret");
+        ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(properties, objectMapper);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(new MockHttpServletRequest("GET", "/v1"), response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(401);
+    }
+
+    @Test
+    void shouldRejectMatrixParameterBypass() throws Exception {
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        properties.getSecurity().setApiKey("secret");
+        ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(properties, objectMapper);
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v1;foo/tasks/task-1");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(401);
+    }
+
+    @Test
+    void shouldRejectEncodedMatrixParameterBypass() throws Exception {
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        properties.getSecurity().setApiKey("secret");
+        ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(properties, objectMapper);
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v1%3Bfoo/tasks/task-1");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(401);
+    }
+
+    @Test
+    void shouldRejectHealthTraversalBypass() throws Exception {
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        properties.getSecurity().setApiKey("secret");
+        ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(properties, objectMapper);
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/actuator/health/../env");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(401);
+    }
+
+    @Test
     void shouldAllowApiRequestWithConfiguredApiKey() throws Exception {
         ConsilensServerProperties properties = new ConsilensServerProperties();
         properties.getSecurity().setApiKey("secret");
@@ -80,6 +131,32 @@ class ApiKeyAuthenticationFilterTest {
         filter.doFilter(request, response, new MockFilterChain());
 
         assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void shouldAllowStaticUiAssetsWithoutApiKey() throws Exception {
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        properties.getSecurity().setApiKey("secret");
+        ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(properties, objectMapper);
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/index.html");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(200);
+    }
+
+    @Test
+    void shouldRejectNonHealthActuatorWithoutApiKey() throws Exception {
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        properties.getSecurity().setApiKey("secret");
+        ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(properties, objectMapper);
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/actuator/env");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(401);
     }
 
     @Test

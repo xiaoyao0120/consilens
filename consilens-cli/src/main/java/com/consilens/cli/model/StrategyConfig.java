@@ -57,6 +57,15 @@ public class StrategyConfig {
     @JsonProperty("validateUniqueKeys")
     private Boolean validateUniqueKeys = false;
 
+    /**
+     * 是否允许可空键列。false（默认）在键列 nullable 时直接拒绝，避免 NULL 键行
+     * 因 SQL 三值逻辑落在分段之外被静默漏报；true 时允许可空键，NULL 键按
+     * 引擎的 IS NULL/归一化语义参与比较。
+     */
+    @Builder.Default
+    @JsonProperty("allowNullableKeys")
+    private Boolean allowNullableKeys = false;
+
     @JsonIgnore
     public ComparisonStrategy getModeEnum() {
         return ComparisonStrategy.fromString(mode);

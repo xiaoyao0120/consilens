@@ -34,6 +34,30 @@ class RequestBodySizeLimitFilterTest {
     }
 
     @Test
+    void shouldApplyToApiRootPath() throws Exception {
+        RequestBodySizeLimitFilter filter = new RequestBodySizeLimitFilter(properties(4L), objectMapper);
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1");
+        request.addHeader("Content-Length", "5");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(413);
+    }
+
+    @Test
+    void shouldRejectApiRequestWithMatrixParameterPath() throws Exception {
+        RequestBodySizeLimitFilter filter = new RequestBodySizeLimitFilter(properties(4L), objectMapper);
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/v1;foo/tasks/execute");
+        request.addHeader("Content-Length", "5");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(413);
+    }
+
+    @Test
     void shouldRejectApiRequestWhenStreamingBodyExceedsLimit() throws Exception {
         RequestBodySizeLimitFilter filter = new RequestBodySizeLimitFilter(properties(4L), objectMapper);
         MockHttpServletRequest request = unknownLengthRequest("POST", "/v1/tasks/execute");

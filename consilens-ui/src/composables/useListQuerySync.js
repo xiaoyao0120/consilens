@@ -20,11 +20,19 @@ export function useListQuerySync(filters, pagination, fields) {
   for (const [key, spec = {}] of Object.entries(fields)) {
     const raw = route.query[spec.queryKey || key];
     if (raw === undefined) continue;
-    filters[key] = spec.parse ? spec.parse(raw) : raw;
+    // 重复 query（?keyword=a&keyword=b）对字符串字段只取第一个；
+    // 数组字段（如 status）保留数组交给 parse 处理。
+    const value = Array.isArray(raw) && !Array.isArray(filters[key]) ? raw[0] : raw;
+    filters[key] = spec.parse ? spec.parse(value) : value;
   }
-  pagination.page = Number(route.query.page) || 1;
+  // query.page 可被手工编辑：负数/小数/超大值会让后端分页校验直接 400，
+  // 非正安全整数一律回到第 1 页。
+  const page = Number(route.query.page);
+  pagination.page = Number.isSafeInteger(page) && page > 0 ? page : 1;
 
-  const isEmpty = (value) => value === null || value === undefined || value === "";
+  const isEmpty = (value) =>
+    value === null || value === undefined || value === ""
+    || (Array.isArray(value) && value.length === 0);
 
   const filtersActive = computed(() => Object.values(filters).some((value) => !isEmpty(value)));
 
@@ -40,10 +48,14 @@ export function useListQuerySync(filters, pagination, fields) {
     // （会触发路由 watch 连锁，并在浏览器历史里留下无意义记录）
     const current = route.query;
     const sameKeys = Object.keys(query).length === Object.keys(current).length;
-    if (sameKeys && Object.keys(query).every((key) => String(current[key]) === query[key])) {
+    if (sameKeys && Object.keys(query).every((key) => normalizeQueryValue(current[key]) === normalizeQueryValue(query[key]))) {
       return;
     }
     router.replace({ query });
+  }
+
+  function normalizeQueryValue(value) {
+    return Array.isArray(value) ? value.map(String).join(",") : String(value);
   }
 
   return { filtersActive, syncToUrl };

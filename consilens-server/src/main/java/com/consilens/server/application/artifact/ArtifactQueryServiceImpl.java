@@ -103,7 +103,9 @@ public class ArtifactQueryServiceImpl implements ArtifactQueryService {
                 .differenceCount(differenceCount)
                 .differenceRows(record.getDifferenceRows())
                 .differenceTruncated(record.getDifferenceTruncated())
-                .differencesUri(record.getDifferencesUri())
+                // 存储 URI 是服务端本地路径，不能回传给客户端；只暴露可用性
+                .differenceDetailsAvailable(record.getDifferencesUri() != null
+                        && !record.getDifferencesUri().isBlank())
                 .build();
     }
 

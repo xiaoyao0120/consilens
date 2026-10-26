@@ -23,7 +23,8 @@ public final class DiffReportSupport {
      */
     public static Double matchScoreOf(Double differencePercentage, long totalDifferenceCount) {
         if (differencePercentage != null) {
-            return round1(100.0 * (1.0 - differencePercentage / 100.0));
+            double score = 100.0 * (1.0 - differencePercentage / 100.0);
+            return round1(Math.max(0.0, Math.min(100.0, score)));
         }
         if (totalDifferenceCount == 0) {
             return 100.0;
@@ -37,8 +38,12 @@ public final class DiffReportSupport {
     public static Double percentageFromCounts(long totalDifferenceCount,
                                               long sourceRowCount,
                                               long targetRowCount) {
-        long totalRows = Math.max(sourceRowCount, Math.max(targetRowCount, 1));
-        return totalRows > 0 ? (double) totalDifferenceCount / totalRows * 100.0 : 0.0;
+        long totalRows = sourceRowCount + targetRowCount;
+        if (totalRows <= 0) {
+            return 0.0;
+        }
+        double percentage = (double) totalDifferenceCount / totalRows * 100.0;
+        return Math.max(0.0, Math.min(100.0, percentage));
     }
 
     /**

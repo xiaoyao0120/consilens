@@ -2,6 +2,7 @@ package com.consilens.server.api.advice;
 
 import com.consilens.server.api.dto.ApiResponse;
 import com.consilens.server.domain.exception.ArtifactIntegrityException;
+import com.consilens.server.domain.exception.RequestBodyTooLargeException;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -25,6 +26,19 @@ class GlobalExceptionHandlerTest {
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().getErrorCode()).isEqualTo("INVALID_REQUEST");
+    }
+
+    @Test
+    void shouldReturnPayloadTooLargeWhenJacksonWrapsBodyLimitException() {
+        HttpMessageNotReadableException wrapped = new HttpMessageNotReadableException(
+                "too large", new RequestBodyTooLargeException(1024),
+                new MockHttpInputMessage(new byte[0]));
+
+        ResponseEntity<ApiResponse<Void>> response = handler.handleBadRequest(wrapped, request());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getErrorCode()).isEqualTo("REQUEST_BODY_TOO_LARGE");
     }
 
     @Test

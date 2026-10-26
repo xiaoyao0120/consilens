@@ -36,6 +36,8 @@ public class DashboardSummaryServiceImpl implements DashboardSummaryService {
             TaskStatus.RUNNING,
             TaskStatus.CANCEL_REQUESTED);
     private static final int TREND_DAYS = 7;
+    /** 旧 artifact 没有 difference_count 时才读 content；大文件直接跳过，避免工作台被拖慢。 */
+    private static final long MAX_LEGACY_CONTENT_BYTES = 2L * 1024 * 1024;
     private static final DateTimeFormatter DAY_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
 
     private final TaskRepository taskRepository;
@@ -136,7 +138,17 @@ public class DashboardSummaryServiceImpl implements DashboardSummaryService {
     }
 
     private long differenceCountOf(ArtifactRecord artifact) {
+        // 新链路统计已落 DB（含集群回传的统计），优先读列；旧 artifact 再回退读 content
+        if (artifact.getDifferenceCount() != null) {
+            return artifact.getDifferenceCount();
+        }
+        if (artifact.getStorageUri() == null) {
+            return 0L;
+        }
         try {
+            if (artifactContentStore.size(artifact.getStorageUri()) > MAX_LEGACY_CONTENT_BYTES) {
+                return 0L;
+            }
             byte[] content = artifactContentStore.read(artifact.getStorageUri());
             JsonNode root = objectMapper.readTree(content);
             JsonNode value = root.get("differenceCount");

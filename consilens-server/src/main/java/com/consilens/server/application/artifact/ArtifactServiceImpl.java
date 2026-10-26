@@ -105,9 +105,12 @@ public class ArtifactServiceImpl implements ArtifactService {
         ArtifactRecord record = artifactRepository.findById(artifactId)
                 .orElseThrow(() -> new com.consilens.server.domain.exception.ResourceNotFoundException(
                         "Artifact not found: " + artifactId));
-        record.setStatisticsJson(toJson(statistics == null ? Map.of() : statistics));
-        Object total = statistics == null ? null : statistics.get("totalDifferences");
-        record.setDifferenceCount(total instanceof Number ? ((Number) total).longValue() : 0L);
+        // statistics 为 null/空表示本次运行没有可比对的统计（dryRun、集群未回传统计），
+        // 不能落成差异数 0，否则报告链路会把它推断成 100% 匹配。
+        boolean statisticsAvailable = statistics != null && !statistics.isEmpty();
+        record.setStatisticsJson(statisticsAvailable ? toJson(statistics) : null);
+        Object total = statisticsAvailable ? statistics.get("totalDifferences") : null;
+        record.setDifferenceCount(total instanceof Number ? ((Number) total).longValue() : null);
         record.setDifferenceTruncated(truncated);
         record.setDifferenceRows(Math.min(rows, Integer.MAX_VALUE));
         record.setDifferencesUri(differencesUri);

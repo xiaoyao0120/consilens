@@ -158,6 +158,15 @@ public interface DatabaseDialect {
     }
 
     /**
+     * SQL executed on every new pooled connection (session-level settings).
+     * Oracle overrides this to pin deterministic NLS date/timestamp formats so
+     * ORDER BY of temporal keys matches the Java-side normalized ordering.
+     */
+    default String getConnectionInitSql() {
+        return null;
+    }
+
+    /**
      * 流式读取时是否必须关闭 autoCommit。默认保持驱动默认行为；
      * PostgreSQL 的游标只在事务内有效，需要显式事务才能流式 fetch。
      */

@@ -166,6 +166,19 @@ class ConsilensServerClientTest {
                 });
     }
 
+    @Test
+    void shouldRejectNonHttpBaseUrls() {
+        JacksonMcpJsonMapper jsonMapper = new JacksonMcpJsonMapper(ConsilensJson.objectMapper());
+
+        assertThatThrownBy(() -> new ConsilensServerClient(URI.create("ftp://example.com"), null, jsonMapper))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("http");
+        assertThatThrownBy(() -> new ConsilensServerClient(
+                URI.create("http://user:secret@example.com"), null, jsonMapper))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("credentials");
+    }
+
     private static class FailingHttpClient extends HttpClient {
 
         @Override

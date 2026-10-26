@@ -57,7 +57,17 @@ public class TableSchema {
      * Get column information for a specific column.
      */
     public Optional<ColumnInfo> getColumn(String columnName) {
-        return Optional.ofNullable(columns.get(columnName));
+        ColumnInfo column = columns.get(columnName);
+        if (column != null || columnName == null) {
+            return Optional.ofNullable(column);
+        }
+        // 与 getColumnType 一致：元数据大小写（Oracle 全大写）与配置大小写可能不同，
+        // 大小写不敏感回退避免可空键校验被静默跳过。
+        column = columns.get(columnName.toUpperCase(java.util.Locale.ROOT));
+        if (column == null) {
+            column = columns.get(columnName.toLowerCase(java.util.Locale.ROOT));
+        }
+        return Optional.ofNullable(column);
     }
 
     /**

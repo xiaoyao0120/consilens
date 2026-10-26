@@ -4,10 +4,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.env.Environment;
+import org.springframework.test.context.ActiveProfiles;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(properties = "consilens.server.scheduler.enabled=false")
+// 默认 profile 已改为 mysql（本机开发库）；本测试验证的是 local profile 的内嵌库默认值，
+// 因此显式激活，不再依赖 spring.profiles.default。
+@ActiveProfiles("local")
 class ConsilensServerLocalStartupTest {
 
     @Autowired
@@ -15,7 +19,7 @@ class ConsilensServerLocalStartupTest {
 
     @Test
     void shouldUseLocalProfileDefaultsForStartup() {
-        assertThat(environment.getDefaultProfiles()).contains("local");
+        assertThat(environment.getActiveProfiles()).contains("local");
         assertThat(environment.getProperty("consilens.server.database.allow-embedded")).isEqualTo("true");
         assertThat(environment.getProperty("consilens.server.security.enabled")).isEqualTo("false");
         assertThat(environment.getProperty("spring.sql.init.mode")).isEqualTo("always");

@@ -67,7 +67,6 @@ public final class RelationalCompareSegmentAdapter {
                 .keyColumns(keyColumns)
                 .extraColumns(extraColumns)
                 .whereClause(resolveWhereClause(segment.getFilter()))
-                .caseSensitive(false)
                 .schema(Optional.ofNullable(RelationalSchemaAdapter.toLegacySchema(schema, tablePath)));
 
         applySplit(builder, segment.getSplit());

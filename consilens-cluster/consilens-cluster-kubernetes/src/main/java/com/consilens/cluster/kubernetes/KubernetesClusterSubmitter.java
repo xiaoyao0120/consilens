@@ -56,7 +56,11 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
 
     private static final String COORDINATOR_NAME = "consilens-coordinator";
     private static final String DESCRIPTOR_VOLUME = "comparison-descriptor";
+    /** 本系统生成的 Job 名称前缀；killStale 只清扫该前缀的应用。 */
+    static final String DEFAULT_JOB_NAME_PREFIX = "consilens-";
     private static final Pattern SAFE_SUBMISSION_ID = Pattern.compile("[A-Za-z0-9_-]+");
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(KubernetesClusterSubmitter.class);
 
     /**
      * Gateway creation is deferred until the first real submission so that
@@ -72,6 +76,9 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
      * from the latest {@link #submit} call. Defaults to the historical 3 seconds.
      */
     private volatile long completionPollSeconds = KubernetesSubmissionSpec.DEFAULT_COMPLETION_POLL_SECONDS;
+
+    /** clusterApplicationId -> descriptor ConfigMap 名称，终态/kill 时用于清理。 */
+    private final Map<String, String> descriptorConfigMaps = new java.util.concurrent.ConcurrentHashMap<>();
 
     public KubernetesClusterSubmitter() {
         this(KubernetesClusterSubmitter::defaultGateway);
@@ -160,12 +167,25 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         completionPollSeconds = spec.getCompletionPollSeconds();
         int maxAttempts = maxAttemptsOrDefault(request);
         createDescriptorConfigMapIfNeeded(spec);
-        Job created = gateway().create(buildJob(request, spec, maxAttempts));
+        Job created;
+        try {
+            created = gateway().create(buildJob(request, spec, maxAttempts));
+        } catch (RuntimeException exception) {
+            // Job 没创建成功时 descriptor ConfigMap 已无用途；只清理本次真正创建的
+            if (hasDescriptorData(spec)) {
+                deleteDescriptorConfigMap(spec.getNamespace(), spec.getDescriptorConfigMapName());
+            }
+            throw exception;
+        }
+        String applicationId = spec.getNamespace() + "/" + created.getMetadata().getName();
+        if (hasDescriptorData(spec) && !isBlank(spec.getDescriptorConfigMapName())) {
+            descriptorConfigMaps.put(applicationId, spec.getDescriptorConfigMapName());
+        }
         return ClusterSubmission.builder()
                 .submissionId(request.getSubmissionId())
                 .executionMode(ExecutionMode.KUBERNETES)
                 .submittedAt(Instant.now())
-                .clusterApplicationId(spec.getNamespace() + "/" + created.getMetadata().getName())
+                .clusterApplicationId(applicationId)
                 .build();
     }
 
@@ -181,17 +201,129 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         long deadlineNanos = timeout == null ? Long.MAX_VALUE : System.nanoTime() + timeout.toNanos();
         try {
             while (System.nanoTime() < deadlineNanos) {
-                String status = gateway().jobCompletionStatus(namespaceAndJob[0], namespaceAndJob[1]).orElse(null);
-                if ("Complete".equals(status) || "Failed".equals(status)) {
-                    return new ClusterApplicationResult(submission.getClusterApplicationId(),
-                            "Complete".equals(status) ? "SUCCEEDED" : "FAILED", null, null);
+                String status;
+                try {
+                    status = gateway().jobCompletionStatus(namespaceAndJob[0], namespaceAndJob[1]).orElse(null);
+                } catch (RuntimeException exception) {
+                    // 5xx/网络抖动只是“暂时不知道状态”，不能因此 kill 仍在正常运行的 Job
+                    log.warn("failed to poll kubernetes job {}/{}: {}",
+                            namespaceAndJob[0], namespaceAndJob[1], exception.getMessage());
+                    status = null;
                 }
-                Thread.sleep(completionPollSeconds * 1000L);
+                if ("Complete".equals(status) || "Failed".equals(status)) {
+                    // 与 YARN 的 AM diagnostics 对齐：成功时把 coordinator 打印的摘要 JSON
+                    // 回传给服务端还原统计；失败时回传 Kubernetes 记录的失败原因和日志尾部，
+                    // 否则服务端只能看到一句 "finished with FAILED"。
+                    String logs = null;
+                    try {
+                        logs = gateway().jobLogs(namespaceAndJob[0], namespaceAndJob[1]).orElse(null);
+                    } catch (RuntimeException exception) {
+                        log.warn("failed to read logs for kubernetes job {}/{}: {}",
+                                namespaceAndJob[0], namespaceAndJob[1], exception.getMessage());
+                    }
+                    String diagnostics;
+                    if ("Complete".equals(status)) {
+                        diagnostics = extractSummaryJson(logs);
+                    } else {
+                        String failureDetails = null;
+                        try {
+                            failureDetails = gateway().jobFailureDetails(
+                                    namespaceAndJob[0], namespaceAndJob[1]).orElse(null);
+                        } catch (RuntimeException exception) {
+                            log.warn("failed to read failure details for kubernetes job {}/{}: {}",
+                                    namespaceAndJob[0], namespaceAndJob[1], exception.getMessage());
+                        }
+                        diagnostics = failureDiagnostics(logs, failureDetails);
+                    }
+                    // 作业已终态，descriptor ConfigMap 不再被挂载，立即清理
+                    deleteDescriptorConfigMap(namespaceAndJob[0],
+                            descriptorConfigMaps.remove(submission.getClusterApplicationId()));
+                    return new ClusterApplicationResult(submission.getClusterApplicationId(),
+                            "Complete".equals(status) ? "SUCCEEDED" : "FAILED", null, diagnostics);
+                }
+                Thread.sleep(pollSleepMillis(deadlineNanos));
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
         return null;
+    }
+
+    /** 单次轮询不能睡过调用方给的 timeout，否则配置的超时会被轮询间隔绕过。 */
+    private long pollSleepMillis(long deadlineNanos) {
+        long pollMillis = completionPollSeconds > Long.MAX_VALUE / 1000L
+                ? Long.MAX_VALUE : completionPollSeconds * 1000L;
+        if (deadlineNanos == Long.MAX_VALUE) {
+            return pollMillis;
+        }
+        long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000L;
+        return Math.max(1L, Math.min(pollMillis, remainingMillis));
+    }
+
+    /**
+     * 从 Pod 日志里取最后一行带 {@code "submissionId"} 的 JSON 对象（coordinator 摘要），
+     * 与服务端 {@code RunTaskHandler.parseClusterStatistics} 的输入格式保持一致。
+     */
+    static String extractSummaryJson(String logs) {
+        if (logs == null || logs.isBlank()) {
+            return null;
+        }
+        String[] lines = logs.split("\\R");
+        for (int i = lines.length - 1; i >= 0; i--) {
+            String line = lines[i].trim();
+            if (line.startsWith("{") && line.endsWith("}") && line.contains("\"submissionId\"")) {
+                return line.length() > 4000 ? line.substring(0, 4000) : line;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 失败诊断 = Kubernetes 记录的结构化原因 + coordinator 日志尾部。
+     * 只截断末尾会丢掉堆栈根因，因此日志保留最后一段而不是开头。
+     */
+    static String failureDiagnostics(String logs, String jobDetails) {
+        String details = jobDetails == null || jobDetails.isBlank() ? null : jobDetails.trim();
+        if (details != null && details.length() > 1200) {
+            details = details.substring(0, 1200) + "...";
+        }
+        String logTail = failureLogTail(logs);
+        if (details == null) {
+            return logTail;
+        }
+        if (logTail == null) {
+            return details;
+        }
+        return details + "\n" + logTail;
+    }
+
+    /** 取最后一个 "Cluster comparison failed" 块；没有该标记时取末尾 40 行。 */
+    static String failureLogTail(String logs) {
+        if (logs == null || logs.isBlank()) {
+            return null;
+        }
+        String text = logs.stripTrailing();
+        int marker = text.lastIndexOf("Cluster comparison failed");
+        String tail = marker >= 0 ? text.substring(marker).trim() : lastLines(text, 40);
+        if (tail.isBlank()) {
+            return null;
+        }
+        int max = 3000;
+        return tail.length() <= max ? tail : "..." + tail.substring(tail.length() - max);
+    }
+
+    private static String lastLines(String text, int maxLines) {
+        int index = text.length();
+        int lines = 0;
+        while (index > 0 && lines < maxLines) {
+            index = text.lastIndexOf('\n', index - 1);
+            if (index < 0) {
+                index = 0;
+                break;
+            }
+            lines++;
+        }
+        return text.substring(index).trim();
     }
 
     @Override
@@ -206,9 +338,20 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         String namespace = spec.getNamespace() != null && !spec.getNamespace().isBlank()
                 ? spec.getNamespace()
                 : KubernetesSubmissionSpec.DEFAULT_NAMESPACE;
+        // 只清扫本系统命名规则生成的应用。jobName 可由定义 properties 自定义，
+        // 无条件删除会允许调用方删掉同 namespace 内的任意 Job。
+        if (!spec.getJobName().startsWith(DEFAULT_JOB_NAME_PREFIX)) {
+            log.warn("skip stale sweep for non-consilens job name: {}", spec.getJobName());
+            return;
+        }
         // best-effort：删除即返回，不阻塞新提交（等待删除不计入运行超时窗口；
         // 且 fabric8 对 404 同样返回空结果，等待只会拖慢每次首次提交）。
         gateway().deleteJob(namespace, spec.getJobName());
+        String configMapName = spec.getDescriptorConfigMapName();
+        if (hasDescriptorData(spec) && !isBlank(configMapName)) {
+            descriptorConfigMaps.values().removeIf(configMapName::equals);
+            deleteDescriptorConfigMap(namespace, configMapName);
+        }
     }
 
     @Override
@@ -219,6 +362,11 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         String[] namespaceAndJob = submission.getClusterApplicationId().split("/", 2);
         if (namespaceAndJob.length == 2) {
             gateway().deleteJob(namespaceAndJob[0], namespaceAndJob[1]);
+            // 只删除本次提交记录在案的 ConfigMap；远端 descriptor 从未创建过 ConfigMap
+            String configMapName = descriptorConfigMaps.remove(submission.getClusterApplicationId());
+            if (configMapName != null) {
+                deleteDescriptorConfigMap(namespaceAndJob[0], configMapName);
+            }
         }
     }
 
@@ -374,7 +522,7 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
     }
 
     private void createDescriptorConfigMapIfNeeded(KubernetesSubmissionSpec spec) {
-        if (spec.getDescriptorData() == null || spec.getDescriptorData().isEmpty()) {
+        if (!hasDescriptorData(spec)) {
             return;
         }
         ConfigMap configMap = new ConfigMapBuilder()
@@ -385,6 +533,23 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
                 .withData(spec.sanitizedDescriptorData())
                 .build();
         gateway().createConfigMap(configMap);
+    }
+
+    private boolean hasDescriptorData(KubernetesSubmissionSpec spec) {
+        return spec.getDescriptorData() != null && !spec.getDescriptorData().isEmpty();
+    }
+
+    private void deleteDescriptorConfigMap(String namespace, String configMapName) {
+        if (isBlank(configMapName)) {
+            return;
+        }
+        try {
+            gateway().deleteConfigMap(namespace, configMapName);
+        } catch (RuntimeException exception) {
+            // 清理失败不影响任务结果，下次提交 createOrReplace 会覆盖同名 ConfigMap
+            log.warn("failed to delete descriptor configmap {}/{}: {}",
+                    namespace, configMapName, exception.getMessage());
+        }
     }
 
     private List<EnvVar> containerEnvironment(KubernetesSubmissionSpec spec) {
@@ -423,8 +588,8 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         if (suffix.isEmpty()) {
             suffix = "run";
         }
-        return ("consilens-" + suffix)
-                .substring(0, Math.min(52, "consilens-".length() + suffix.length()))
+        return (DEFAULT_JOB_NAME_PREFIX + suffix)
+                .substring(0, Math.min(52, DEFAULT_JOB_NAME_PREFIX.length() + suffix.length()))
                 .replaceAll("-+$", "");
     }
 

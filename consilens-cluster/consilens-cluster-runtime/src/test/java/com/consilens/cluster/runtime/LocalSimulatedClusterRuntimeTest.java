@@ -12,6 +12,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -106,6 +108,48 @@ class LocalSimulatedClusterRuntimeTest {
         LocalSimulationResult result = new LocalSimulatedClusterRuntime().execute(request);
 
         assertFalse(Files.readString(result.getManifestPath()).contains("do-not-persist"));
+    }
+
+    @Test
+    void shouldExecuteSplitsConcurrentlyWhenParallelismConfigured() throws Exception {
+        // 三个段必须“同时在跑”才能一起放行：串行执行时第一段会等到超时并失败
+        CountDownLatch allStarted = new CountDownLatch(3);
+        LocalSplitTask first = task("split-1", () -> {
+            allStarted.countDown();
+            assertTrue(allStarted.await(5, TimeUnit.SECONDS), "split-1 did not run concurrently");
+            return result(1, 1, 0);
+        });
+        LocalSplitTask second = task("split-2", () -> {
+            allStarted.countDown();
+            assertTrue(allStarted.await(5, TimeUnit.SECONDS), "split-2 did not run concurrently");
+            return result(2, 2, 1);
+        });
+        LocalSplitTask third = task("split-3", () -> {
+            allStarted.countDown();
+            assertTrue(allStarted.await(5, TimeUnit.SECONDS), "split-3 did not run concurrently");
+            return result(3, 3, 0);
+        });
+
+        LocalSimulationRequest request = LocalSimulationRequest.builder()
+                .submissionId("submission-parallel")
+                .executionSpec(ClusterExecutionSpec.builder()
+                        .executionMode(ExecutionMode.LOCAL)
+                        .parallelism(3)
+                        .maxAttempts(1)
+                        .build())
+                .splitTasks(List.of(first, second, third))
+                .manifestDirectory(temporaryDirectory)
+                .build();
+
+        LocalSimulationResult result = new LocalSimulatedClusterRuntime().execute(request);
+
+        // 合并结果仍按输入顺序（与并行度无关）
+        assertEquals(6, result.getDiffResult().getStatistics().getSourceRowCount());
+        assertEquals(6, result.getDiffResult().getStatistics().getTargetRowCount());
+        assertEquals(List.of("split-1", "split-2", "split-3"),
+                result.getAttempts().stream().map(SplitAttemptRecord::getSplitId).collect(Collectors.toList()));
+        JsonNode manifest = new ObjectMapper().readTree(result.getManifestPath().toFile());
+        assertEquals(3, manifest.path("successfulSplitIds").size());
     }
 
     private LocalSimulationRequest request(List<LocalSplitTask> tasks, int maximumAttempts) {

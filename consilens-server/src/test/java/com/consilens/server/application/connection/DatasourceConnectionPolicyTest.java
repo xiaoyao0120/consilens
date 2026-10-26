@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -38,6 +39,23 @@ class DatasourceConnectionPolicyTest {
                 () -> DatasourceConnectionPolicy.validateProperties("ssl=true&password=hunter2"));
         assertThrows(IllegalArgumentException.class,
                 () -> DatasourceConnectionPolicy.validateProperties("useSSL=false&user=root"));
+        assertThrows(IllegalArgumentException.class,
+                () -> DatasourceConnectionPolicy.validateProperties("useSSL=true&sslpassword=secret"));
+        assertThrows(IllegalArgumentException.class,
+                () -> DatasourceConnectionPolicy.validateProperties("accessToken=secret"));
+        assertThrows(IllegalArgumentException.class,
+                () -> DatasourceConnectionPolicy.validateProperties("clientSecret=secret"));
+        DatasourceConnectionPolicy.validateProperties("useSSL=true&socketTimeout=10000");
+    }
+
+    @Test
+    void recognizesDriverSpecificCredentialKeys() {
+        assertTrue(DatasourceConnectionPolicy.isSensitivePropertyKey("trustStorePassword"));
+        assertTrue(DatasourceConnectionPolicy.isSensitivePropertyKey("accessToken"));
+        assertTrue(DatasourceConnectionPolicy.isSensitivePropertyKey("apiKey"));
+        assertTrue(DatasourceConnectionPolicy.isSensitivePropertyKey("credential"));
+        assertFalse(DatasourceConnectionPolicy.isSensitivePropertyKey("useSSL"));
+        assertFalse(DatasourceConnectionPolicy.isSensitivePropertyKey("socketTimeout"));
     }
 
     @Test

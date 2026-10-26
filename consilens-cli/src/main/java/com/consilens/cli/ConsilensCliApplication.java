@@ -1,6 +1,5 @@
 package com.consilens.cli;
 
-import com.consilens.cli.command.AiCommand;
 import com.consilens.cli.command.ConfigCommand;
 import com.consilens.cli.command.DiffCommand;
 import com.consilens.cli.command.SubmitCommand;
@@ -17,7 +16,6 @@ import picocli.CommandLine.Command;
  * <ul>
  *   <li>{@code diff} - Perform data comparison between databases</li>
  *   <li>{@code config} - Configuration management (generate, validate)</li>
- *   <li>{@code ai} - AI runtime, config generation, diagnosis and repair loop</li>
  *   <li>{@code submit} - Submit a comparison to an execution backend</li>
  * </ul>
  */
@@ -30,7 +28,6 @@ import picocli.CommandLine.Command;
 	    subcommands = {
 	        DiffCommand.class,
 	        ConfigCommand.class,
-	        AiCommand.class,
 	        SubmitCommand.class
 	    }
 	)

@@ -15,12 +15,6 @@ export const menuRoutes = [
     meta: { title: "工作台", icon: "grid-outline", section: "overview" },
   },
   {
-    path: "/ai",
-    name: "ai-assistant",
-    component: () => import("@/views/aiAssistant/index.vue"),
-    meta: { title: "AI 助手", icon: "sparkles-outline", section: "overview" },
-  },
-  {
     path: "/definitions",
     name: "definitions",
     component: () => import("@/views/definitions/index.vue"),
@@ -54,7 +48,7 @@ export const menuRoutes = [
     path: "/artifacts",
     name: "artifacts",
     component: () => import("@/views/artifacts/index.vue"),
-    meta: { title: "Artifact 中心", icon: "albums-outline", section: "compare" },
+    meta: { title: "Artifact 中心", icon: "albums-outline", section: "compare", hidden: true },
   },
   {
     path: "/artifacts/:artifactId",

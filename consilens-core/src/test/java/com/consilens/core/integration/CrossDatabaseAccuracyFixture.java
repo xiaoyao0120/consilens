@@ -84,11 +84,13 @@ final class CrossDatabaseAccuracyFixture {
         execute(source, "CREATE TABLE " + sourceTable + " (id INT PRIMARY KEY, oracle_date_value DATETIME)");
         execute(target, "BEGIN EXECUTE IMMEDIATE 'DROP TABLE " + targetTable
                 + " CASCADE CONSTRAINTS'; EXCEPTION WHEN OTHERS THEN NULL; END;");
-        execute(target, "CREATE TABLE " + targetTable + " (id NUMBER(10) PRIMARY KEY, oracle_date_value DATE)");
+        // Oracle DATE 在本产品口径下按 DATE（date-only）归一化；要验证时分秒必须用 TIMESTAMP。
+        // 这里专门验证“秒级差异能检出、同一秒不误报”，因此 Oracle 侧使用 TIMESTAMP。
+        execute(target, "CREATE TABLE " + targetTable + " (id NUMBER(10) PRIMARY KEY, oracle_date_value TIMESTAMP)");
         execute(source, "INSERT INTO " + sourceTable + " VALUES (1, '2026-01-01 01:02:03')");
         execute(source, "INSERT INTO " + sourceTable + " VALUES (2, '2026-01-01 01:02:03')");
-        execute(target, "INSERT INTO " + targetTable + " VALUES (1, DATE '2026-01-01' + 3723/86400)");
-        execute(target, "INSERT INTO " + targetTable + " VALUES (2, DATE '2026-01-01' + 3724/86400)");
+        execute(target, "INSERT INTO " + targetTable + " VALUES (1, TIMESTAMP '2026-01-01 01:02:03')");
+        execute(target, "INSERT INTO " + targetTable + " VALUES (2, TIMESTAMP '2026-01-01 01:02:04')");
 
         DiffResult result = compare(source, sourcePath.withTableName(sourceTable), List.of("oracle_date_value"),
                 target, targetPath.withTableName(targetTable), List.of("oracle_date_value"), 1, 2);

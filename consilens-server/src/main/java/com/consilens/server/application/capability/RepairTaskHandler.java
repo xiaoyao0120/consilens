@@ -54,6 +54,9 @@ public class RepairTaskHandler implements CapabilityHandler<RepairRequest> {
         if (diagnosis.get("errorCode") != null) {
             proposals.add("fix " + diagnosis.get("errorCode") + " before submitting run again");
         }
+        if (Boolean.FALSE.equals(diagnosis.get("statisticsAvailable"))) {
+            proposals.add("diagnosis has no comparison statistics; run a non-dry-run comparison before repairing config");
+        }
         if (longValue(diagnosis.get("differenceCount")) > 0) {
             proposals.add("confirm comparison keys and add non-business columns to comparison.ignoreColumns when appropriate");
             proposals.add("tighten source/target filters to compare the same business time window");

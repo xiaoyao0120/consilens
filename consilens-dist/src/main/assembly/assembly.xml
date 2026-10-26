@@ -37,10 +37,10 @@
             </includes>
         </fileSet>
 
-        <!-- Agent skills distributed as runtime prompts/tools guidance -->
+        <!-- MCP skill guides distributed for external agents -->
         <fileSet>
-            <directory>${project.parent.basedir}/agent-skills</directory>
-            <outputDirectory>agent-skills</outputDirectory>
+            <directory>${project.parent.basedir}/mcp-skills</directory>
+            <outputDirectory>mcp-skills</outputDirectory>
             <includes>
                 <include>**/SKILL.md</include>
             </includes>

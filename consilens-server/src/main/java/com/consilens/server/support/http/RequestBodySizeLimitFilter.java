@@ -37,8 +37,8 @@ public class RequestBodySizeLimitFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getRequestURI();
-        if (path == null || !path.startsWith("/v1/")) {
+        String path = RequestPathSupport.normalizedPath(request);
+        if (path == null || !(path.equals("/v1") || path.startsWith("/v1/"))) {
             return true;
         }
         String method = request.getMethod();

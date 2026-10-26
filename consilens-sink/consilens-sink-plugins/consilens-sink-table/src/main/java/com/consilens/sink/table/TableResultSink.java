@@ -43,7 +43,7 @@ public class TableResultSink implements Sink {
         sinkConfig = parseConfig(config.getProperties());
         TableColumnNames.validateUniqueSanitizedColumns(sinkConfig.getColumns(), "TableResultSink columns");
         dataSource = createDataSource(sinkConfig);
-        tableName = sinkConfig.resolveTableName();
+        tableName = sinkConfig.resolveTableName("result", context.getTaskId());
 
         DatabaseDialect dialect = DatabaseDialects.require(sinkConfig.resolveDatabaseType());
         writeCompiler = dialect.getTableWriteCompiler();

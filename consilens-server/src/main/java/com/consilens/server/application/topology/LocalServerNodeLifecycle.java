@@ -27,7 +27,7 @@ public class LocalServerNodeLifecycle {
 
     public LocalServerNodeLifecycle(ServerNodeRepository serverNodeRepository,
                                     ConsilensServerProperties properties,
-                                    @Value("${server.port}") int port) {
+                                    @Value("${server.port:16789}") int port) {
         this.serverNodeRepository = serverNodeRepository;
         this.properties = properties;
         this.port = port;

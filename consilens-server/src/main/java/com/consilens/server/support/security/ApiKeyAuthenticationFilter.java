@@ -37,8 +37,16 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         if (!properties.getSecurity().isEnabled()) {
             return true;
         }
-        String path = request.getRequestURI();
-        return "/actuator/health".equals(path) || (path != null && path.startsWith("/actuator/health/"));
+        String path = com.consilens.server.support.http.RequestPathSupport.normalizedPath(request);
+        if (path == null) {
+            return false;
+        }
+        // 静态 UI 必须在拿到 API key 之前可加载（浏览器无法给 index.html/assets 加请求头）；
+        // 只有 /v1/* 业务接口需要鉴权，actuator 除 health 外仍需鉴权。
+        if (path.startsWith("/actuator")) {
+            return "/actuator/health".equals(path) || path.startsWith("/actuator/health/");
+        }
+        return !(path.equals("/v1") || path.startsWith("/v1/"));
     }
 
     @Override

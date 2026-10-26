@@ -2,6 +2,7 @@ package com.consilens.core.algorithm;
 
 import com.consilens.common.enums.ChecksumAlgorithm;
 import com.consilens.common.enums.LocalCompareMode;
+import com.consilens.connector.api.model.ColumnInfo;
 import com.consilens.core.segment.TableSegment;
 import com.consilens.core.diff.DiffEmitter;
 import com.consilens.core.diff.DiffResult;
@@ -153,21 +154,199 @@ public abstract class TableDiffer implements DiffEmitter {
         }
 
         /*
-         * Extra (non-key) columns can differ, but warn when the counts do not align. Algorithms depend on
-         * positional comparisons (e.g., LocalDiffEngine) so a mismatch is usually accidental. We still
-         * continue to allow asymmetric comparisons, but the log warning draws attention to potential
-         * misconfiguration.
+         * Extra (non-key) columns are compared positionally (LocalDiffEngine, row checksum), so the
+         * two sides must project the same number of columns. Allowing a mismatch silently maps value
+         * i of one side onto a different column of the other side, producing bogus MISMATCH rows or
+         * hiding real ones - fail fast instead.
          */
         if (table1.getExtraColumns().size() != table2.getExtraColumns().size()) {
             log.warn("Table1 extra columns: {}, Table2 extra columns: {}",
                      table1.getExtraColumns(), table2.getExtraColumns());
-            log.info("Extra columns count difference is acceptable for comparison");
-            // Don't throw exception - extra columns can be different and still work
+            throw new IllegalArgumentException(String.format(
+                "Extra (non-key) column count must match between tables. Table1 has %d %s, Table2 has %d %s",
+                table1.getExtraColumns().size(), table1.getExtraColumns(),
+                table2.getExtraColumns().size(), table2.getExtraColumns()));
         }
+
+        // NULL 键无法参与有序分段：边界探测/键区间谓词/DiffResult 去重都假设键非空，
+        // 一旦键列可空，NULL 行不会被任何 [min,max] 段命中（SQL 三值逻辑），会被静默漏报。
+        // 默认在比对开始前直接拒绝；executionOptions.allowNullableKeys=true 时保留可空键，
+        // 由 TableSegment 的 IS NULL 边界谓词与 ValueNormalizer 的 NULL 归一化处理。
+        validateKeyNullability(table1);
+        validateKeyNullability(table2);
+        warnPrecisionLoss(table1);
+        warnPrecisionLoss(table2);
+        warnJsonCrossDialect(table1, table2);
+        warnJsonKeyColumns(table1);
+        warnJsonKeyColumns(table2);
+        TemporalShapeCompatibility.warnIfRisky(table1, table2);
+        KeyCollationCompatibility.warnIfRisky(table1);
+        KeyCollationCompatibility.warnIfRisky(table2);
 
         log.info("Column validation completed for tables {} and {} (key columns: {}, extra columns: {} vs {})",
                 table1.getTablePath(), table2.getTablePath(),
                 table1.getKeyColumns().size(), table1.getExtraColumns().size(), table2.getExtraColumns().size());
+    }
+
+    /**
+     * 归一化把 DECIMAL/NUMERIC 固定到 4 位小数、浮点固定到 6 位（SQL 与 Java 两侧同口径），
+     * 列 scale 超过该精度时，末位差异会被抹平。这里显式告警，避免"看起来一致"却掩盖差异；
+     * 不直接失败，因为是否可接受取决于业务对末位精度的要求。
+     */
+    private void warnPrecisionLoss(TableSegment table) {
+        int precision = config != null
+                ? config.getDecimalScale() : ValueNormalizer.DEFAULT_DECIMAL_SCALE;
+        List<String> risky = decimalColumnsBeyondScale(table, precision);
+        if (!risky.isEmpty()) {
+            log.warn("Table {} has decimal column(s) with scale > {}: {}. Comparison normalizes decimals to {} "
+                    + "decimal places, so differences beyond that are treated as equal. "
+                    + "Raise the normalization precision (strategy.normalization) or compare these columns "
+                    + "separately if that matters.", table.getTablePath(), precision, risky, precision);
+        }
+    }
+
+    /** 供测试与告警复用：返回 scale 超过给定归一化精度的 DECIMAL/NUMERIC 列。 */
+    static List<String> decimalColumnsBeyondScale(TableSegment table, int precision) {
+        if (table == null || table.getSchema() == null || table.getSchema().isEmpty()) {
+            return List.of();
+        }
+        List<String> columns = new ArrayList<>(table.getKeyColumns());
+        columns.addAll(table.getExtraColumns());
+        List<String> risky = new ArrayList<>();
+        for (String column : columns) {
+            Optional<ColumnInfo> info = table.getSchema().get().getColumn(column);
+            if (info.isEmpty()) {
+                continue;
+            }
+            ColumnInfo columnInfo = info.get();
+            boolean decimal = columnInfo.getType() == com.consilens.connector.api.model.DataType.DECIMAL
+                    || columnInfo.getType() == com.consilens.connector.api.model.DataType.NUMERIC;
+            int scale = columnInfo.getScale().orElse(0);
+            if (decimal && scale > precision) {
+                risky.add(column + "(scale=" + scale + ")");
+            }
+        }
+        return risky;
+    }
+
+    /**
+     * JSON 归一化是各 handle 的"文本级 canonical 化"，跨方言渲染（键序/空格/转义）并不完全一致。
+     * 同方言内可闭环；跨方言时显式告警，避免把"渲染差异"当成业务差异却无人知晓。
+     */
+    private void warnJsonCrossDialect(TableSegment table1, TableSegment table2) {
+        if (table1.getSchema() == null || table1.getSchema().isEmpty()
+                || table2.getSchema() == null || table2.getSchema().isEmpty()
+                || table1.getDatabase() == null || table2.getDatabase() == null) {
+            return;
+        }
+        String type1 = table1.getDatabase().getConnectorType();
+        String type2 = table2.getDatabase().getConnectorType();
+        if (type1 == null || type2 == null || type1.equalsIgnoreCase(type2)) {
+            return;
+        }
+        List<String> jsonColumns = new ArrayList<>();
+        for (String column : table1.getExtraColumns()) {
+            Optional<ColumnInfo> info = table1.getSchema().get().getColumn(column);
+            if (info.isEmpty()) {
+                continue;
+            }
+            com.consilens.connector.api.model.DataType type = info.get().getType();
+            if (type == com.consilens.connector.api.model.DataType.JSON
+                    || type == com.consilens.connector.api.model.DataType.JSONB) {
+                jsonColumns.add(column);
+            }
+        }
+        if (!jsonColumns.isEmpty()) {
+            log.warn("Comparing JSON column(s) {} across {} and {}: JSON normalization is textual and "
+                    + "rendering differs between engines (key order/whitespace/escaping). A mismatch may be "
+                    + "formatting rather than data; verify with a normalized cast or exclude the column.",
+                    jsonColumns, type1, type2);
+        }
+    }
+
+    /**
+     * JSON/JSONB 作为主键时，各引擎的文本渲染（键序、空格、数字形态）不保证一致，
+     * 而键区间的生成、校验和分组、DiffResult 去重都依赖"同一把键渲染相同"。
+     * 这类形态无法用归一化兜住，显式告警。
+     */
+    private void warnJsonKeyColumns(TableSegment table) {
+        List<String> jsonKeys = jsonKeyColumns(table);
+        if (!jsonKeys.isEmpty()) {
+            log.warn("Table {} uses JSON/JSONB column(s) as key: {}. Key rendering is not stable across "
+                    + "engines (key order, whitespace, number formats), so segmentation and checksum "
+                    + "grouping can miss rows. Use a scalar key or a deterministic normalized cast.",
+                    table.getTablePath(), jsonKeys);
+        }
+    }
+
+    /** 供告警与测试复用：返回参与主键的 JSON/JSONB 列。 */
+    static List<String> jsonKeyColumns(TableSegment table) {
+        if (table == null || table.getSchema() == null || table.getSchema().isEmpty()) {
+            return List.of();
+        }
+        List<String> risky = new ArrayList<>();
+        for (String key : table.getKeyColumns()) {
+            Optional<ColumnInfo> column = table.getSchema().get().getColumn(key);
+            if (column.isEmpty()) {
+                continue;
+            }
+            if (column.get().getType() == com.consilens.connector.api.model.DataType.JSON
+                    || column.get().getType() == com.consilens.connector.api.model.DataType.JSONB) {
+                risky.add(key);
+            }
+        }
+        return risky;
+    }
+
+    private void validateKeyNullability(TableSegment table) {
+        if (table.getSchema() == null || table.getSchema().isEmpty()) {
+            return;
+        }
+        // 过滤条件里显式排除了 NULL 键时（错误信息推荐的修复方式），
+        // 可空主键不再有漏报风险，不能继续拒绝。
+        String where = table.getWhereClause().orElse("")
+                .toLowerCase(java.util.Locale.ROOT)
+                .replace("`", "")
+                .replace("\"", "");
+        List<String> nullableKeys = new ArrayList<>();
+        for (String key : table.getKeyColumns()) {
+            Optional<ColumnInfo> column = table.getSchema().get().getColumn(key);
+            if (column.isPresent() && column.get().isNullable() && !excludesNullKeys(where, key)) {
+                nullableKeys.add(key);
+            }
+        }
+        if (nullableKeys.isEmpty()) {
+            return;
+        }
+        if (config != null && config.isAllowNullableKeys()) {
+            log.warn("Table {} has nullable key column(s) {} and allowNullableKeys=true. "
+                            + "NULL keys will be compared using the engine's IS NULL/归一化 semantics; "
+                            + "make sure the data source and both sides agree on NULL ordering.",
+                    table.getTablePath(), nullableKeys);
+            return;
+        }
+        String key = nullableKeys.get(0);
+        throw new IllegalArgumentException(String.format(
+            "Key column '%s' of table %s is nullable. NULL keys cannot be ordered or segmented, "
+                + "so their rows would be silently skipped. Use a NOT NULL key column, add a "
+                + "filter that excludes NULL keys (e.g. %s IS NOT NULL), or set "
+                + "executionOptions.allowNullableKeys=true to compare NULL keys explicitly.",
+            key, table.getTablePath(), key));
+    }
+
+    /** where 条件（已小写、去引号）里是否显式排除了该键的 NULL 值。 */
+    private boolean excludesNullKeys(String normalizedWhere, String key) {
+        if (normalizedWhere.isEmpty()) {
+            return false;
+        }
+        // 只有合取条件才能保证所有行都排除 NULL；OR 的另一支仍可能带 NULL 键，
+        // 而区间谓词对 NULL 恒为 UNKNOWN，这些行会被静默跳过。
+        if (normalizedWhere.matches("(?s).*\\bor\\b.*")) {
+            return false;
+        }
+        String column = key.toLowerCase(java.util.Locale.ROOT);
+        return normalizedWhere.matches("(?s).*\\b" + java.util.regex.Pattern.quote(column)
+                + "\\s+is\\s+not\\s+null\\b.*");
     }
 
     /**
@@ -214,12 +393,15 @@ public abstract class TableDiffer implements DiffEmitter {
         private final ConcurrencyConfig concurrencyConfig;
         private final long maxDifferences;
         private final boolean validateUniqueKeys;
+        private final int decimalScale;
+        private final boolean allowNullableKeys;
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,
                            ChecksumAlgorithm checksumAlgorithm,
                            LocalCompareMode localCompareMode,
                            ConcurrencyConfig concurrencyConfig,
-                           long maxDifferences, boolean validateUniqueKeys) {
+                           long maxDifferences, boolean validateUniqueKeys,
+                           int decimalScale, boolean allowNullableKeys) {
             this.bisectionFactor = bisectionFactor;
             this.bisectionThreshold = bisectionThreshold;
             this.maxDepth = 10;
@@ -228,6 +410,28 @@ public abstract class TableDiffer implements DiffEmitter {
             this.concurrencyConfig = concurrencyConfig != null ? concurrencyConfig : ConcurrencyConfig.defaultConfig();
             this.maxDifferences = maxDifferences > 0 ? maxDifferences : 1_000_000L;
             this.validateUniqueKeys = validateUniqueKeys;
+            this.decimalScale = decimalScale > 0
+                    ? decimalScale : com.consilens.core.algorithm.ValueNormalizer.DEFAULT_DECIMAL_SCALE;
+            this.allowNullableKeys = allowNullableKeys;
+        }
+
+        public DifferConfig(int bisectionFactor, long bisectionThreshold,
+                           ChecksumAlgorithm checksumAlgorithm,
+                           LocalCompareMode localCompareMode,
+                           ConcurrencyConfig concurrencyConfig,
+                           long maxDifferences, boolean validateUniqueKeys, int decimalScale) {
+            this(bisectionFactor, bisectionThreshold, checksumAlgorithm, localCompareMode,
+                    concurrencyConfig, maxDifferences, validateUniqueKeys, decimalScale, false);
+        }
+
+        public DifferConfig(int bisectionFactor, long bisectionThreshold,
+                           ChecksumAlgorithm checksumAlgorithm,
+                           LocalCompareMode localCompareMode,
+                           ConcurrencyConfig concurrencyConfig,
+                           long maxDifferences, boolean validateUniqueKeys) {
+            this(bisectionFactor, bisectionThreshold, checksumAlgorithm, localCompareMode,
+                    concurrencyConfig, maxDifferences, validateUniqueKeys,
+                    com.consilens.core.algorithm.ValueNormalizer.DEFAULT_DECIMAL_SCALE, false);
         }
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,
@@ -242,6 +446,11 @@ public abstract class TableDiffer implements DiffEmitter {
         /** 严格档开关：true 时比对前做唯一键探针，命中重复键直接失败并列出键与行数。 */
         public boolean isValidateUniqueKeys() {
             return validateUniqueKeys;
+        }
+
+        /** 可空键开关：true 时跳过“键列可空即拒绝”的前置校验。 */
+        public boolean isAllowNullableKeys() {
+            return allowNullableKeys;
         }
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,

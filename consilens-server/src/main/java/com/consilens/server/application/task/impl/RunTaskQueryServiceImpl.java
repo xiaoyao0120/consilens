@@ -5,6 +5,7 @@ import com.consilens.server.api.dto.PageResponse;
 import com.consilens.server.api.dto.TaskDiffSummaryDto;
 import com.consilens.server.api.dto.TaskQueryResponse;
 import com.consilens.server.api.dto.TaskSummaryDto;
+import com.consilens.server.application.connection.JdbcConnectionSupport;
 import com.consilens.server.application.diff.DiffReportSupport;
 import com.consilens.server.application.task.RunTaskQueryService;
 import com.consilens.server.domain.exception.ResourceNotFoundException;
@@ -72,6 +73,8 @@ public class RunTaskQueryServiceImpl implements RunTaskQueryService {
                 .traceId(task.getTraceId())
                 .executeNodeKey(task.getExecuteNodeKey())
                 .retryCount(task.getRetryCount())
+                .errorCode(task.getErrorCode())
+                .errorMessage(maskedErrorMessage(task))
                 .submitTime(task.getSubmitTime())
                 .startTime(task.getStartTime())
                 .endTime(task.getEndTime())
@@ -132,6 +135,8 @@ public class RunTaskQueryServiceImpl implements RunTaskQueryService {
                 .traceId(task.getTraceId())
                 .executeNodeKey(task.getExecuteNodeKey())
                 .retryCount(task.getRetryCount())
+                .errorCode(task.getErrorCode())
+                .errorMessage(maskedErrorMessage(task, 500))
                 .submitTime(task.getSubmitTime())
                 .startTime(task.getStartTime())
                 .endTime(task.getEndTime())
@@ -141,6 +146,22 @@ public class RunTaskQueryServiceImpl implements RunTaskQueryService {
                 .definitionName(task.getDefinitionId() != null
                         ? definitionNames.get(task.getDefinitionId()) : null)
                 .build();
+    }
+
+    /**
+     * 历史失败记录可能写入未脱敏的驱动异常；对外暴露时再兜底脱敏一次，
+     * 避免为补失败原因顺带把凭据带到 API 响应里。
+     */
+    private static String maskedErrorMessage(TaskInstanceRecord task) {
+        return maskedErrorMessage(task, 4000);
+    }
+
+    private static String maskedErrorMessage(TaskInstanceRecord task, int max) {
+        String masked = JdbcConnectionSupport.maskMessage(task.getErrorMessage());
+        if (masked == null || masked.length() <= max) {
+            return masked;
+        }
+        return masked.substring(0, max) + "...";
     }
 
     private TaskDiffSummaryDto readDiffSummary(TaskInstanceRecord task) {
@@ -188,7 +209,14 @@ public class RunTaskQueryServiceImpl implements RunTaskQueryService {
                 // fall through to content
             }
         }
+        if (record.getStorageUri() == null) {
+            return null;
+        }
         try {
+            // 列表页只做摘要：旧格式没有 statistics_json 时，大 RUN_RESULT 不读 content。
+            if (artifactContentStore.size(record.getStorageUri()) > MAX_SUMMARY_CONTENT_BYTES) {
+                return null;
+            }
             return objectMapper.readTree(artifactContentStore.read(record.getStorageUri())).get("statistics");
         } catch (Exception ignored) {
             return null;
@@ -212,7 +240,9 @@ public class RunTaskQueryServiceImpl implements RunTaskQueryService {
                 .differenceCount(record.getDifferenceCount())
                 .differenceRows(record.getDifferenceRows())
                 .differenceTruncated(record.getDifferenceTruncated())
-                .differencesUri(record.getDifferencesUri())
+                // 存储 URI 是服务端本地路径，不能回传给客户端；只暴露可用性
+                .differenceDetailsAvailable(record.getDifferencesUri() != null
+                        && !record.getDifferencesUri().isBlank())
                 .statistics(parseStatistics(record.getStatisticsJson()))
                 .build();
     }

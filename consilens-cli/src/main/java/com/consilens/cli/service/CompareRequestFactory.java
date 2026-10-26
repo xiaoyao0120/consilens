@@ -12,9 +12,8 @@ import com.consilens.connector.api.model.ComparisonSpec;
 import com.consilens.connector.api.model.KeySpec;
 import com.consilens.connector.api.model.PredicateSpec;
 import com.consilens.connector.api.model.ResourceLocator;
-import com.consilens.connector.api.normalization.MatchSpec;
-import com.consilens.connector.api.normalization.NormalizationRule;
 import com.consilens.connector.api.normalization.NormalizationSpec;
+import com.consilens.connector.api.normalization.NormalizationSpecs;
 import com.consilens.connector.api.planner.CompareExecutionOptions;
 import com.consilens.connector.api.planner.ComparePlanTypes;
 import com.consilens.connector.api.planner.CompareRequest;
@@ -31,10 +30,15 @@ public class CompareRequestFactory {
 
     public CompareRequest create(CliConfiguration config) {
         ComparisonConfig comparison = config.getComparison();
-        BuildResult buildResult = buildComparison(comparison);
         ConnectorConfig source = ConnectorConfigMapper.toConnectorConfig(config.getSource());
         ConnectorConfig target = ConnectorConfigMapper.toConnectorConfig(config.getTarget());
-        if (hasMappings(comparison)) {
+        boolean mappings = hasMappings(comparison);
+        // mappings 只对 table 资源编译成带 WHERE 的 SQL；SQL 资源原样透传，
+        // 此时 filter 必须作为 PredicateSpec 传给引擎，否则会被静默丢弃。
+        boolean sourceFilterEmbedded = mappings && isTableResource(source);
+        boolean targetFilterEmbedded = mappings && isTableResource(target);
+        BuildResult buildResult = buildComparison(comparison, sourceFilterEmbedded, targetFilterEmbedded);
+        if (mappings) {
             source = compileMappingsToSqlResource(source, comparison, true);
             target = compileMappingsToSqlResource(target, comparison, false);
         }
@@ -114,7 +118,9 @@ public class CompareRequestFactory {
         return columns;
     }
 
-    private BuildResult buildComparison(ComparisonConfig comparison) {
+    private BuildResult buildComparison(ComparisonConfig comparison,
+                                        boolean sourceFilterEmbedded,
+                                        boolean targetFilterEmbedded) {
         if (hasMappings(comparison)) {
             List<String> keys = mappedKeys(comparison);
             List<String> fields = mappedCompareFields(comparison);
@@ -123,8 +129,12 @@ public class CompareRequestFactory {
                     .targetKeySpec(toKeySpec(keys))
                     .sourceComparisons(toComparisonSpec(fields, mappingExcludeFields(comparison)))
                     .targetComparisons(toComparisonSpec(fields, mappingExcludeFields(comparison)))
-                    .sourceFilter(null)
-                    .targetFilter(null)
+                    .sourceFilter(sourceFilterEmbedded ? null
+                            : toPredicateSpec(comparison.getFilters() != null
+                                    ? comparison.getFilters().getSource() : null))
+                    .targetFilter(targetFilterEmbedded ? null
+                            : toPredicateSpec(comparison.getFilters() != null
+                                    ? comparison.getFilters().getTarget() : null))
                     .build();
         }
         return BuildResult.builder()
@@ -143,6 +153,11 @@ public class CompareRequestFactory {
 
     private boolean hasMappings(ComparisonConfig comparison) {
         return comparison != null && comparison.getMappings() != null && !comparison.getMappings().isEmpty();
+    }
+
+    private boolean isTableResource(ConnectorConfig config) {
+        return config != null && config.getResource() != null
+                && "table".equalsIgnoreCase(config.getResource().getType());
     }
 
     private List<String> mappedKeys(ComparisonConfig comparison) {
@@ -199,17 +214,39 @@ public class CompareRequestFactory {
                                   ComparisonConfig comparison,
                                   boolean sourceSide) {
         LinkedHashSet<String> selectExpressions = new LinkedHashSet<>();
-        List<String> physicalKeys = sourceSide
-                ? comparison.getKeys().getSource()
-                : comparison.getKeys().getTarget();
+        List<String> physicalKeys = comparison.getKeys() == null ? null
+                : (sourceSide ? comparison.getKeys().getSource() : comparison.getKeys().getTarget());
         List<String> logicalKeys = mappedKeys(comparison);
-        for (int i = 0; i < physicalKeys.size(); i++) {
-            String physicalKey = physicalKeys.get(i);
-            String logicalKey = i < logicalKeys.size() ? logicalKeys.get(i) : physicalKey;
-            selectExpressions.add(expressionAlias(physicalKey, logicalKey));
+        Map<String, CompareMappingConfig> keyMappings = new LinkedHashMap<>();
+        for (CompareMappingConfig mapping : comparison.getMappings()) {
+            if (Boolean.TRUE.equals(mapping.getKey())) {
+                keyMappings.put(mapping.getName(), mapping);
+            }
+        }
+        if (physicalKeys != null) {
+            for (int i = 0; i < physicalKeys.size(); i++) {
+                String physicalKey = physicalKeys.get(i);
+                String logicalKey = i < logicalKeys.size() ? logicalKeys.get(i) : physicalKey;
+                CompareMappingConfig keyMapping = keyMappings.get(logicalKey);
+                String expression = keyMapping == null
+                        ? physicalKey
+                        : toSqlExpression(sourceSide ? keyMapping.getSource() : keyMapping.getTarget());
+                selectExpressions.add(expressionAlias(expression, logicalKey));
+            }
+        } else {
+            // 只提供 mappings 且用 key=true 声明主键时，keys 段可以省略。
+            for (CompareMappingConfig mapping : comparison.getMappings()) {
+                if (Boolean.TRUE.equals(mapping.getKey())) {
+                    selectExpressions.add(expressionAlias(
+                            toSqlExpression(sourceSide ? mapping.getSource() : mapping.getTarget()),
+                            mapping.getName()));
+                }
+            }
         }
         for (CompareMappingConfig mapping : comparison.getMappings()) {
-            if (!Boolean.TRUE.equals(mapping.getKey()) && isMappingExcluded(comparison, mapping.getName())) {
+            // key 列已在上面按 physical/logical 对齐处理，不能重复 select。
+            if (Boolean.TRUE.equals(mapping.getKey())
+                    || isMappingExcluded(comparison, mapping.getName())) {
                 continue;
             }
             FieldExpressionConfig expression = sourceSide ? mapping.getSource() : mapping.getTarget();
@@ -354,6 +391,8 @@ public class CompareRequestFactory {
                         : null)
                 // 键唯一档位走配置：默认开放档（重复键按多重集语义比较），严格档在 strategy 里显式打开
                 .validateUniqueKeys(Boolean.TRUE.equals(config.getStrategy().getValidateUniqueKeys()))
+                // 可空键档位走配置：默认关闭（键列可空即拒绝），true 时允许 NULL 键参与比较
+                .allowNullableKeys(Boolean.TRUE.equals(config.getStrategy().getAllowNullableKeys()))
                 .maxDifferences(config.getStrategy().getMaxDifferences())
                 .attributes(attributes.isEmpty() ? null : attributes)
                 .build();
@@ -373,89 +412,42 @@ public class CompareRequestFactory {
         if (normalizationConfig == null) {
             return null;
         }
-        return NormalizationSpec.builder()
-                .global(toNormalizationRules(normalizationConfig.getGlobal()))
-                .source(toNormalizationRules(normalizationConfig.getSource()))
-                .target(toNormalizationRules(normalizationConfig.getTarget()))
-                .build();
+        return NormalizationSpecs.fromTypeRules(
+                toRuleMaps(normalizationConfig.getGlobal()),
+                toRuleMaps(normalizationConfig.getSource()),
+                toRuleMaps(normalizationConfig.getTarget()));
     }
 
-    private List<NormalizationRule> toNormalizationRules(Map<String, TypeNormalizationRule> rules) {
+    private Map<String, Map<String, Object>> toRuleMaps(Map<String, TypeNormalizationRule> rules) {
         if (rules == null || rules.isEmpty()) {
             return null;
         }
-        List<NormalizationRule> result = new ArrayList<>();
+        Map<String, Map<String, Object>> result = new LinkedHashMap<>();
         for (Map.Entry<String, TypeNormalizationRule> entry : rules.entrySet()) {
-            String canonicalType = NormalizationTypeMapper.toMatchType(entry.getKey());
             TypeNormalizationRule rule = entry.getValue();
-            if (canonicalType == null || rule == null) {
+            if (rule == null) {
                 continue;
             }
-            result.addAll(toNormalizationRules(canonicalType, rule));
-        }
-        return result.isEmpty() ? null : result;
-    }
-
-    private List<NormalizationRule> toNormalizationRules(String type, TypeNormalizationRule rule) {
-        List<NormalizationRule> result = new ArrayList<>();
-        if (rule.getPrecision() != null || rule.getRounding() != null) {
-            Map<String, Object> params = new LinkedHashMap<>();
-            if (rule.getPrecision() != null) {
-                params.put("precision", rule.getPrecision());
-            }
-            if (rule.getRounding() != null) {
-                params.put("rounding", rule.getRounding());
-            }
-            result.add(normalizationRule(type, "format_number", params));
-        }
-        if (rule.getFormat() != null || rule.getTimezone() != null || rule.getComparisonMode() != null) {
-            Map<String, Object> params = new LinkedHashMap<>();
-            if (rule.getFormat() != null) {
-                params.put("format", rule.getFormat());
-            }
-            if (rule.getTimezone() != null) {
-                params.put("timezone", rule.getTimezone());
-            }
-            if (rule.getComparisonMode() != null) {
-                params.put("comparisonMode", rule.getComparisonMode());
-            }
-            result.add(normalizationRule(type, "format_datetime", params));
-        }
-        if (rule.getEncoding() != null || rule.getUppercase() != null) {
-            Map<String, Object> params = new LinkedHashMap<>();
-            if (rule.getEncoding() != null) {
-                params.put("encoding", rule.getEncoding());
-            }
-            if (rule.getUppercase() != null) {
-                params.put("uppercase", rule.getUppercase());
-            }
-            result.add(normalizationRule(type, "encode", params));
-        }
-        if ("boolean".equals(type)
-                && (rule.getTrueValue() != null || rule.getFalseValue() != null || rule.getNullValue() != null)) {
-            Map<String, Object> params = new LinkedHashMap<>();
-            if (rule.getTrueValue() != null) {
-                params.put("trueValue", rule.getTrueValue());
-            }
-            if (rule.getFalseValue() != null) {
-                params.put("falseValue", rule.getFalseValue());
-            }
-            if (rule.getNullValue() != null) {
-                params.put("nullValue", rule.getNullValue());
-            }
-            result.add(normalizationRule(type, "map_boolean", params));
-        } else if ("string".equals(type) && rule.getNullValue() != null) {
-            result.add(normalizationRule(type, "normalize_string", Map.of("nullValue", rule.getNullValue())));
+            Map<String, Object> fields = new LinkedHashMap<>();
+            putIfNotNull(fields, "precision", rule.getPrecision());
+            putIfNotNull(fields, "rounding", rule.getRounding());
+            putIfNotNull(fields, "format", rule.getFormat());
+            putIfNotNull(fields, "timezone", rule.getTimezone());
+            putIfNotNull(fields, "comparisonMode", rule.getComparisonMode());
+            putIfNotNull(fields, "encoding", rule.getEncoding());
+            putIfNotNull(fields, "uppercase", rule.getUppercase());
+            putIfNotNull(fields, "trueValue", rule.getTrueValue());
+            putIfNotNull(fields, "falseValue", rule.getFalseValue());
+            putIfNotNull(fields, "nullValue", rule.getNullValue());
+            result.put(entry.getKey(), fields);
         }
         return result;
     }
 
-    private NormalizationRule normalizationRule(String type, String operation, Map<String, Object> params) {
-        return NormalizationRule.builder()
-                .match(MatchSpec.builder().type(type).build())
-                .operation(operation)
-                .params(params)
-                .build();
+    private void putIfNotNull(Map<String, Object> target, String key, Object value) {
+        if (value != null) {
+            target.put(key, value);
+        }
     }
 
     @lombok.Builder

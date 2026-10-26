@@ -45,6 +45,20 @@ class ServerCompareConfigServiceTest {
     }
 
     @Test
+    void shouldRejectIncompleteComparisonMappings() {
+        ServerCompareConfig config = ServerCompareConfig.builder()
+                .source(EndpointConfig.builder().type("mysql").table("source_table").build())
+                .target(EndpointConfig.builder().type("mysql").table("target_table").build())
+                .keys(List.of("id"))
+                .comparison(ComparisonConfig.builder()
+                        .keyMappings(List.of(FieldMapping.builder().source("id").target(" ").build()))
+                        .build())
+                .build();
+
+        assertThrows(InvalidInputException.class, () -> service().validate(config));
+    }
+
+    @Test
     void shouldParsePlainCompareColumnsAsSameNameFields() {
         ServerCompareConfig config = service().fromPlanRequest(planRequestWithHints(Map.of(
                 "compareColumns", List.of("name", "status"))));
@@ -69,6 +83,89 @@ class ServerCompareConfigServiceTest {
         assertEquals(List.of("id"), request.getTargetKeySpec().getFields());
         assertEquals(List.of("price_eur"), request.getSourceComparisons().getFields());
         assertEquals(List.of("price"), request.getTargetComparisons().getFields());
+    }
+
+    @Test
+    void shouldCompileNormalizationFromPlanHints() {
+        ServerCompareConfig config = service().fromPlanRequest(planRequestWithHints(Map.of(
+                "compareColumns", List.of("amount"),
+                "normalization", Map.of(
+                        "global", Map.of("decimal", Map.of("precision", 6)),
+                        "target", Map.of("timestamp", Map.of("timezone", "UTC"))))));
+
+        config.getSource().setConnection(Map.of("url", "jdbc:mysql://localhost/test"));
+        config.getTarget().setConnection(Map.of("url", "jdbc:postgresql://localhost/test"));
+        CompareRequest request = service().toCompareRequest(config, new RunRequest.Options());
+
+        assertThat(request.getNormalizationSpec()).isNotNull();
+        assertThat(request.getNormalizationSpec().getGlobal()).hasSize(1);
+        assertEquals("format_number", request.getNormalizationSpec().getGlobal().get(0).getOperation());
+        assertEquals(6, request.getNormalizationSpec().getGlobal().get(0).getParams().get("precision"));
+        assertEquals("format_datetime", request.getNormalizationSpec().getTarget().get(0).getOperation());
+        assertEquals("UTC", request.getNormalizationSpec().getTarget().get(0).getParams().get("timezone"));
+    }
+
+    @Test
+    void shouldLeaveNormalizationUnsetWhenNotConfigured() {
+        ServerCompareConfig config = service().fromPlanRequest(planRequestWithHints(Map.of(
+                "compareColumns", List.of("amount"))));
+
+        config.getSource().setConnection(Map.of("url", "jdbc:mysql://localhost/test"));
+        config.getTarget().setConnection(Map.of("url", "jdbc:postgresql://localhost/test"));
+        CompareRequest request = service().toCompareRequest(config, new RunRequest.Options());
+
+        assertThat(request.getNormalizationSpec()).isNull();
+    }
+
+    @Test
+    void shouldKeepTopLevelNormalizationFromUiShapedConfig() {
+        ServerCompareConfig config = service().fromContent(Map.of(
+                "version", "1.0",
+                "goal", "compare orders",
+                "source", Map.of("type", "mysql", "table", "orders"),
+                "target", Map.of("type", "postgresql", "table", "orders"),
+                "keys", List.of("order_id"),
+                "comparison", Map.of("fields", List.of("amount")),
+                "normalization", Map.of("global", Map.of("decimal", Map.of("precision", 6))),
+                "hints", Map.of("normalization", Map.of("global", Map.of("decimal", Map.of("precision", 8))))));
+
+        assertThat(config.getComparison().getNormalization()).isNotNull();
+        assertThat(config.getComparison().getNormalization().getGlobal()).containsKey("decimal");
+        assertEquals(6, config.getComparison().getNormalization().getGlobal().get("decimal").getPrecision());
+    }
+
+    @Test
+    void shouldKeepNormalizationFromYamlStringContent() {
+        String content = String.join("\n",
+                "version: '1.0'",
+                "goal: compare orders",
+                "source: {type: mysql, table: orders}",
+                "target: {type: postgresql, table: orders}",
+                "keys: [order_id]",
+                "comparison: {fields: [amount]}",
+                "normalization:",
+                "  global:",
+                "    decimal: {precision: 6}",
+                "    timestamp: {timezone: UTC}");
+
+        ServerCompareConfig config = service().fromContent(content);
+
+        assertThat(config.getComparison().getNormalization()).isNotNull();
+        assertEquals(6, config.getComparison().getNormalization().getGlobal().get("decimal").getPrecision());
+        assertEquals("UTC", config.getComparison().getNormalization().getGlobal().get("timestamp").getTimezone());
+    }
+
+    @Test
+    void shouldRejectMixedCompareColumnFormsInsteadOfDroppingStrings() {
+        assertThrows(InvalidInputException.class, () -> service().fromPlanRequest(planRequestWithHints(Map.of(
+                "compareColumns", List.of("name", Map.of("source", "a", "target", "b"))))));
+    }
+
+    @Test
+    void shouldRejectIncompleteKeyMappingInsteadOfDroppingIt() {
+        assertThrows(InvalidInputException.class, () -> service().fromPlanRequest(planRequestWithHints(Map.of(
+                "compareColumns", List.of("name"),
+                "keyMappings", List.of(Map.of("source", "order_id"))))));
     }
 
     private PlanRequest planRequestWithHints(Map<String, Object> hints) {
@@ -117,6 +214,52 @@ class ServerCompareConfigServiceTest {
     }
 
     @Test
+    void shouldRejectFractionalNumericExecutionOption() {
+        ServerCompareConfig config = basicConfig(Map.of("bisectionFactor", 4.5));
+
+        assertThrows(InvalidInputException.class,
+                () -> service().toCompareRequest(config, new RunRequest.Options()));
+    }
+
+    @Test
+    void shouldRejectInvalidBooleanExecutionOption() {
+        ServerCompareConfig config = basicConfig(Map.of("validateUniqueKeys", "yes"));
+
+        assertThrows(InvalidInputException.class,
+                () -> service().toCompareRequest(config, new RunRequest.Options()));
+    }
+
+    @Test
+    void shouldMapAllowNullableKeysFromExecutionOptions() {
+        ServerCompareConfig config = basicConfig(Map.of("allowNullableKeys", true));
+
+        CompareRequest request = service().toCompareRequest(config, new RunRequest.Options());
+
+        assertEquals(Boolean.TRUE, request.getExecutionOptions().getAllowNullableKeys());
+    }
+
+    @Test
+    void shouldRejectInvalidAllowNullableKeysExecutionOption() {
+        ServerCompareConfig config = basicConfig(Map.of("allowNullableKeys", "yes"));
+
+        assertThrows(InvalidInputException.class,
+                () -> service().toCompareRequest(config, new RunRequest.Options()));
+    }
+
+    private ServerCompareConfig basicConfig(Map<String, Object> executionOptions) {
+        return ServerCompareConfig.builder()
+                .source(EndpointConfig.builder()
+                        .type("mysql").table("orders")
+                        .connection(Map.of("url", "jdbc:mysql://localhost/test")).build())
+                .target(EndpointConfig.builder()
+                        .type("postgresql").table("orders")
+                        .connection(Map.of("url", "jdbc:postgresql://localhost/test")).build())
+                .keys(List.of("id"))
+                .executionOptions(executionOptions)
+                .build();
+    }
+
+    @Test
     void shouldParseCliConfigFileStringIntoServerConfig() {
         ServerCompareConfigService service = new ServerCompareConfigService(mock(ArtifactService.class),
                 new ObjectMapper());
@@ -150,6 +293,10 @@ class ServerCompareConfigServiceTest {
                 + "  filters:\n"
                 + "    source: \"id > 0\"\n"
                 + "    target: \"id > 0\"\n"
+                + "strategy:\n"
+                + "  mode: checksum\n"
+                + "  algorithm: concat\n"
+                + "  allowNullableKeys: true\n"
                 + "result:\n"
                 + "  failOnSinkError: true\n"
                 + "  sinks:\n"
@@ -168,6 +315,7 @@ class ServerCompareConfigServiceTest {
         assertThat(config.getTarget().getType()).isEqualTo("postgresql");
         assertThat(config.getKeys()).containsExactly("id");
         assertThat(config.getComparison().getFields()).containsExactly("name", "amount");
+        assertThat(config.getExecutionOptions()).containsEntry("allowNullableKeys", true);
         assertThat(config.getResult().isFailOnSinkError()).isTrue();
         assertThat(config.getResult().getSinks()).hasSize(1);
         assertThat(config.getResult().getSinks().get(0).getProperties())

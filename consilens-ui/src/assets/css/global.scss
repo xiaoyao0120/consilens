@@ -26,7 +26,8 @@
   --text: #1f2329;
   --text-primary: #1f2329;
   --text-secondary: #5a6169;
-  --text-muted: #8a9099;
+  // muted 是 12px 说明文字的常用色，须满足 WCAG AA 4.5:1（白底实测 4.93）
+  --text-muted: #6b7178;
   --text-disabled: #b9bdc2;
 
   // 主色与语义色（Reafuture 靛蓝主色 + 亮绿成功色）
@@ -35,7 +36,8 @@
   --on-primary: #ffffff;
   --primary-bg: #e3edf7;
   --primary-border: rgba(59, 119, 241, 0.28);
-  --link: #3b77f1;
+  // --link 是表格/卡片里的可点击文字，白底需 >=4.5:1，故比 --primary 深一档
+  --link: #3570e0;
   --link-hover: #2f63d6;
   --success: #1b8a4e;
   --success-bg: #e8f6ee;
@@ -46,6 +48,15 @@
   --violet: #7b6fd0;
   --accent-green: #22a45d;
   --accent-amber: #d9a93b;
+
+  // 语义色作为正文/小字号文字用时的加深变体：--primary/--success 同时是实底按钮色，
+  // 直接压暗会改变全站按钮观感，故文字场景单独走这对令牌（白底实测均 >=4.5:1）
+  --primary-text: #3570e0;
+  --success-text: #17784a;
+
+  // 实底徽章（白字压色）用的加深变体：原色配白字仅 4.12/4.38，压暗后 >=4.6
+  --primary-solid: #3570e0;
+  --success-solid: #17784a;
 
   // 侧栏菜单（对齐 EmonLens：不整块染色，选中态靠底色差 + 字重 + 图标主色表达）
   --nav-hover-bg: #eceef1;
@@ -63,7 +74,7 @@
   --code-chrome: #f1f3f5;
   --code-border: #e3e6ea;
   --code-text: #24292f;
-  --code-muted: #8a9099;
+  --code-muted: #6b7178;
 
   // 差异对比语义色（旧值/新值/行着色），暗色块中单独翻转
   --diff-old-text: #c63f2c;
@@ -105,7 +116,7 @@
   --on-primary: #ffffff;
   --primary-bg: #22305c;
   --primary-border: rgba(96, 132, 222, 0.45);
-  --link: #7c8fd8;
+  --link: #8294da;
   --link-hover: #9aa9e6;
   --success: #34a853;
   --success-bg: rgba(52, 168, 83, 0.16);
@@ -116,6 +127,14 @@
   --violet: #7b6fd0;
   --accent-green: #34a853;
   --accent-amber: #d9a93b;
+
+  // 语义色的文字加深/提亮变体，取值需在 card 与 bg-subtle 两种底色上都 >=4.5:1
+  --primary-text: #6d9bf2;
+  --success-text: #3fbc63;
+
+  // 深色下实底徽章同样需要白字可读
+  --primary-solid: #3570e0;
+  --success-solid: #17784a;
 
   --nav-hover-bg: #393b40;
   --nav-active-bg: #43474e;

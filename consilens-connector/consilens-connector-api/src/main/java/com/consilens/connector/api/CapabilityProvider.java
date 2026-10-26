@@ -59,7 +59,13 @@ public interface CapabilityProvider {
         if (identifier == null || identifier.isEmpty()) {
             return "";
         }
-        return getOpenQuote() + identifier + getCloseQuote();
+        String open = getOpenQuote();
+        String close = getCloseQuote();
+        // 标识符内出现闭合引号时必须转义（"→"" / `→`` / ]→]]），
+        // 否则可以提前闭合标识符并注入 SQL。
+        String escaped = close == null || close.isEmpty()
+                ? identifier : identifier.replace(close, close + close);
+        return open + escaped + close;
     }
 
     /**

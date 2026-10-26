@@ -79,6 +79,9 @@ public interface TaskRepository {
 
     List<TaskInstanceRecord> listStaleRunning(Instant before, int limit);
 
+    /** 指定状态的 stale 任务（用于回收已请求取消但执行线程已失联的任务）。 */
+    List<TaskInstanceRecord> listStaleByStatus(TaskStatus status, Instant before, int limit);
+
     TaskPage listTaskPage(int page,
                           int pageSize,
                           Collection<TaskStatus> statuses,

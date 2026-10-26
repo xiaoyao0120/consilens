@@ -4,7 +4,8 @@ spring:
   application:
     name: consilens-server
   profiles:
-    default: local
+    # 默认使用本机 mysql（localhost:3306，见下方 mysql profile），而非内嵌 H2
+    default: mysql
 
 mybatis-plus:
   type-enums-package: com.consilens.server.domain.enums
@@ -21,9 +22,9 @@ management:
 consilens:
   server:
     datasource:
-      # Base64 编码的 32 字节 AES 密钥：只从环境变量（如 CONSILENS_DATASOURCE_ENCRYPTION_KEY）
-      # 或部署侧注入，不写进仓库——未配置时数据源密码只能明文存储（仅限开发环境）
-      encryption-key: ${CONSILENS_DATASOURCE_ENCRYPTION_KEY:}
+      # Base64 编码的 32 字节 AES 密钥（本机开发环境固定值；更换后已保存的数据源密码将无法解密，
+      # 需要在页面上重新保存各数据源密码）。生产部署应改回环境变量注入并轮换此值。
+      encryption-key: qL7vN2pX8sKd4Rm9TcW1yHb6Fj3Ge5UaZx0Oi8VbAwM=
     node:
       node-key:
       heartbeat-interval-seconds: 2
@@ -40,41 +41,16 @@ consilens:
       storage-type: local-file
       local-base-dir: ./.consilens-server/artifacts
       max-content-bytes: 52428800
+      diff-sample-rows: 1000
+    run-log:
+      # 每个运行实例一个 <instanceKey>.log，供实例详情页“运行日志”Tab 读取
+      enabled: true
+      dir: ./.consilens-server/logs
     database:
       allow-embedded: false
       time-zone:
     api:
       max-request-body-bytes: 10485760
-    ai:
-      # 默认关闭：与 ConsilensServerProperties.Ai.enabled 的默认值（false）保持一致。
-      # 本地开发需要开启时用环境变量或 --consilens.server.ai.enabled=true，
-      # 不要把 key 写进本文件——凭据只走环境变量（api-key-env / secret-key-env）。
-      enabled: false
-      backend: deepseek
-      # 与 ConsilensServerProperties.Ai 的默认值保持一致；需要本地实验端点/模型时
-      # 用 CONSILENS_AI_MODEL / CONSILENS_AI_BASE_URL 覆盖，不再把开发端点写死在仓库里。
-      model: ${CONSILENS_AI_MODEL:deepseek-chat}
-      base-url: ${CONSILENS_AI_BASE_URL:https://api.deepseek.com}
-      api-key-env: DEEPSEEK_API_KEY
-      max-turns: 8
-      max-tool-calls: 20
-      run-timeout-seconds: 120
-      lease-seconds: 30
-      secret-ttl-seconds: 600
-      secret-cleanup-interval-ms: 600000
-      secret-max-reads: 8
-      secret-store: encrypted-db
-      secret-key-env: CONSILENS_AGENT_SECRET_KEY
-      connect-timeout-seconds: 10
-      max-retries: 2
-      max-inspected-columns: 200
-      diff-sample-rows: 1000
-      sse:
-        max-connections: 64
-        heartbeat-ms: 15000
-        poll-ms: 1000
-      max-concurrent-runs: 4
-      fail-fast: true
 
 ---
 spring:
@@ -107,7 +83,8 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://localhost:3306/consilens?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: root
-    password: ${CONSILENS_SERVER_DB_PASSWORD:}
+    # 本机开发库（/usr/local/mysql，localhost:3306）口令；生产部署改回环境变量注入
+    password: 123456@szh
   quartz:
     properties:
       org.quartz.jobStore.driverDelegateClass: org.quartz.impl.jdbcjobstore.StdJDBCDelegate
@@ -119,8 +96,3 @@ consilens:
     security:
       enabled: false
       api-key:
-    ai:
-      # mysql 开发 profile：缺 key 时只标记 AI unavailable，不阻止整个 Server 启动；
-      # 真正使用 AI 时仍需配置 DEEPSEEK_API_KEY / CONSILENS_AGENT_SECRET_KEY /
-      # CONSILENS_DATASOURCE_ENCRYPTION_KEY 三个环境变量。
-      fail-fast: false

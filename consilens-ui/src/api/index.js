@@ -13,8 +13,11 @@ export function setupMessage(message) {
   messageApi = message;
 }
 
-function notify(error, silent) {
-  if (silent || !messageApi) return;
+// silent: 完全静默；silentStatuses: 仅对这些 HTTP 状态码静默（例如可幂等处理的 404）
+function notify(error, config) {
+  if (!messageApi || config?.silent) return;
+  const silentStatuses = config?.silentStatuses;
+  if (Array.isArray(silentStatuses) && silentStatuses.includes(error.status)) return;
   messageApi.error(error.message || "请求失败");
 }
 
@@ -30,11 +33,12 @@ request.interceptors.response.use(
   (response) => {
     const body = response.data;
     if (body && body.success === false) {
-      const error = new Error(body.message || body.errorCode || "request failed");
+      const error = new Error(body.error || body.errorCode || "request failed");
       error.errorCode = body.errorCode;
       error.traceId = body.traceId;
       error.raw = body;
-      notify(error, response.config?.silent);
+      error.status = response.status;
+      notify(error, response.config);
       return Promise.reject(error);
     }
     return body && typeof body === "object" && "data" in body ? body.data : body;
@@ -49,10 +53,10 @@ request.interceptors.response.use(
     } else if (!error.response) {
       message = "无法连接到服务器";
     }
-    const normalized = new Error(message);
+    const normalized = new Error(error.response?.data?.error || message);
     normalized.status = status;
     normalized.errorCode = error.response?.data?.errorCode;
-    notify(normalized, error.config?.silent);
+    notify(normalized, error.config);
     return Promise.reject(normalized);
   }
 );

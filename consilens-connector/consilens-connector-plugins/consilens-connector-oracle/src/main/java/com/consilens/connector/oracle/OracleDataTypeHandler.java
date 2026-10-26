@@ -5,6 +5,7 @@ import com.consilens.connector.api.CapabilityProvider;
 import com.consilens.connector.api.model.DataType;
 import com.consilens.conncetor.base.BaseDataTypeHandler;
 
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -122,9 +123,11 @@ public class OracleDataTypeHandler extends BaseDataTypeHandler {
             case "LONG RAW":
                 return TypeDescriptor.builder(com.consilens.common.enums.DataType.BINARY_TYPE).originType(originType).blobType(true).build();
             case "DATE":
-                // DATE semantics (date-only rendering) to match mysql DATE columns;
-                // oracle DATE-with-time is declared TIMESTAMP in the demo schemas.
-                return TypeDescriptor.builder(com.consilens.common.enums.DataType.DATE_TYPE).originType(originType).build();
+                // 默认按 DATE 语义（date-only）渲染，与其它方言的 DATE 列对齐；
+                // Oracle DATE 物理上含时分秒，需要保留时可用 normalization.date.comparisonMode=DATETIME 开启。
+                return TypeDescriptor.builder(dateIncludesTime()
+                        ? com.consilens.common.enums.DataType.TIMESTAMP_TYPE
+                        : com.consilens.common.enums.DataType.DATE_TYPE).originType(originType).build();
             case "TIMESTAMP":
                 return TypeDescriptor.builder(com.consilens.common.enums.DataType.TIMESTAMP_TYPE).originType(originType).timePrecision(extractLength(upperType)).build();
             case "TIMESTAMP WITH TIME ZONE":
@@ -296,10 +299,24 @@ public class OracleDataTypeHandler extends BaseDataTypeHandler {
     /**
      * Oracle-specific date normalization: YYYY-MM-DD format.
      */
+    /**
+     * Oracle DATE 物理上含时分秒。默认与其它方言的 DATE 一样只渲染日期；
+     * 配置 {@code normalization.date.comparisonMode=DATETIME} 后保留时分秒（并映射为 TIMESTAMP）。
+     */
     @Override
     protected String normalizeDate(String quotedCol) {
+        if (dateIncludesTime()) {
+            return "COALESCE(TO_CHAR(" + quotedCol + ", '" + resolveOracleTemporalFormat("date",
+                    "YYYY-MM-DD HH24:MI:SS", "YYYY-MM-DD") + "'), '')";
+        }
         return "COALESCE(TO_CHAR(" + quotedCol + ", '" + resolveOracleTemporalFormat("date",
                 "YYYY-MM-DD", "YYYY-MM-DD") + "'), '')";
+    }
+
+    /** normalization.date.comparisonMode=DATETIME 时保留 Oracle DATE 的时分秒。 */
+    private boolean dateIncludesTime() {
+        String mode = getComparisonMode("date");
+        return mode != null && "DATETIME".equalsIgnoreCase(mode.trim());
     }
 
     /**
@@ -383,7 +400,11 @@ public class OracleDataTypeHandler extends BaseDataTypeHandler {
         Set<String> timeTokens = temporalTokens("HH24", "HH12", "HH", "MI", "SS", "FF", "FF1", "FF2", "FF3",
                 "FF4", "FF5", "FF6", "FF7", "FF8", "FF9", "AM", "PM");
         if ("date".equals(dataTypeName)) {
-            return dateTokens;
+            Set<String> tokens = new HashSet<>(dateTokens);
+            if (dateIncludesTime()) {
+                tokens.addAll(timeTokens);
+            }
+            return tokens;
         }
         if ("time".equals(dataTypeName) || "time_with_timezone".equals(dataTypeName)) {
             return timeTokens;
@@ -441,11 +462,9 @@ public class OracleDataTypeHandler extends BaseDataTypeHandler {
             case "long":
                 return DataType.TEXT;
             case "date":
-                // Map to DATE: mysql DATE columns render date-only, and mapping
-                // Oracle DATE to TIMESTAMP rendered full UTC datetimes that never
-                // matched. Oracle DATE-with-time columns are declared TIMESTAMP in
-                // the demo schemas, so DATE semantics align with the other dialects.
-                return DataType.DATE;
+                // 默认 Map to DATE（date-only），与 mysql DATE 对齐；
+                // comparisonMode=DATETIME 时映射为 TIMESTAMP，保留 Oracle DATE 的时分秒。
+                return dateIncludesTime() ? DataType.TIMESTAMP : DataType.DATE;
             case "timestamp":
             case "timestamp with time zone":
             case "timestamp with local time zone":

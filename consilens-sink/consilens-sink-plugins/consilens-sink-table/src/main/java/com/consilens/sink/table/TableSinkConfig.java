@@ -151,6 +151,14 @@ public class TableSinkConfig {
      * Resolves the actual table name from configuration.
      */
     public String resolveTableName() {
+        return resolveTableName(null, null);
+    }
+
+    /**
+     * @param kind  sink 类型后缀（diff/result），避免同一秒内配置多个 sink 时撞名
+     * @param runId 本次比对 id 的短后缀，避免并发任务在同一秒生成同名表
+     */
+    public String resolveTableName(String kind, String runId) {
         if (tableName != null && !tableName.isBlank()) {
             return tableName;
         }
@@ -158,6 +166,16 @@ public class TableSinkConfig {
         if (suffixTimestamp) {
             name += java.time.LocalDateTime.now()
                     .format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            // 只有动态表名才追加类型/运行后缀；显式关闭时间戳时应保持用户预期的固定表名
+            if (kind != null && !kind.isBlank()) {
+                name += "_" + kind;
+            }
+            if (runId != null && !runId.isBlank()) {
+                String suffix = runId.replaceAll("[^A-Za-z0-9]", "");
+                if (!suffix.isEmpty()) {
+                    name += "_" + suffix.substring(0, Math.min(8, suffix.length()));
+                }
+            }
         }
         return name;
     }

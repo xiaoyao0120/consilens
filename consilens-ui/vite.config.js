@@ -39,12 +39,13 @@ export default defineConfig({
     },
   },
   server: {
-    // 5173 被其他服务（noeticlens-ui 等）占用，consilens-ui 固定使用 5174
+    // 5173 被其他本地服务占用，consilens-ui 固定使用 5174
     port: 5174,
     strictPort: true,
     proxy: {
       "/v1": {
-        target: "http://localhost:16789",
+        // E2E 运行时（scripts/e2e/run.sh）用 E2E_BACKEND 指向专用后端；默认指向开发服务
+        target: process.env.E2E_BACKEND || "http://localhost:16789",
         changeOrigin: true,
       },
     },

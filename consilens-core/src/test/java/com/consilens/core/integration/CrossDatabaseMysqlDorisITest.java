@@ -58,27 +58,40 @@ class CrossDatabaseMysqlDorisITest {
 
     @Container
     private static final GenericContainer<?> DORIS_FE = new GenericContainer<>(
-            DockerImageName.parse("apache/doris:fe-latest"))
+            // 使用与本地 compose 一致的 selectdb 镜像和 init_fe.sh 入口；
+            // apache/doris:fe-latest 的默认入口在 arm64 上无法稳定完成 FE 启动。
+            DockerImageName.parse("selectdb/doris.fe-ubuntu:2.1.11"))
             .withNetwork(DORIS_NETWORK)
             .withNetworkAliases("doris-fe")
-            .withCreateContainerCmdModifier(command -> command.withIpv4Address(DORIS_FE_IP))
-            .withEnv("FE_SERVERS", "fe1:" + DORIS_FE_IP + ":9010")
-            .withEnv("FE_ID", "1")
+            .withCreateContainerCmdModifier(command -> {
+                command.withIpv4Address(DORIS_FE_IP);
+                command.withEntrypoint("/bin/bash", "/usr/local/bin/init_fe.sh");
+            })
+            .withEnv("BUILD_TYPE", "k8s")
             .withExposedPorts(9030, 8030)
-            .waitingFor(new LogMessageWaitStrategy()
-                    .withRegEx(".*Starting master FE node.*\\s")
+            .waitingFor(Wait.forHttp("/api/bootstrap").forPort(8030)
                     .withStartupTimeout(Duration.ofMinutes(10)));
 
     @Container
     private static final GenericContainer<?> DORIS_BE = new GenericContainer<>(
-            DockerImageName.parse("apache/doris:be-latest"))
+            DockerImageName.parse("selectdb/doris.be-ubuntu:2.1.11"))
             .withNetwork(DORIS_NETWORK)
             .withNetworkAliases("doris-be")
-            .withCreateContainerCmdModifier(command -> command.withIpv4Address(DORIS_BE_IP))
+            .withCreateContainerCmdModifier(command -> {
+                command.withIpv4Address(DORIS_BE_IP);
+                command.withPrivileged(true);
+                // 镜像的 entry_point.sh 才会把 FE_SERVERS/BE_ADDR 写进 be.conf；
+                // 直接调 start_be.sh 会跳过配置，BE 永远不会注册到 FE。
+                command.withEntrypoint("/bin/bash");
+            })
             .withEnv("FE_SERVERS", "fe1:" + DORIS_FE_IP + ":9010")
             .withEnv("BE_ADDR", DORIS_BE_IP + ":9050")
+            .withExposedPorts(8040)
             .dependsOn(DORIS_FE)
-            .waitingFor(Wait.forLogMessage(".*BE node is ready.*\\s", 1)
+            // 容器内能看到宿主机 swap；start_be.sh 会因此拒绝启动，测试环境绕过该检查。
+            .withCommand("-c", "sed -i 's/swapon -s | wc -l/0/' /opt/apache-doris/be/bin/start_be.sh; "
+                    + "exec bash entry_point.sh")
+            .waitingFor(Wait.forHttp("/api/health").forPort(8040)
                     .withStartupTimeout(Duration.ofMinutes(10)));
 
     private static DatabaseAdapter mysqlAdapter;
@@ -92,13 +105,14 @@ class CrossDatabaseMysqlDorisITest {
         Integer dorisPort = DORIS_FE.getMappedPort(9030);
 
         // First create database on Doris (connect without database)
-        String dorisRootUrl = "jdbc:mysql://" + dorisHost + ":" + dorisPort + "/?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai";
+        String dorisRootUrl = "jdbc:mysql://" + dorisHost + ":" + dorisPort + "/?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=UTC";
         DatabaseAdapter dorisRootAdapter = CrossDatabaseITestBase.createAdapter("doris-root", dorisRootUrl, "root", "", "doris");
+        waitForDorisBackend(dorisRootAdapter);
         CrossDatabaseITestBase.executeSql(dorisRootAdapter, "CREATE DATABASE IF NOT EXISTS consilens_demo");
         dorisRootAdapter.close();
 
         // Now connect with database
-        String dorisUrl = "jdbc:mysql://" + dorisHost + ":" + dorisPort + "/consilens_demo?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai";
+        String dorisUrl = "jdbc:mysql://" + dorisHost + ":" + dorisPort + "/consilens_demo?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=UTC";
         dorisAdapter = CrossDatabaseITestBase.createAdapter("doris-target", dorisUrl, "root", "", "doris");
 
         createTestTable(mysqlAdapter, "cross_source");
@@ -112,6 +126,20 @@ class CrossDatabaseMysqlDorisITest {
     static void tearDown() {
         if (mysqlAdapter != null) mysqlAdapter.close();
         if (dorisAdapter != null) dorisAdapter.close();
+    }
+
+    private static void waitForDorisBackend(DatabaseAdapter adapter) throws Exception {
+        // BE 容器 healthcheck 通过不代表已经注册到 FE；建表前必须等 Alive=true。
+        for (int i = 0; i < 60; i++) {
+            List<Object[]> rows = adapter.query("SHOW BACKENDS", Object[].class);
+            boolean alive = rows.stream().anyMatch(row -> Arrays.stream(row)
+                    .anyMatch(v -> "true".equalsIgnoreCase(String.valueOf(v))));
+            if (alive) {
+                return;
+            }
+            Thread.sleep(2000);
+        }
+        throw new IllegalStateException("Doris BE not alive after 120s");
     }
 
     private static void createTestTable(DatabaseAdapter adapter, String tableName) throws Exception {

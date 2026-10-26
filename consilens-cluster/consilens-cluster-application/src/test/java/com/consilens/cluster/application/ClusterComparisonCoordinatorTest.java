@@ -58,7 +58,11 @@ class ClusterComparisonCoordinatorTest {
 
         assertEquals(1, exitCode);
         assertEquals("", output.toString(StandardCharsets.UTF_8));
-        assertEquals("Cluster comparison failed.\n", error.toString(StandardCharsets.UTF_8));
+        String stderr = error.toString(StandardCharsets.UTF_8);
+        // 失败摘要带异常类型/消息，便于容器日志定位；但不得回显描述符引用本身。
+        assertTrue(stderr.startsWith("Cluster comparison failed: "), stderr);
+        assertTrue(stderr.contains("Unsupported comparison descriptor URI scheme: s3a"), stderr);
+        assertFalse(stderr.contains("s3a://bucket/secret-descriptor.yaml"), stderr);
     }
 
     @Test

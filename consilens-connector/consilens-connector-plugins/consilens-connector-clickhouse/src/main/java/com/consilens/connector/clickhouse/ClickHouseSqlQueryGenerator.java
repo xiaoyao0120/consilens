@@ -25,6 +25,11 @@ import java.util.Map;
  */
 public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
 
+    @Override
+    public boolean backslashEscapesStringLiterals() {
+        return true;
+    }
+
     private final CapabilityProvider capabilityProvider;
     private final DataTypeHandler dataTypeHandler;
 
@@ -46,7 +51,7 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
     /** ClickHouse 字符串化排序（键可能是 Nullable）。 */
     @Override
     protected String orderByExpression(String column) {
-        return "CAST(" + capabilityProvider.quote(column) + " AS Nullable(String))";
+        return "CAST(" + capabilityProvider.quote(column) + " AS Nullable(String)) NULLS FIRST";
     }
 
     /** join 计划比较列的类型归一化处理器（与 checksum 路径同口径）。 */
@@ -91,7 +96,8 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
             if (keyColumns.size() == 1) {
                 String col = keyColumns.get(0);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append("COALESCE(toString(").append(formatForChecksum(col, dataType)).append("), '0') as pk_key, ");
+                sql.append(escapeHashValue("COALESCE(toString(" + formatForChecksum(col, dataType) + "), '')"))
+                        .append(" as pk_key, ");
             } else {
                 sql.append("concat(");
                 for (int i = 0; i < keyColumns.size(); i++) {
@@ -100,7 +106,7 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
                     }
                     String col = keyColumns.get(i);
                     DataType dataType = columnDataTypes.get(col);
-                    sql.append("COALESCE(toString(").append(formatForChecksum(col, dataType)).append("), '0')");
+                    sql.append(escapeHashValue("COALESCE(toString(" + formatForChecksum(col, dataType) + "), '')"));
                 }
                 sql.append(") as pk_key, ");
             }
@@ -114,7 +120,7 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
                 }
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append("COALESCE(toString(").append(formatForChecksum(col, dataType)).append("), '0')");
+                sql.append(escapeHashValue("COALESCE(toString(" + formatForChecksum(col, dataType) + "), '')"));
             }
             sql.append(")))) as row_checksum ");
 
@@ -162,7 +168,7 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
             }
             String col = columns.get(i);
             DataType dataType = columnDataTypes.get(col);
-            sql.append("COALESCE(toString(").append(formatForChecksum(col, dataType)).append("), '0')");
+            sql.append(escapeHashValue("COALESCE(toString(" + formatForChecksum(col, dataType) + "), '')"));
         }
         sql.append(")))) AS row_hash");
 
@@ -207,6 +213,15 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
 
         return sql.toString();
     }
+    /**
+     * ClickHouse 的 replaceAll 以 RE2 正则解释 pattern，{@code '|'} 必须转义成 {@code '\\|'}，
+     * 否则会匹配空串并把每个字符之间都插入分隔符。
+     */
+    @Override
+    protected String escapeHashValue(String normalizedExpr) {
+        return "replaceAll(" + normalizedExpr + ", '\\\\|', '||')";
+    }
+
     /**
      * Format a column for checksum calculation, applying type-specific formatting
      * for temporal types (Date, DateTime, Timestamp).

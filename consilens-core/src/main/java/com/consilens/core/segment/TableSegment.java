@@ -85,8 +85,6 @@ public class TableSegment {
     @Builder.Default
     private boolean upperBoundInclusive = false;
 
-    private boolean caseSensitive;
-
     // Runtime data
     @Builder.Default
     private Optional<TableSchema> schema = Optional.empty();
@@ -336,25 +334,28 @@ public class TableSegment {
 
         StringBuilder whereBuilder = new StringBuilder();
 
-        // Add key range conditions
-        if (minKey != null && minKey.isPresent() && keyColumns != null && !keyColumns.isEmpty()) {
-            List<Object> minValues = minKey.get();
-
+        // Add key range conditions. The lower and upper bounds are independent:
+        // tail scans build one-sided segments (e.g. minKey=null, maxKey=<other min>),
+        // and previously gating the whole block on minKey dropped the upper predicate,
+        // turning that scan into a full-table scan reported as one-sided missing rows.
+        boolean hasMinKey = minKey != null && minKey.isPresent();
+        boolean hasMaxKey = maxKey != null && maxKey.isPresent();
+        if (keyColumns != null && !keyColumns.isEmpty() && (hasMinKey || hasMaxKey)) {
             if (keyColumns.size() == 1) {
-                // Single key: simple range check
                 String column = keyColumns.get(0);
-                Object minValue = minValues.get(0);
 
                 // NULL 下界（整列全 NULL 时 MIN 为 NULL）即段起点，无需下界谓词；
                 // 「NULL 排在最前」口径下所有行（含 NULL 行）都在该段内。
-                if (minValue != null) {
-                    whereBuilder.append(String.format("%s >= %s", column, formatValue(minValue, columnType(column))));
+                if (hasMinKey) {
+                    Object minValue = minKey.get().get(0);
+                    if (minValue != null) {
+                        whereBuilder.append(String.format("%s >= %s", column,
+                                formatValue(minValue, columnType(column))));
+                    }
                 }
 
-                // Always add maxKey condition if it exists (segment upper bound)
-                if (maxKey != null && maxKey.isPresent()) {
-                    List<Object> maxValues = maxKey.get();
-                    Object maxValue = maxValues.get(0);
+                if (hasMaxKey) {
+                    Object maxValue = maxKey.get().get(0);
                     String upperCondition;
                     if (maxValue != null) {
                         upperCondition = String.format("%s %s %s",
@@ -375,76 +376,19 @@ public class TableSegment {
                     whereBuilder.append(upperCondition);
                 }
             } else {
-                // Composite key: use proper range logic
-                // Build lower bound: (key1 > min1 OR (key1 = min1 AND key2 >= min2 AND ...))
-                //
-                // 边界分量可能是 NULL（键列允许 NULL 时 MIN/MAX 会取到 NULL）。SQL 中
-                // `k > NULL` / `k = NULL` 恒为 UNKNOWN，整个谓词会退化为假，导致分段查询
-                // 取不到任何行（实测 dq_cmp_edge_* 因此漏报 27/28 条差异）。按「NULL 排在最前」
-                // 的分段口径改写：`= NULL` → `IS NULL`，`> NULL` → `IS NOT NULL`，
-                // `< NULL` 无解 → 该备选项直接丢弃。
-                StringBuilder lowerBound = new StringBuilder("(");
-                boolean lowerHasTerm = false;
-                for (int i = 0; i < keyColumns.size(); i++) {
-                    String comparison = compositeKeyComparison(keyColumns.get(i),
-                            i == keyColumns.size() - 1 ? ">=" : ">", minValues.get(i));
-                    if (comparison == null) {
-                        continue;
-                    }
-                    if (lowerHasTerm) {
-                        lowerBound.append(" OR (");
-                    }
-                    for (int j = 0; j < i; j++) {
-                        String prefix = compositeKeyComparison(keyColumns.get(j), "=", minValues.get(j));
-                        lowerBound.append(prefix).append(" AND ");
-                    }
-                    lowerBound.append(comparison);
-                    if (lowerHasTerm) {
-                        lowerBound.append(")");
-                    }
-                    lowerHasTerm = true;
-                }
-                if (!lowerHasTerm) {
-                    // 无可用下界（例如极值 < NULL），该段无行可选
-                    whereBuilder.append("1 = 0");
-                } else {
-                    lowerBound.append(")");
-                    whereBuilder.append(lowerBound);
-                }
-
-                // Always add upper bound if maxKey exists (segment upper bound)
-                if (maxKey != null && maxKey.isPresent()) {
-                    List<Object> maxValues = maxKey.get();
-
-                    // Build upper bound: (key1 < max1 OR (key1 = max1 AND key2 < max2 AND ...))
-                    StringBuilder upperBound = new StringBuilder("(");
-                    boolean upperHasTerm = false;
-                    for (int i = 0; i < keyColumns.size(); i++) {
-                        String comparison = compositeKeyComparison(keyColumns.get(i),
-                                (upperBoundInclusive && i == keyColumns.size() - 1) ? "<=" : "<",
-                                maxValues.get(i));
-                        if (comparison == null) {
-                            continue;
-                        }
-                        if (upperHasTerm) {
-                            upperBound.append(" OR (");
-                        }
-                        for (int j = 0; j < i; j++) {
-                            String prefix = compositeKeyComparison(keyColumns.get(j), "=", maxValues.get(j));
-                            upperBound.append(prefix).append(" AND ");
-                        }
-                        upperBound.append(comparison);
-                        if (upperHasTerm) {
-                            upperBound.append(")");
-                        }
-                        upperHasTerm = true;
-                    }
-                    upperBound.append(")");
-
+                if (hasMinKey) {
+                    String lowerBound = buildCompositeLowerBound(minKey.get());
                     if (whereBuilder.length() > 0) {
                         whereBuilder.append(" AND ");
                     }
-                    whereBuilder.append(upperHasTerm ? upperBound : "1 = 0");
+                    whereBuilder.append(lowerBound == null ? "1 = 0" : lowerBound);
+                }
+                if (hasMaxKey) {
+                    String upperBound = buildCompositeUpperBound(maxKey.get());
+                    if (whereBuilder.length() > 0) {
+                        whereBuilder.append(" AND ");
+                    }
+                    whereBuilder.append(upperBound == null ? "1 = 0" : upperBound);
                 }
             }
         }
@@ -675,6 +619,94 @@ public class TableSegment {
         } else {
             throw new IllegalArgumentException("Unsupported key value type: " + value.getClass().getName());
         }
+    }
+
+    /**
+     * 复合键下界：{@code (k1 > min1) OR (k1 = min1 AND k2 >= min2) ...}。
+     *
+     * <p>边界分量可能是 NULL（键列允许 NULL 时 MIN/MAX 会取到 NULL）。SQL 中
+     * {@code k > NULL} / {@code k = NULL} 恒为 UNKNOWN，整个谓词会退化为假，导致分段查询
+     * 取不到任何行。按「NULL 排在最前」的分段口径改写：{@code = NULL} → {@code IS NULL}，
+     * {@code > NULL} → {@code IS NOT NULL}。最后一维为 NULL 时它已经是该前缀下的最小值，
+     * 下界退化为前缀等值本身（不能再生成 {@code k IS NOT NULL}，否则会排除该维为 NULL 的行）。
+     */
+    private String buildCompositeLowerBound(List<Object> minValues) {
+        StringBuilder lowerBound = new StringBuilder("(");
+        boolean hasTerm = false;
+        for (int i = 0; i < keyColumns.size(); i++) {
+            boolean last = i == keyColumns.size() - 1;
+            String comparison;
+            if (last && minValues.get(i) == null) {
+                // NULL 是最后一维的最小值：前缀相等即满足 >=，不应再限制该维
+                comparison = null;
+            } else {
+                comparison = compositeKeyComparison(keyColumns.get(i), last ? ">=" : ">", minValues.get(i));
+                if (comparison == null) {
+                    continue;
+                }
+            }
+            if (comparison == null && i == 0) {
+                continue;
+            }
+            if (hasTerm) {
+                lowerBound.append(" OR (");
+            }
+            for (int j = 0; j < i; j++) {
+                if (j > 0) {
+                    lowerBound.append(" AND ");
+                }
+                lowerBound.append(compositeKeyComparison(keyColumns.get(j), "=", minValues.get(j)));
+            }
+            if (comparison != null) {
+                if (i > 0) {
+                    lowerBound.append(" AND ");
+                }
+                lowerBound.append(comparison);
+            }
+            if (hasTerm) {
+                lowerBound.append(")");
+            }
+            hasTerm = true;
+        }
+        if (!hasTerm) {
+            return null;
+        }
+        lowerBound.append(")");
+        return lowerBound.toString();
+    }
+
+    /**
+     * 复合键上界：{@code (k1 < max1) OR (k1 = max1 AND k2 <= max2) ...}。
+     * 最后一位是否为闭区间由 {@link #upperBoundInclusive} 决定。
+     */
+    private String buildCompositeUpperBound(List<Object> maxValues) {
+        StringBuilder upperBound = new StringBuilder("(");
+        boolean hasTerm = false;
+        for (int i = 0; i < keyColumns.size(); i++) {
+            String comparison = compositeKeyComparison(keyColumns.get(i),
+                    (upperBoundInclusive && i == keyColumns.size() - 1) ? "<=" : "<",
+                    maxValues.get(i));
+            if (comparison == null) {
+                continue;
+            }
+            if (hasTerm) {
+                upperBound.append(" OR (");
+            }
+            for (int j = 0; j < i; j++) {
+                String prefix = compositeKeyComparison(keyColumns.get(j), "=", maxValues.get(j));
+                upperBound.append(prefix).append(" AND ");
+            }
+            upperBound.append(comparison);
+            if (hasTerm) {
+                upperBound.append(")");
+            }
+            hasTerm = true;
+        }
+        if (!hasTerm) {
+            return null;
+        }
+        upperBound.append(")");
+        return upperBound.toString();
     }
 
     /**

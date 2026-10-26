@@ -129,6 +129,15 @@ export function getTaskInstance(id) {
   return request.get(`/task-instances/${id}`);
 }
 
+// 运行实例日志：tailLines 读末尾并返回总行数，offset+limit 做增量拉取
+export function getTaskLogs(id, params) {
+  return request.get(`/task-instances/${id}/logs`, { params, silent: true });
+}
+
+export function downloadTaskLog(id) {
+  return request.get(`/task-instances/${id}/logs/download`, { responseType: "blob" });
+}
+
 // ===== 工作台 =====
 
 export function getDashboardSummary() {

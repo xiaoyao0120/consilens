@@ -1,6 +1,7 @@
 package com.consilens.core.compare.executor;
 
 import com.consilens.connector.api.ConnectorException;
+import com.consilens.connector.api.DataTypeHandler;
 import com.consilens.connector.api.LegacyTypeMapper;
 import com.consilens.connector.api.dataset.DatasetHandle;
 import com.consilens.connector.api.model.ComparisonSpec;
@@ -41,8 +42,10 @@ final class ConnectorRecordDiffer {
     private static final long PROGRESS_LOG_INTERVAL = 100_000L;
 
     DiffResult diff(CompareSegment source, CompareSegment target, CompareExecutionSettings settings) {
-        PreparedSegment sourceData = prepare(source);
-        PreparedSegment targetData = prepare(target);
+        int decimalScale = settings != null ? settings.getDecimalScale() : ValueNormalizer.DEFAULT_DECIMAL_SCALE;
+        java.time.ZoneId sessionZone = settings != null ? settings.getSessionZone() : null;
+        PreparedSegment sourceData = prepare(source, decimalScale, sessionZone);
+        PreparedSegment targetData = prepare(target, decimalScale, sessionZone);
         List<DiffRow> differences = new ArrayList<>();
         long sourceMissingCount = 0L;
         long targetMissingCount = 0L;
@@ -59,8 +62,10 @@ final class ConnectorRecordDiffer {
 
         try (CloseableIterator<CanonicalRecord> sourceIterator = sourceData.scanner.scan(source);
              CloseableIterator<CanonicalRecord> targetIterator = targetData.scanner.scan(target)) {
-            SegmentCursor sourceCursor = new SegmentCursor(sourceIterator, source.getKeySpec(), sourceData.columns, sourceData.types);
-            SegmentCursor targetCursor = new SegmentCursor(targetIterator, target.getKeySpec(), targetData.columns, targetData.types);
+            SegmentCursor sourceCursor = new SegmentCursor(sourceIterator, source.getKeySpec(),
+                    sourceData.columns, sourceData.types, sourceData.handler, decimalScale, sessionZone);
+            SegmentCursor targetCursor = new SegmentCursor(targetIterator, target.getKeySpec(),
+                    targetData.columns, targetData.types, targetData.handler, decimalScale, sessionZone);
 
             while (sourceCursor.hasGroup() || targetCursor.hasGroup()) {
                 if (!sourceCursor.hasGroup()) {
@@ -94,7 +99,7 @@ final class ConnectorRecordDiffer {
                         List<RecordRow> targetRows = targetCursor.currentRows();
                         NormalizedKey key = sourceCursor.currentKey();
 
-                        if (settings.isValidateUniqueKeys()
+                        if (settings != null && settings.isValidateUniqueKeys()
                                 && (sourceRows.size() > 1 || targetRows.size() > 1)) {
                             throw new ConnectorException("唯一键校验失败：键 " + key.displayParts()
                                     + " 在两侧分别出现 " + sourceRows.size() + " / " + targetRows.size()
@@ -211,7 +216,7 @@ final class ConnectorRecordDiffer {
                         .build())
                 .infoTree(Optional.empty())
                 .completedAt(Instant.now())
-                .metadata(Map.of("engine", "connector-record-diff"))
+                .metadata(new java.util.LinkedHashMap<>(Map.of("engine", "connector-record-diff")))
                 .sourceTablePath(resolveTablePath(source.getResource(), source.getDataset()))
                 .targetTablePath(resolveTablePath(target.getResource(), target.getDataset()))
                 .build();
@@ -241,13 +246,14 @@ final class ConnectorRecordDiffer {
                         .build())
                 .infoTree(Optional.empty())
                 .completedAt(Instant.now())
-                .metadata(Map.of("engine", "connector-record-diff"))
+                .metadata(new java.util.LinkedHashMap<>(Map.of("engine", "connector-record-diff")))
                 .sourceTablePath(resolveTablePath(source.getResource(), source.getDataset()))
                 .targetTablePath(resolveTablePath(target.getResource(), target.getDataset()))
                 .build();
     }
 
-    private PreparedSegment prepare(CompareSegment segment) {
+    private PreparedSegment prepare(CompareSegment segment, int decimalScale,
+                                    java.time.ZoneId sessionZone) {
         DatasetHandle dataset = segment.getDataset();
         if (dataset == null || dataset.getRecordScanner().isEmpty()) {
             throw new ConnectorException("RecordScanner is required for dataset diff");
@@ -256,13 +262,24 @@ final class ConnectorRecordDiffer {
         SchemaDescriptor schema = segment.getSchema() != null ? segment.getSchema() : dataset.getSchema();
         List<String> columns = columns(segment.getKeySpec(), segment.getComparisons(), schema);
         Map<String, DataType> types = columnTypes(schema, columns);
-        return new PreparedSegment(dataset.getRecordScanner().get(), columns, types);
+        // 与 checksum 路径同一归一化口径：方言 handler 先把驱动特有表示映射到公共形态
+        // （MySQL YEAR 的 Date、Oracle 的 TIMESTAMP 字符串等），再交给 ValueNormalizer。
+        DataTypeHandler handler = dataset.getSupport(
+                        com.consilens.connector.api.dataset.DialectProvider.class)
+                .map(com.consilens.connector.api.dataset.DialectProvider::getDialect)
+                .map(com.consilens.connector.api.DatabaseDialect::getDataTypeHandler)
+                .orElse(null);
+        return new PreparedSegment(dataset.getRecordScanner().get(), columns, types, handler, decimalScale,
+                sessionZone);
     }
 
     private RecordRow toRecordRow(CanonicalRecord record,
                                   KeySpec keySpec,
                                   List<String> columns,
-                                  Map<String, DataType> types) {
+                                  Map<String, DataType> types,
+                                  DataTypeHandler handler,
+                                  int decimalScale,
+                                  java.time.ZoneId sessionZone) {
         Map<String, CanonicalValue> values = record.getValues() != null ? record.getValues() : Collections.emptyMap();
         List<Object> rawValues = new ArrayList<>(columns.size());
         List<Object> normalizedValues = new ArrayList<>(columns.size());
@@ -273,7 +290,11 @@ final class ConnectorRecordDiffer {
             CanonicalValue value = values.get(column);
             Object rawValue = value != null ? value.getValue() : null;
             DataType dataType = types.getOrDefault(column, DataType.UNKNOWN);
-            String normalized = ValueNormalizer.normalizeValue(rawValue, dataType);
+            Object comparisonValue = handler != null
+                    ? handler.normalizeValueForComparison(rawValue, dataType)
+                    : rawValue;
+            String normalized = ValueNormalizer.normalizeValue(comparisonValue, dataType, decimalScale,
+                    sessionZone);
             if (normalized == null) {
                 // 契约：NULL 归一为 ''。个别驱动/类型分支可能返回 null，
                 // 而 NormalizedKey 用 List.copyOf（拒绝 null 元素）会直接 NPE。
@@ -283,8 +304,10 @@ final class ConnectorRecordDiffer {
             }
             rawValues.add(rawValue);
             normalizedValues.add(normalized);
-            if (keyColumns.contains(column)) {
-                normalizedKey.add(normalized);
+            if (keyColumns.stream().anyMatch(key -> key != null && key.equalsIgnoreCase(column))) {
+                // 键身份用精确形态：DECIMAL 键若用 4 位小数形态，1.00001/1.00002 会碰撞，
+                // 归并时被当成同一个键（差异会被归因成 MISMATCH 而不是 SM/TM）。
+                normalizedKey.add(ValueNormalizer.normalizeKey(comparisonValue, dataType));
             }
         }
 
@@ -294,31 +317,50 @@ final class ConnectorRecordDiffer {
     private List<String> columns(KeySpec keySpec, ComparisonSpec comparisons, SchemaDescriptor schema) {
         LinkedHashSet<String> result = new LinkedHashSet<>();
         if (keySpec != null && keySpec.getFields() != null) {
-            result.addAll(keySpec.getFields());
+            for (String key : keySpec.getFields()) {
+                result.add(resolveColumnName(key, schema));
+            }
         }
         Set<String> excluded = excludedColumns(comparisons);
         if (comparisons != null && comparisons.getFields() != null && !comparisons.getFields().isEmpty()) {
             for (String field : comparisons.getFields()) {
-                if (field != null && !excluded.contains(field)) {
-                    result.add(field);
+                if (field != null && !isExcluded(excluded, field)) {
+                    result.add(resolveColumnName(field, schema));
                 }
             }
             return List.copyOf(result);
         }
         if (schema != null && schema.getFields() != null) {
-            Set<String> keys = keySpec != null && keySpec.getFields() != null
-                    ? new LinkedHashSet<>(keySpec.getFields())
-                    : Set.of();
+            Set<String> keys = new java.util.HashSet<>();
+            if (keySpec != null && keySpec.getFields() != null) {
+                for (String key : keySpec.getFields()) {
+                    if (key != null) {
+                        keys.add(key.toLowerCase(java.util.Locale.ROOT));
+                    }
+                }
+            }
             for (FieldDescriptor field : schema.getFields()) {
                 if (field.getName() != null
-                        && !keys.contains(field.getName())
-                        && !excluded.contains(field.getName())
+                        && !keys.contains(field.getName().toLowerCase(java.util.Locale.ROOT))
+                        && !isExcluded(excluded, field.getName())
                         && !DerivedCompareColumns.isDerived(field.getName())) {
                     result.add(field.getName());
                 }
             }
         }
         return List.copyOf(result);
+    }
+
+    private static String resolveColumnName(String name, SchemaDescriptor schema) {
+        if (name == null || schema == null || schema.getFields() == null) {
+            return name;
+        }
+        for (FieldDescriptor field : schema.getFields()) {
+            if (field.getName() != null && field.getName().equalsIgnoreCase(name)) {
+                return field.getName();
+            }
+        }
+        return name;
     }
 
     private Set<String> excludedColumns(ComparisonSpec comparisons) {
@@ -328,10 +370,14 @@ final class ConnectorRecordDiffer {
         Set<String> result = new LinkedHashSet<>();
         for (String field : comparisons.getExclude()) {
             if (field != null && !field.trim().isEmpty()) {
-                result.add(field.trim());
+                result.add(field.trim().toLowerCase(Locale.ROOT));
             }
         }
         return result;
+    }
+
+    private static boolean isExcluded(Set<String> excluded, String field) {
+        return field != null && excluded.contains(field.toLowerCase(Locale.ROOT));
     }
 
     private Map<String, DataType> columnTypes(SchemaDescriptor schema, List<String> columns) {
@@ -404,13 +450,22 @@ final class ConnectorRecordDiffer {
         private final List<String> columns;
         private final Map<String, DataType> types;
         private final com.consilens.connector.api.dataset.RecordScanner scanner;
+        private final DataTypeHandler handler;
+        private final int decimalScale;
+        private final java.time.ZoneId sessionZone;
 
         private PreparedSegment(com.consilens.connector.api.dataset.RecordScanner scanner,
                                 List<String> columns,
-                                Map<String, DataType> types) {
+                                Map<String, DataType> types,
+                                DataTypeHandler handler,
+                                int decimalScale,
+                                java.time.ZoneId sessionZone) {
             this.scanner = scanner;
             this.columns = columns;
             this.types = types;
+            this.handler = handler;
+            this.decimalScale = decimalScale;
+            this.sessionZone = sessionZone;
         }
     }
 
@@ -432,6 +487,9 @@ final class ConnectorRecordDiffer {
         private final KeySpec keySpec;
         private final List<String> columns;
         private final Map<String, DataType> types;
+        private final DataTypeHandler handler;
+        private final int decimalScale;
+        private final java.time.ZoneId sessionZone;
         private RecordRow pendingRow;
         private NormalizedKey currentKey;
         private List<RecordRow> currentRows = List.of();
@@ -440,11 +498,17 @@ final class ConnectorRecordDiffer {
         private SegmentCursor(CloseableIterator<CanonicalRecord> iterator,
                               KeySpec keySpec,
                               List<String> columns,
-                              Map<String, DataType> types) {
+                              Map<String, DataType> types,
+                              DataTypeHandler handler,
+                              int decimalScale,
+                              java.time.ZoneId sessionZone) {
             this.iterator = iterator;
             this.keySpec = keySpec;
             this.columns = columns;
             this.types = types;
+            this.handler = handler;
+            this.decimalScale = decimalScale;
+            this.sessionZone = sessionZone;
             advanceGroup();
         }
 
@@ -470,7 +534,8 @@ final class ConnectorRecordDiffer {
                 currentRows = List.of();
                 return;
             }
-            RecordRow first = pendingRow != null ? pendingRow : toRecordRow(iterator.next(), keySpec, columns, types);
+            RecordRow first = pendingRow != null ? pendingRow
+                    : toRecordRow(iterator.next(), keySpec, columns, types, handler, decimalScale, sessionZone);
             pendingRow = null;
             rowCount++;
             currentKey = first.key;
@@ -478,7 +543,8 @@ final class ConnectorRecordDiffer {
             group.add(first);
 
             while (iterator.hasNext()) {
-                RecordRow nextRow = toRecordRow(iterator.next(), keySpec, columns, types);
+                RecordRow nextRow = toRecordRow(iterator.next(), keySpec, columns, types, handler, decimalScale,
+                        sessionZone);
                 if (currentKey.equals(nextRow.key)) {
                     group.add(nextRow);
                     rowCount++;

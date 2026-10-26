@@ -66,6 +66,9 @@ async function copyAll() {
 }
 
 .code-btn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   padding: 2px 8px;
   font-size: 11px;
   color: var(--code-muted);

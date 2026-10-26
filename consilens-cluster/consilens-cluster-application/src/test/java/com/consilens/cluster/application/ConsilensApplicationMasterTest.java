@@ -45,6 +45,94 @@ class ConsilensApplicationMasterTest {
     }
 
     @Test
+    void shouldReportFailedWhenCoordinatorThrows() throws Exception {
+        Path descriptor = temporaryDirectory.resolve("submission-descriptor.yaml");
+        Files.writeString(descriptor, "source: {}\n");
+        RecordingAmClient client = new RecordingAmClient();
+        ByteArrayOutputStream error = new ByteArrayOutputStream();
+        ConsilensApplicationMaster master = new ConsilensApplicationMaster(new String[]{
+                "--coordinator-class", FailingCoordinator.class.getName(),
+                "--descriptor", descriptor.toString(),
+        }, client, new PrintStream(error));
+
+        master.run();
+
+        assertEquals(FinalApplicationStatus.FAILED, client.finishedStatus);
+        assertTrue(client.diagnostics != null && client.diagnostics.contains("boom"),
+                "失败原因必须进入 diagnostics，而不是只报 SUCCEEDED");
+    }
+
+    @Test
+    void shouldReportCoordinatorExitCodeAndCapturedStderr() throws Exception {
+        Path descriptor = temporaryDirectory.resolve("submission-descriptor.yaml");
+        Files.writeString(descriptor, "source: {}\n");
+        RecordingAmClient client = new RecordingAmClient();
+        ConsilensApplicationMaster master = new ConsilensApplicationMaster(new String[]{
+                "--coordinator-class", ExitCodeCoordinator.class.getName(),
+                "--descriptor", descriptor.toString(),
+        }, client, new PrintStream(new ByteArrayOutputStream()));
+
+        master.run();
+
+        assertEquals(FinalApplicationStatus.FAILED, client.finishedStatus);
+        assertTrue(client.diagnostics != null && client.diagnostics.contains("code 2"),
+                client.diagnostics);
+        assertTrue(client.diagnostics.contains("database unreachable"),
+                "coordinator stderr 必须进入 diagnostics: " + client.diagnostics);
+    }
+
+    @Test
+    void shouldUseExecuteEntryPointWithoutTerminatingJvm() throws Exception {
+        Path descriptor = temporaryDirectory.resolve("submission-descriptor.yaml");
+        Files.writeString(descriptor, "source: {}\n");
+        RecordingAmClient client = new RecordingAmClient();
+        ConsilensApplicationMaster master = new ConsilensApplicationMaster(new String[]{
+                "--coordinator-class", ExecuteCoordinator.class.getName(),
+                "--descriptor", descriptor.toString(),
+        }, client, new PrintStream(new ByteArrayOutputStream()));
+
+        master.run();
+
+        assertEquals(FinalApplicationStatus.SUCCEEDED, client.finishedStatus);
+        assertTrue(client.diagnostics != null && client.diagnostics.contains("sub-execute"),
+                client.diagnostics);
+    }
+
+    @Test
+    void shouldAcceptSecretsOptionForCliCompatibility() throws Exception {
+        Path descriptor = temporaryDirectory.resolve("submission-descriptor.yaml");
+        Files.writeString(descriptor, "source: {}\n");
+        RecordingAmClient client = new RecordingAmClient();
+        ByteArrayOutputStream error = new ByteArrayOutputStream();
+        ConsilensApplicationMaster master = new ConsilensApplicationMaster(new String[]{
+                "--coordinator-class", TestCoordinator.class.getName(),
+                "--descriptor", descriptor.toString(),
+                "--secrets", "submission-secrets.properties",
+        }, client, new PrintStream(error));
+
+        master.run();
+
+        assertEquals(FinalApplicationStatus.SUCCEEDED, client.finishedStatus);
+        assertTrue(error.toString(StandardCharsets.UTF_8).contains("--secrets is accepted"));
+    }
+
+    @Test
+    void shouldExtractSummaryLineFromCoordinatorOutput() {
+        String output = "noise\n"
+                + "{\"submissionId\":\"sub-7\",\"statistics\":{\"totalDifferences\":2}}\n";
+
+        String summary = ConsilensApplicationMaster.extractSummary(output);
+
+        assertTrue(summary != null && summary.contains("sub-7"));
+    }
+
+    @Test
+    void shouldIgnoreOutputWithoutSummaryLine() {
+        assertEquals(null, ConsilensApplicationMaster.extractSummary("plain log line"));
+        assertEquals(null, ConsilensApplicationMaster.extractSummary(null));
+    }
+
+    @Test
     void shouldRejectUnknownOrIncompleteArguments() {
         RecordingAmClient client = new RecordingAmClient();
 
@@ -54,6 +142,29 @@ class ConsilensApplicationMasterTest {
                 new String[]{"--coordinator-class", "a.B", "--descriptor", "x.yaml", "--bogus", "v"},
                 client, new PrintStream(new ByteArrayOutputStream())).run());
         assertEquals(0, client.allocations);
+    }
+
+    /** Coordinator main that throws; the AM must report FAILED. */
+    public static final class FailingCoordinator {
+        public static void main(String[] args) {
+            throw new IllegalStateException("boom");
+        }
+    }
+
+    /** Coordinator execute that fails with a non-zero code and writes the reason to stderr. */
+    public static final class ExitCodeCoordinator {
+        public static int execute(String[] args) {
+            System.err.println("database unreachable");
+            return 2;
+        }
+    }
+
+    /** Coordinator execute that reports success through the captured stdout summary. */
+    public static final class ExecuteCoordinator {
+        public static int execute(String[] args) {
+            System.out.println("{\"submissionId\":\"sub-execute\",\"statistics\":{}}");
+            return 0;
+        }
     }
 
     /** Coordinator main that returns normally, i.e. exit code zero. */
@@ -76,6 +187,7 @@ class ConsilensApplicationMasterTest {
         private boolean registered;
         private int allocations;
         private FinalApplicationStatus finishedStatus;
+        private String diagnostics;
         private boolean closed;
 
         @Override
@@ -91,6 +203,7 @@ class ConsilensApplicationMasterTest {
         @Override
         public void unregister(FinalApplicationStatus status, String diagnostics) {
             finishedStatus = status;
+            this.diagnostics = diagnostics;
         }
 
         @Override

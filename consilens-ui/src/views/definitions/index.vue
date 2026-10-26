@@ -3,7 +3,7 @@ import { ref, reactive, h, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useMessage, useDialog } from "naive-ui";
 import { NTag } from "naive-ui";
-import { AddOutline, RefreshOutline, SparklesOutline } from "@vicons/ionicons5";
+import { AddOutline, RefreshOutline } from "@vicons/ionicons5";
 import {
   listTaskDefinitions,
   deleteTaskDefinition,
@@ -11,7 +11,6 @@ import {
   toggleTaskDefinition,
 } from "@/api/modules";
 import { useListQuerySync } from "@/composables/useListQuerySync";
-import AiAssistantDrawer from "@/components/ai/AiAssistantDrawer.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import SkeletonTable from "@/components/common/SkeletonTable.vue";
 import TimeText from "@/components/common/TimeText.vue";
@@ -22,7 +21,6 @@ const dialog = useDialog();
 
 const loading = ref(false);
 const loadError = ref(false);
-const aiDrawerShow = ref(false);
 const data = reactive({ total: 0, items: [] });
 const pagination = reactive({
   page: 1,
@@ -44,7 +42,10 @@ const { filtersActive, syncToUrl } = useListQuerySync(filters, pagination, {
   enabled: { parse: (v) => (v === "true" ? true : v === "false" ? false : null) },
 });
 
+let loadSeq = 0;
+
 async function loadData() {
+  const seq = ++loadSeq;
   loading.value = true;
   loadError.value = false;
   syncToUrl();
@@ -55,15 +56,19 @@ async function loadData() {
       keyword: filters.keyword || undefined,
       enabled: filters.enabled ?? undefined,
     });
+    if (seq !== loadSeq) return;
     data.total = result.total;
     data.items = result.items || [];
     pagination.itemCount = result.total;
   } catch {
+    if (seq !== loadSeq) return;
     loadError.value = true;
     data.items = [];
     pagination.itemCount = 0;
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) {
+      loading.value = false;
+    }
   }
 }
 
@@ -78,13 +83,25 @@ function handleReset() {
   handleSearch();
 }
 
+// 运行按钮没有天然幂等键：双击会各自生成 serialNo 并提交两次，必须前端去重
+const runningDefinitionIds = ref([]);
+
+function isDefinitionRunning(row) {
+  return runningDefinitionIds.value.includes(String(row.id));
+}
+
 async function handleRun(row) {
+  const id = String(row.id);
+  if (runningDefinitionIds.value.includes(id)) return;
+  runningDefinitionIds.value = [...runningDefinitionIds.value, id];
   try {
     const accepted = await runTaskDefinition(row.id);
     message.success(`已提交运行：${accepted.taskId}`);
     router.push(`/instances/${accepted.taskId}`);
   } catch (error) {
     message.error(error?.response?.data?.error || "运行失败");
+  } finally {
+    runningDefinitionIds.value = runningDefinitionIds.value.filter((item) => item !== id);
   }
 }
 
@@ -122,6 +139,7 @@ const columns = [
     title: "名称",
     key: "name",
     minWidth: 180,
+    ellipsis: { tooltip: true },
     render: (row) =>
       h("a", { class: "app-name-link", onClick: () => router.push(`/definitions/${row.id}`) }, row.name),
   },
@@ -167,9 +185,11 @@ const columns = [
     width: 210,
     render: (row) =>
       h("div", { class: "row-actions" }, [
-        row.enabled
-          ? h("a", { class: "row-action", onClick: () => handleRun(row) }, "运行")
-          : h("span", { class: "row-action-disabled" }, "运行"),
+        isDefinitionRunning(row)
+          ? h("span", { class: "row-action-disabled" }, "运行中…")
+          : row.enabled
+            ? h("a", { class: "row-action", onClick: () => handleRun(row) }, "运行")
+            : h("span", { class: "row-action-disabled" }, "运行"),
         h(
           "a",
           { class: "row-action", onClick: () => handleToggle(row, !row.enabled) },
@@ -193,11 +213,6 @@ onMounted(loadData);
         <div class="page-desc">保存可复用的数据校验配置，支持随时运行与停用</div>
       </div>
       <div class="head-actions">
-        <n-button size="small" quaternary circle title="AI 辅助" @click="aiDrawerShow = true">
-          <template #icon>
-            <n-icon><SparklesOutline /></n-icon>
-          </template>
-        </n-button>
         <n-button type="primary" size="small" @click="router.push('/definitions/new')">
           <template #icon>
             <n-icon><AddOutline /></n-icon>
@@ -206,8 +221,6 @@ onMounted(loadData);
         </n-button>
       </div>
     </div>
-
-    <ai-assistant-drawer v-model:show="aiDrawerShow" />
 
     <n-card size="small" class="mt-12 mb-12">
       <div class="filter-bar">

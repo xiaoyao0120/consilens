@@ -66,9 +66,40 @@ function regenerateSerialNo() {
           </div>
           <n-switch v-model:value="advForm.validateUniqueKeys" />
         </div>
+        <div class="field switch-field">
+          <div class="switch-text">
+            <span class="field-label">允许可空键</span>
+            <span class="field-desc">键列可空时仍参与比对，NULL 键按 IS NULL 语义处理</span>
+          </div>
+          <n-switch v-model:value="advForm.allowNullableKeys" />
+        </div>
         <div class="field">
           <label class="field-label">最大差异数</label>
           <n-input-number v-model:value="advForm.maxDifferences" :min="1" :step="1000" class="flex-1" placeholder="不限制" />
+        </div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-head">
+        <div class="section-title">归一化</div>
+        <div class="section-tip">两侧按类型统一口径，未填写则使用引擎默认（decimal 4 位、时间按方言原样）</div>
+      </div>
+      <div class="adv-grid">
+        <div class="field">
+          <label class="field-label">小数精度</label>
+          <n-input-number
+            v-model:value="advForm.decimalPrecision"
+            :min="0"
+            :max="10"
+            :precision="0"
+            class="flex-1"
+            placeholder="默认 4"
+            clearable
+          />
+        </div>
+        <div class="field">
+          <label class="field-label">时区</label>
+          <n-input v-model:value="advForm.timezone" placeholder="如 UTC / Asia/Shanghai" clearable />
         </div>
       </div>
     </div>
@@ -83,7 +114,7 @@ function regenerateSerialNo() {
       <label class="field-label">超时时间</label>
       <div class="inline-row">
         <n-input-number v-model:value="runForm.timeoutMs" :min="1000" :step="1000" class="flex-1" />
-        <span class="unit-hint">毫秒</span>
+        <span class="unit-hint">毫秒（集群提交时生效；本地执行可在实例页取消）</span>
       </div>
     </div>
     <div class="field">

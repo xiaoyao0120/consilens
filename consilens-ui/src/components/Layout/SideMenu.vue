@@ -4,7 +4,6 @@ import { useRoute, useRouter } from "vue-router";
 import { NIcon } from "naive-ui";
 import {
   GridOutline,
-  SparklesOutline,
   PlayCircleOutline,
   PulseOutline,
   ServerOutline,
@@ -20,7 +19,6 @@ function renderIcon(icon) {
 // 路由 meta.icon 的字符串名 → 图标组件（新增页面只需在 routes.js 的 meta 里补 title/icon/section）
 const ICONS = {
   "grid-outline": GridOutline,
-  "sparkles-outline": SparklesOutline,
   "play-circle-outline": PlayCircleOutline,
   "pulse-outline": PulseOutline,
   "albums-outline": AlbumsOutline,
@@ -53,13 +51,13 @@ const menuOptions = computed(() =>
 const route = useRoute();
 const router = useRouter();
 
-// 详情页（/definitions/:id、/instances/:id 等）时保持父菜单高亮
+// 详情页/向导页（/definitions/:id、/definitions/new、/instances/:id 等）时保持父菜单高亮，
+// 避免进入子页面后侧栏没有任何选中项、用户失去位置感
 const activeKey = computed(() => {
   const match = MENU.find(
     (item) => route.path === item.path || route.path.startsWith(item.path + "/")
   );
-  if (match && route.path !== "/definitions/new") return match.path;
-  return route.path;
+  return match ? match.path : route.path;
 });
 
 function handleSelect(key) {

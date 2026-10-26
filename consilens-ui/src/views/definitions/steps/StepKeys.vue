@@ -60,15 +60,15 @@ function autoMatchKeys() {
           <div class="section-title">主键列</div>
           <div class="section-tip">用于对齐两表行：源端缺失记为新增，目标端缺失记为删除</div>
         </div>
-        <div v-if="!compareForm.keyMappings.length" class="empty-tip">尚未配置主键，点击「自动匹配同名字段」或手动添加</div>
+        <div v-if="!compareForm.keyMappings.length" class="empty-tip">尚未配置主键，点击「自动匹配主键」或手动添加</div>
         <div v-for="(mapping, index) in compareForm.keyMappings" :key="'k' + index" class="mapping-row">
-          <n-select :value="mapping.source" :options="sourceColumnOptions" placeholder="源表主键列" filterable @update:value="(value) => setMapping('keyMappings', index, 'source', value)" />
+          <n-select :value="mapping.source" :options="sourceColumnOptions" placeholder="源表主键列" filterable tag @update:value="(value) => setMapping('keyMappings', index, 'source', value)" />
           <span class="mapping-arrow">→</span>
-          <n-select :value="mapping.target" :options="targetColumnOptions" placeholder="目标表主键列" filterable @update:value="(value) => setMapping('keyMappings', index, 'target', value)" />
+          <n-select :value="mapping.target" :options="targetColumnOptions" placeholder="目标表主键列" filterable tag @update:value="(value) => setMapping('keyMappings', index, 'target', value)" />
           <n-button size="small" quaternary type="error" @click="removeMapping('keyMappings', index)">移除</n-button>
         </div>
         <div class="section-actions">
-          <n-button size="small" @click="autoMatchKeys">自动匹配同名字段</n-button>
+          <n-button size="small" @click="autoMatchKeys">自动匹配主键</n-button>
           <n-button size="small" @click="addMapping('keyMappings')">+ 添加主键</n-button>
         </div>
       </div>
@@ -77,15 +77,15 @@ function autoMatchKeys() {
           <div class="section-title">比较字段</div>
           <div class="section-tip">逐列一一对应比较；两端列名不同时手动指定映射</div>
         </div>
-        <div v-if="!compareForm.fieldMappings.length" class="empty-tip">未配置比较字段，默认比较两表全部非主键列；点击「自动匹配同名字段」快速生成</div>
+        <div v-if="!compareForm.fieldMappings.length" class="empty-tip">未配置比较字段，默认比较两表全部非主键列；点击「自动匹配比较字段」快速生成</div>
         <div v-for="(mapping, index) in compareForm.fieldMappings" :key="'f' + index" class="mapping-row">
-          <n-select :value="mapping.source" :options="sourceColumnOptions" placeholder="源表字段" filterable @update:value="(value) => setMapping('fieldMappings', index, 'source', value)" />
+          <n-select :value="mapping.source" :options="sourceColumnOptions" placeholder="源表字段" filterable tag @update:value="(value) => setMapping('fieldMappings', index, 'source', value)" />
           <span class="mapping-arrow">→</span>
-          <n-select :value="mapping.target" :options="targetColumnOptions" placeholder="目标表字段" filterable @update:value="(value) => setMapping('fieldMappings', index, 'target', value)" />
+          <n-select :value="mapping.target" :options="targetColumnOptions" placeholder="目标表字段" filterable tag @update:value="(value) => setMapping('fieldMappings', index, 'target', value)" />
           <n-button size="small" quaternary type="error" @click="removeMapping('fieldMappings', index)">移除</n-button>
         </div>
         <div class="section-actions">
-          <n-button size="small" @click="autoMatchFields">自动匹配同名字段</n-button>
+          <n-button size="small" @click="autoMatchFields">自动匹配比较字段</n-button>
           <n-button size="small" @click="addMapping('fieldMappings')">+ 添加映射</n-button>
         </div>
       </div>
@@ -94,7 +94,7 @@ function autoMatchKeys() {
           <div class="section-title">排除字段</div>
           <div class="section-tip">这些字段不参与比较（如 updated_at、etl 标记列）</div>
         </div>
-        <n-select v-model:value="compareForm.ignoreColumns" :options="ignoreColumnOptions" multiple filterable placeholder="选择要排除的字段（两端同名字段都会被排除）" />
+        <n-select v-model:value="compareForm.ignoreColumns" :options="ignoreColumnOptions" multiple filterable tag placeholder="选择要排除的字段（两端同名字段都会被排除）" />
       </div>
       <div class="hint-box">
         <span class="hint-title">提示</span>

@@ -51,6 +51,17 @@ class DorisDataTypeHandlerTest {
     }
 
     @Test
+    void testNormalizeFloatGuardsExtremeValuesBeforeDecimalCast() {
+        String result = handler.normalizeFloat("`c_double`");
+        // Doris 会对外层 CASE 的两支做类型统一；1e300 进入 DECIMAL(38,6) 会直接溢出。
+        // 固定值分支必须先把极端值折成 NULL，科学计数分支才负责渲染它们。
+        assertTrue(result.contains("CASE WHEN (`c_double` IS NOT NULL AND (ABS(`c_double`) > 1e10"),
+                result);
+        assertTrue(result.contains("THEN NULL ELSE `c_double` END"), result);
+        assertTrue(result.contains("AS DECIMAL(38, 6)"), result);
+    }
+
+    @Test
     void testNormalizeDecimalCarriesRoundingIntoIntegerPart() {
         String result = handler.normalizeColumn("amount", DataType.DECIMAL);
         // 整段断言一次钉死：ROUND 直接作用在 DECIMAL 列上（不进 DOUBLE），

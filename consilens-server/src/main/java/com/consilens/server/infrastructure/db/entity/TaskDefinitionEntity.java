@@ -1,5 +1,6 @@
 package com.consilens.server.infrastructure.db.entity;
 
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
@@ -28,7 +29,7 @@ public class TaskDefinitionEntity implements Serializable {
     @TableField("name")
     private String name;
 
-    @TableField("description")
+    @TableField(value = "description", updateStrategy = FieldStrategy.IGNORED)
     private String description;
 
     @TableField("task_type")

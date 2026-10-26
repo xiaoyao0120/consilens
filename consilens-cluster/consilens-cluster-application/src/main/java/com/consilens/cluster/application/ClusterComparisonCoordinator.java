@@ -55,8 +55,16 @@ public class ClusterComparisonCoordinator {
         this.error = Objects.requireNonNull(error, "error");
     }
 
+    /**
+     * 不终止 JVM 的执行入口：YARN AM 通过反射调用它拿到退出码，再自行
+     * unregister，避免 coordinator 的 System.exit 绕过 AM 的失败上报。
+     */
+    public static int execute(String[] args) {
+        return new ClusterComparisonCoordinator().run(args);
+    }
+
     public static void main(String[] args) {
-        int exitCode = new ClusterComparisonCoordinator().run(args);
+        int exitCode = execute(args);
         if (exitCode != 0) {
             System.exit(exitCode);
         }
@@ -78,7 +86,10 @@ public class ClusterComparisonCoordinator {
             output.println(objectMapper.writeValueAsString(summary(args[0], result)));
             return 0;
         } catch (Exception e) {
-            error.println("Cluster comparison failed.");
+            // 集群容器里没有交互式排查手段：只打印一行 "failed" 会让线上失败无从定位，
+            // 必须把异常类型、消息与堆栈完整写入 stderr（YARN 会聚合到容器日志）。
+            error.println("Cluster comparison failed: " + e);
+            e.printStackTrace(error);
             return 1;
         }
     }

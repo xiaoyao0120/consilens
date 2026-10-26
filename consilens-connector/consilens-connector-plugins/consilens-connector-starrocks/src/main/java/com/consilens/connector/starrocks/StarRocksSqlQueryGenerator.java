@@ -26,6 +26,11 @@ import java.util.Map;
  */
 public class StarRocksSqlQueryGenerator extends BaseSqlQueryGenerator {
 
+    @Override
+    public boolean backslashEscapesStringLiterals() {
+        return true;
+    }
+
     private final CapabilityProvider capabilityProvider;
     private final DataTypeHandler dataTypeHandler;
 
@@ -110,7 +115,7 @@ public class StarRocksSqlQueryGenerator extends BaseSqlQueryGenerator {
                 }
                 String col = keyColumns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append(") as pk_key, ");
 
@@ -122,7 +127,7 @@ public class StarRocksSqlQueryGenerator extends BaseSqlQueryGenerator {
                 }
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append(")) as row_checksum FROM ");
 
@@ -164,7 +169,7 @@ public class StarRocksSqlQueryGenerator extends BaseSqlQueryGenerator {
                 }
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append(")), 1, 16)) as row_hash FROM ");
             sql.append(buildRelationRef(schemaName, tableName));
@@ -222,7 +227,7 @@ public class StarRocksSqlQueryGenerator extends BaseSqlQueryGenerator {
             }
             String col = columns.get(i);
             DataType dataType = columnDataTypes.get(col);
-            sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+            sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
         }
         sql.append(")) as row_hash FROM ");
 

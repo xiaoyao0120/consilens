@@ -33,13 +33,19 @@ const statusChartRef = ref(null);
 const trendChartRef = ref(null);
 let statusChart = null;
 let trendChart = null;
+// 路由离开后未完成的请求仍会回调；此时图表实例已 dispose，不能再 init/setOption
+let disposed = false;
 
 // KPI 卡下钻入口
 const todayStart = new Date();
 todayStart.setHours(0, 0, 0, 0);
 const kpiLinks = {
   today: { path: "/instances", query: { startTime: String(todayStart.getTime()) } },
-  running: { path: "/instances", query: { status: "RUNNING" } },
+  running: {
+    path: "/instances",
+    // KPI 计数包含待调度/已认领/执行中/取消中，下钻列表必须用同一组状态
+    query: { status: ["PENDING", "CLAIMED", "RUNNING", "CANCEL_REQUESTED"] },
+  },
   diff: { path: "/instances" },
   nodes: { path: "/nodes" },
 };
@@ -57,34 +63,42 @@ const chartColors = computed(() => paletteFor(appStore.theme));
 
 async function loadSummary() {
   try {
-    summary.value = await getDashboardSummary();
+    const result = await getDashboardSummary();
+    if (disposed) return;
+    summary.value = result;
   } finally {
-    summaryReady.value = true;
+    if (!disposed) summaryReady.value = true;
   }
 }
 
 async function loadRecentTasks() {
   recentLoading.value = true;
   try {
-    const result = await listTaskInstances({ page: 1, pageSize: 5 });
+    // includeDiffSummary 必须带上：否则"差异摘要"列永远显示 "-"，差异报告入口点不到
+    const result = await listTaskInstances({ page: 1, pageSize: 5, includeDiffSummary: true });
+    if (disposed) return;
     recentTasks.items = result.items || [];
   } finally {
-    recentLoading.value = false;
+    if (!disposed) recentLoading.value = false;
   }
-  renderStatusChart();
+  if (!disposed) renderStatusChart();
 }
 
 const recentColumns = [
   {
     title: "任务 ID",
     key: "taskId",
+    ellipsis: { tooltip: true },
     render: (row) =>
       h(
         "a",
         {
           class: "app-name-link mono",
           style: "white-space: nowrap;",
-          onClick: () => router.push(`/instances/${row.id || row.taskId}`),
+          onClick: (e) => {
+            e.stopPropagation(); // 行级 onClick 会覆盖掉带 query 的跳转
+            router.push(`/instances/${row.id || row.taskId}`);
+          },
         },
         row.id || row.taskId
       ),
@@ -109,7 +123,10 @@ const recentColumns = [
         {
           class: "diff-link",
           title: "查看差异报告",
-          onClick: () => router.push({ path: `/instances/${row.id || row.taskId}`, query: { tab: "diff" } }),
+          onClick: (e) => {
+            e.stopPropagation(); // 行级 onClick 会覆盖掉 tab=diff，必须阻止冒泡
+            router.push({ path: `/instances/${row.id || row.taskId}`, query: { tab: "diff" } });
+          },
         },
         h(DiffSummaryBadge, { summary: row.diffSummary })
       );
@@ -119,7 +136,7 @@ const recentColumns = [
 ];
 
 function renderStatusChart() {
-  if (!statusChartRef.value) return;
+  if (disposed || !statusChartRef.value) return;
   if (!statusChart) {
     statusChart = echarts.init(statusChartRef.value);
   }
@@ -154,7 +171,7 @@ function renderStatusChart() {
 }
 
 function renderTrendChart() {
-  if (!trendChartRef.value) return;
+  if (disposed || !trendChartRef.value) return;
   if (!trendChart) {
     trendChart = echarts.init(trendChartRef.value);
   }
@@ -210,9 +227,12 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  disposed = true;
   window.removeEventListener("resize", resizeChart);
   statusChart?.dispose();
   trendChart?.dispose();
+  statusChart = null;
+  trendChart = null;
 });
 </script>
 
@@ -358,6 +378,19 @@ onBeforeUnmount(() => {
 
 .recent-hint {
   font-size: 12px;
+}
+
+// <n-button text type="primary"> 在 naive 里仍是 n-button--primary-type（text 只是去掉底色），
+// 因此同时失去默认内边距：触控目标只有 12px 高，且文字色继承 primaryColor（白底 4.12:1）。
+// 这里补齐到 24px 最小可点区域，并把文字切到达标的 --primary-text。
+.recent-card :deep(.n-button.n-button--primary-type.n-button--small-type:not(:hover)) {
+  padding: 0 8px;
+  min-height: 24px;
+  --n-color: transparent;
+
+  .n-button__content {
+    color: var(--primary-text);
+  }
 }
 
 .recent-card .skeleton-table {

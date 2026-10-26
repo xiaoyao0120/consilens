@@ -67,7 +67,9 @@ public class CsvDiffRecordSink implements Sink {
         } else {
             headers = DEFAULT_COLUMNS;
         }
-        writer.write(String.join(sinkConfig.getDelimiter(), headers));
+        // 表头同样走 CSV 转义：自定义列名可能含分隔符/引号
+        writer.write(String.join(sinkConfig.getDelimiter(),
+                headers.stream().map(this::escapeCSV).collect(java.util.stream.Collectors.toList())));
         writer.newLine();
         writer.flush();
     }
@@ -157,7 +159,7 @@ public class CsvDiffRecordSink implements Sink {
     private String escapeCSV(String value) {
         if (value == null) return "";
         String delim = sinkConfig.getDelimiter();
-        if (value.contains(delim) || value.contains("\"") || value.contains("\n")) {
+        if (value.contains(delim) || value.contains("\"") || value.contains("\n") || value.contains("\r")) {
             return "\"" + value.replace("\"", "\"\"") + "\"";
         }
         return value;

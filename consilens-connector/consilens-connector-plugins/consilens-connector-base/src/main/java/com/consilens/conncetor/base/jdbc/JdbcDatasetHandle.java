@@ -71,7 +71,7 @@ import java.util.Set;
 import java.util.function.Function;
 
 @Slf4j
-public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSupport {
+public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSupport, com.consilens.connector.api.dataset.DialectProvider {
 
     private static final int DEFAULT_STREAM_FETCH_SIZE = 1000;
     private static final Pattern PARTITION_PATTERN = Pattern.compile("PARTITION\\s+BY\\s+.*?\\(([^\\)]*)\\)",
@@ -398,6 +398,10 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
         }
         config.setMinimumIdle(1);
         config.setMaximumPoolSize(resolveMaxPoolSize(connection));
+        String initSql = dialect.getConnectionInitSql();
+        if (initSql != null && !initSql.isBlank()) {
+            config.setConnectionInitSql(initSql);
+        }
         config.setPoolName("connector-" + connectorName + "-" + Integer.toHexString(System.identityHashCode(this)));
         return config;
     }
@@ -534,7 +538,8 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
     }
 
     private SchemaDescriptor discoverSchemaFromSqlResultSet(Connection jdbcConnection, String sqlResource) throws SQLException {
-        String sql = "SELECT * FROM (" + sqlResource + ") consilens_schema WHERE 1 = 0";
+        String sql = dialect.getSqlQueryGenerator().getSelectSQLFromSql(
+                sqlResource, List.of("*"), "1 = 0", null);
         try (PreparedStatement statement = jdbcConnection.prepareStatement(sql);
              ResultSet resultSet = statement.executeQuery()) {
             return toSchemaDescriptor(resultSet.getMetaData());
@@ -689,24 +694,19 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
             selectExpressions.add(dialect.getCapabilityProvider().quote(column));
         }
         List<String> keyColumns = keyColumns(segment);
-        StringBuilder sql = new StringBuilder();
-        sql.append("SELECT ").append(String.join(", ", selectExpressions))
-                .append(" FROM (").append(sqlResource).append(") consilens_base");
         String whereClause = buildWhereClause(segment, keyColumns);
-        if (whereClause != null && !whereClause.isBlank()) {
-            sql.append(" WHERE ").append(whereClause);
-        }
-        if (includeOrderBy && !keyColumns.isEmpty()) {
-            sql.append(" ORDER BY ");
-            sql.append(String.join(", ", keyColumns.stream()
-                    .map(dialect.getCapabilityProvider()::quote)
-                    .toArray(String[]::new)));
-        }
+        // 走 generator 的统一入口：ORDER BY 必须与 Java 归并比较用同一归一化形态，
+        // 且会去除 SQL 资源末尾分号（否则包装成派生表后语法错误）。
+        String sql = dialect.getSqlQueryGenerator().getSelectSQLFromSql(
+                sqlResource,
+                selectExpressions,
+                whereClause,
+                includeOrderBy && !keyColumns.isEmpty() ? keyColumns : null);
         if (segment.getSplit() instanceof OffsetLimitSplit) {
             OffsetLimitSplit split = (OffsetLimitSplit) segment.getSplit();
-            sql.append(" ").append(dialect.getSqlQueryGenerator().getLimitClause(split.getOffset(), split.getLimit()));
+            sql = sql + " " + dialect.getSqlQueryGenerator().getLimitClause(split.getOffset(), split.getLimit());
         }
-        return sql.toString();
+        return sql;
     }
 
     private CanonicalRecord readRecord(ResultSet resultSet,
@@ -737,7 +737,7 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
             Object value = isTemporal(field)
                     ? resultSet.getString(index + 1)
                     : toPortableValue(materializeLob(resultSet.getObject(index + 1)));
-            if (keyColumns.contains(column)) {
+            if (keyColumns.stream().anyMatch(key -> key != null && key.equalsIgnoreCase(column))) {
                 keyParts.add(value);
             }
             values.put(column, CanonicalValue.builder()
@@ -883,9 +883,26 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
 
     private List<String> selectColumns(CompareSegment segment, SchemaDescriptor schemaDescriptor) {
         List<String> keyColumns = keyColumns(segment);
-        LinkedHashSet<String> columns = new LinkedHashSet<>(keyColumns);
+        LinkedHashSet<String> columns = new LinkedHashSet<>();
+        // 键名可能来自用户配置（小写），而数据库元数据可能是大写（Oracle）。
+        // 统一解析成 schema 中的实际列名，避免同一列被选两次。
+        for (String key : keyColumns) {
+            columns.add(resolveColumnName(key, schemaDescriptor));
+        }
         columns.addAll(comparisonColumns(segment.getComparisons(), schemaDescriptor, keyColumns));
         return List.copyOf(columns);
+    }
+
+    private static String resolveColumnName(String name, SchemaDescriptor schemaDescriptor) {
+        if (name == null || schemaDescriptor == null || schemaDescriptor.getFields() == null) {
+            return name;
+        }
+        for (FieldDescriptor field : schemaDescriptor.getFields()) {
+            if (field.getName() != null && field.getName().equalsIgnoreCase(name)) {
+                return field.getName();
+            }
+        }
+        return name;
     }
 
     private List<String> comparisonColumns(ComparisonSpec comparisons,
@@ -895,8 +912,8 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
         if (comparisons != null && comparisons.getFields() != null && !comparisons.getFields().isEmpty()) {
             List<String> result = new ArrayList<>();
             for (String field : comparisons.getFields()) {
-                if (field != null && !excluded.contains(field)) {
-                    result.add(field);
+                if (field != null && !isExcluded(excluded, field)) {
+                    result.add(resolveColumnName(field, schemaDescriptor));
                 }
             }
             return List.copyOf(result);
@@ -904,17 +921,26 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
         if (schemaDescriptor == null || schemaDescriptor.getFields() == null) {
             return List.of();
         }
-        Set<String> keys = new LinkedHashSet<>(keyColumns);
+        Set<String> keys = new java.util.HashSet<>();
+        for (String key : keyColumns) {
+            if (key != null) {
+                keys.add(key.toLowerCase(java.util.Locale.ROOT));
+            }
+        }
         List<String> result = new ArrayList<>();
         for (FieldDescriptor field : schemaDescriptor.getFields()) {
             if (field.getName() != null
-                    && !keys.contains(field.getName())
-                    && !excluded.contains(field.getName())
+                    && !keys.contains(field.getName().toLowerCase(java.util.Locale.ROOT))
+                    && !isExcluded(excluded, field.getName())
                     && !DerivedCompareColumns.isDerived(field.getName())) {
                 result.add(field.getName());
             }
         }
         return result;
+    }
+
+    private static boolean isExcluded(Set<String> excluded, String field) {
+        return field != null && excluded.contains(field.toLowerCase(java.util.Locale.ROOT));
     }
 
     private Set<String> excludedColumns(ComparisonSpec comparisons) {
@@ -924,7 +950,7 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
         Set<String> result = new LinkedHashSet<>();
         for (String field : comparisons.getExclude()) {
             if (field != null && !field.trim().isEmpty()) {
-                result.add(field.trim());
+                result.add(field.trim().toLowerCase(java.util.Locale.ROOT));
             }
         }
         return result;
@@ -942,8 +968,15 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
         Map<String, FieldDescriptor> fieldMap = schemaDescriptor.getFieldMap() != null
                 ? schemaDescriptor.getFieldMap()
                 : Collections.emptyMap();
+        Map<String, FieldDescriptor> folded = new LinkedHashMap<>();
+        for (Map.Entry<String, FieldDescriptor> entry : fieldMap.entrySet()) {
+            folded.putIfAbsent(entry.getKey().toLowerCase(Locale.ROOT), entry.getValue());
+        }
         for (String column : columns) {
             FieldDescriptor field = fieldMap.get(column);
+            if (field == null && column != null) {
+                field = folded.get(column.toLowerCase(Locale.ROOT));
+            }
             result.put(column, field != null ? resolveDataType(resolveCanonicalType(field)) : DataType.UNKNOWN);
         }
         return result;

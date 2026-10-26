@@ -32,5 +32,10 @@ public class ConnectionTestRequest {
 
     private String password;
 
+    /**
+     * 编辑态测连：主机/库/用户名取当前表单值，密码留空时回填该数据源已保存的密码。
+     */
+    private Long datasourceId;
+
     private Map<String, Object> options;
 }

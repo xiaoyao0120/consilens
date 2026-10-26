@@ -85,12 +85,12 @@ const emit = defineEmits(["step-click"]);
 
   .stepper-item.active & {
     color: var(--on-primary);
-    background: var(--primary);
-    border-color: var(--primary);
+    background: var(--primary-solid);
+    border-color: var(--primary-solid);
   }
 
   .stepper-item.done & {
-    color: var(--primary);
+    color: var(--primary-text);
     border-color: var(--primary);
     background: var(--card);
   }

@@ -8,6 +8,7 @@ import com.consilens.core.database.connection.ConnectionPool;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffResult.InfoTreeNode;
 import com.consilens.core.diff.DiffOperation;
+import com.consilens.core.diff.InfoTreeRecorder;
 import com.consilens.core.thread.ConcurrencyConfig;
 import com.consilens.core.thread.ExecutorProvider;
 import com.consilens.connector.api.model.TablePath;
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.math.BigDecimal;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -63,6 +65,89 @@ class ChecksumDifferTest {
 
                 stubAdapterSegmentData(mockAdapter1, 1000L, "default");
                 stubAdapterSegmentData(mockAdapter2, 1000L, "default");
+        }
+
+        @Test
+        @DisplayName("P1-11: 校验和缓存键覆盖行集选择维度")
+        void cacheKeyCoversRowSelectionDimensions() throws Exception {
+                java.lang.reflect.Method method = ChecksumDiffer.class.getDeclaredMethod(
+                                "generateChecksumCacheKey", TableSegment.class);
+                method.setAccessible(true);
+
+                TableSegment base = TableSegment.builder()
+                                .tablePath(TablePath.of("t1"))
+                                .keyColumns(List.of("id"))
+                                .extraColumns(List.of("v"))
+                                .minKey(Optional.of(List.of(1)))
+                                .maxKey(Optional.of(List.of(9)))
+                                .build();
+                TableSegment inclusive = base.toBuilder().upperBoundInclusive(true).build();
+                TableSegment limited = base.toBuilder()
+                                .limitOffset(Optional.of(new TableSegment.LimitOffset(10, 0))).build();
+                TableSegment relation = base.toBuilder()
+                                .relationSource(new TableSegment.RelationSource("(select 1) x", "x")).build();
+
+                String baseKey = (String) method.invoke(differ, base);
+                assertNotEquals(baseKey, method.invoke(differ, inclusive), "开闭区间必须区分");
+                assertNotEquals(baseKey, method.invoke(differ, limited), "limit/offset 必须区分");
+                assertNotEquals(baseKey, method.invoke(differ, relation), "relation SQL 必须区分");
+        }
+
+        @Test
+        @DisplayName("P0-2: 数值边界与字符串主键混比按数值，纯字符串键仍按字典序")
+        void compareKeyPartUsesNumericOrderForNumericBounds() throws Exception {
+                java.lang.reflect.Method method = ChecksumDiffer.class.getDeclaredMethod(
+                                "compareKeyPart", Object.class, Object.class);
+                method.setAccessible(true);
+
+                // 边界来自 JDBC 是 BigDecimal、行内主键是字符串：必须按数值 9999 < 20000
+                assertTrue((Integer) method.invoke(null, new BigDecimal("9999"), "20000") < 0);
+                // 两侧都是字符串时保持字典序（VARCHAR 键不能按数值比较）
+                assertTrue((Integer) method.invoke(null, "9999", "20000") > 0);
+                // NULL 视为最小
+                assertTrue((Integer) method.invoke(null, null, "1") < 0);
+        }
+
+        @Test
+        @DisplayName("P1-4: 行哈希发现重复键时回退全量多重集比较")
+        void shouldFallBackToFullCompareWhenRowHashFindsDuplicateKeys() throws Exception {
+                TableDiffer.DifferConfig rowHashConfig = new TableDiffer.DifferConfig(
+                                4, 1000, ChecksumAlgorithm.CONCAT, LocalCompareMode.ROW_HASH,
+                                ConcurrencyConfig.defaultConfig());
+                ChecksumDiffer rowHashDiffer = new ChecksumDiffer(rowHashConfig);
+                try {
+                        lenient().doAnswer(invocation -> {
+                                DatabaseAdapter.RowHashConsumer consumer = invocation.getArgument(1);
+                                // 同键两行：row-hash 无法配对，必须整体回退到全量比较
+                                consumer.accept(Arrays.asList(1L), "hash-a");
+                                consumer.accept(Arrays.asList(1L), "hash-b");
+                                return null;
+                        }).when(mockAdapter1).forEachSegmentRowHash(any(TableSegment.class), any());
+                        lenient().when(mockAdapter1.querySegment(any(TableSegment.class)))
+                                        .thenReturn(Collections.<Object[]>emptyList());
+                        lenient().when(mockAdapter2.querySegment(any(TableSegment.class)))
+                                        .thenReturn(Collections.<Object[]>emptyList());
+
+                        invokeLocalComparison(rowHashDiffer, segment1, segment2,
+                                        new InfoTreeRecorder("root"), "seg-dup", false).join();
+
+                        verify(mockAdapter1).querySegment(any(TableSegment.class));
+                } finally {
+                        rowHashDiffer.close();
+                }
+        }
+
+        private CompletableFuture<Void> invokeLocalComparison(ChecksumDiffer target,
+                        TableSegment table1, TableSegment table2,
+                        InfoTreeRecorder recorder, String segmentId, boolean depthCapped) throws Exception {
+                java.lang.reflect.Method method = ChecksumDiffer.class.getDeclaredMethod(
+                                "performLocalComparison", TableSegment.class, TableSegment.class,
+                                InfoTreeRecorder.class, String.class, boolean.class);
+                method.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                CompletableFuture<Void> future = (CompletableFuture<Void>) method.invoke(
+                                target, table1, table2, recorder, segmentId, depthCapped);
+                return future;
         }
 
         @Nested
@@ -853,4 +938,55 @@ class ChecksumDifferTest {
                                 .map(bounds -> ((Number) bounds.get(0)).longValue())
                                 .orElse(totalRows);
         }
+
+
+    @Test
+    @DisplayName("P2-3: 深度上限时 FULL 模式改用行哈希兜底，而不是整段拉全列")
+    void shouldFallBackToRowHashAtDepthCap() throws Exception {
+        InfoTreeRecorder recorder = new InfoTreeRecorder("root");
+
+        invokeLocalComparison(segment1, segment2, recorder, "seg-depth", true).join();
+
+        verify(mockAdapter1).forEachSegmentRowHash(eq(segment1), any());
+        verify(mockAdapter2).forEachSegmentRowHash(eq(segment2), any());
+    }
+
+    @Test
+    @DisplayName("P2-3: 未到深度上限时 FULL 模式仍走全量本地比较")
+    void shouldUseFullComparisonWhenNotDepthCapped() throws Exception {
+        when(mockAdapter1.querySegment(any())).thenReturn(Collections.<Object[]>emptyList());
+        when(mockAdapter2.querySegment(any())).thenReturn(Collections.<Object[]>emptyList());
+        InfoTreeRecorder recorder = new InfoTreeRecorder("root");
+
+        invokeLocalComparison(segment1, segment2, recorder, "seg-full", false).join();
+
+        verify(mockAdapter1, never()).forEachSegmentRowHash(any(), any());
+        verify(mockAdapter1).querySegment(any());
+    }
+
+    @Test
+    @DisplayName("P2-3: 深度上限下行哈希失败则回退全量比较，且不掩盖失败原因之外的行为")
+    void shouldFallBackToFullCompareWhenRowHashFails() throws Exception {
+        doThrow(new RuntimeException("row hash unsupported")).when(mockAdapter1)
+                .forEachSegmentRowHash(any(), any());
+        when(mockAdapter1.querySegment(any())).thenReturn(Collections.<Object[]>emptyList());
+        when(mockAdapter2.querySegment(any())).thenReturn(Collections.<Object[]>emptyList());
+        InfoTreeRecorder recorder = new InfoTreeRecorder("root");
+
+        invokeLocalComparison(segment1, segment2, recorder, "seg-fallback", true).join();
+
+        verify(mockAdapter1).querySegment(any());
+    }
+
+    private CompletableFuture<Void> invokeLocalComparison(TableSegment table1, TableSegment table2,
+            InfoTreeRecorder recorder, String segmentId, boolean depthCapped) throws Exception {
+        java.lang.reflect.Method method = ChecksumDiffer.class.getDeclaredMethod(
+                "performLocalComparison", TableSegment.class, TableSegment.class,
+                InfoTreeRecorder.class, String.class, boolean.class);
+        method.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        CompletableFuture<Void> future = (CompletableFuture<Void>) method.invoke(
+                differ, table1, table2, recorder, segmentId, depthCapped);
+        return future;
+    }
 }

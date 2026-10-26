@@ -30,7 +30,8 @@ class SQLServerSqlQueryGeneratorTest {
     @Test
     void testGetLimitClauseWithoutOffset() {
         String result = generator.getLimitClause(0, 10);
-        assertEquals("", result); // SQL Server uses TOP in SELECT
+        assertEquals("OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY", result);
+        assertEquals(result, generator.getLimitClause(10));
     }
 
     @Test

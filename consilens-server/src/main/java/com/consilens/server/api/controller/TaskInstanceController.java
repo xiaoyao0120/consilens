@@ -6,9 +6,11 @@ import com.consilens.server.api.dto.DiffReportDto;
 import com.consilens.server.api.dto.PageResponse;
 import com.consilens.server.api.dto.RunRequest;
 import com.consilens.server.api.dto.TaskAcceptedResponse;
+import com.consilens.server.api.dto.TaskLogPageDto;
 import com.consilens.server.api.dto.TaskQueryResponse;
 import com.consilens.server.api.dto.TaskSummaryDto;
 import com.consilens.server.application.diff.DiffReportService;
+import com.consilens.server.application.log.RunLogService;
 import com.consilens.server.application.task.RunTaskCancelService;
 import com.consilens.server.application.task.RunTaskQueryService;
 import com.consilens.server.application.task.RunTaskRetryService;
@@ -17,7 +19,10 @@ import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.support.trace.TraceIdSupport;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -34,6 +39,7 @@ import javax.validation.constraints.Max;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.Pattern;
 import javax.validation.constraints.Size;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 
@@ -48,6 +54,7 @@ public class TaskInstanceController {
     private final RunTaskCancelService runTaskCancelService;
     private final RunTaskSubmissionService runTaskSubmissionService;
     private final DiffReportService diffReportService;
+    private final RunLogService runLogService;
 
     @PostMapping
     public ResponseEntity<ApiResponse<TaskAcceptedResponse>> submitDirect(
@@ -97,6 +104,36 @@ public class TaskInstanceController {
             HttpServletRequest httpServletRequest) {
         String traceId = TraceIdSupport.getOrCreateTraceId(httpServletRequest);
         return ResponseEntity.ok(ApiResponse.success(diffReportService.getDiffReport(taskId), traceId));
+    }
+
+    /**
+     * 运行实例日志：默认从 offset 顺序读取；传 tailLines 时读取末尾若干行，
+     * 并把文件总行数作为 nextOffset 供前端做增量轮询。
+     */
+    @GetMapping("/{taskId}/logs")
+    public ResponseEntity<ApiResponse<TaskLogPageDto>> getLogs(
+            @PathVariable @Pattern(regexp = ApiValidationRules.SAFE_ID_PATTERN) String taskId,
+            @RequestParam(required = false) @Min(0) Long offset,
+            @RequestParam(required = false) @Min(1) @Max(20000) Integer tailLines,
+            @RequestParam(defaultValue = "2000") @Min(1) @Max(5000) int limit,
+            HttpServletRequest httpServletRequest) {
+        String traceId = TraceIdSupport.getOrCreateTraceId(httpServletRequest);
+        return ResponseEntity.ok(ApiResponse.success(
+                runLogService.read(taskId, offset, tailLines, limit), traceId));
+    }
+
+    /** 下载完整运行日志文件。 */
+    @GetMapping("/{taskId}/logs/download")
+    public ResponseEntity<byte[]> downloadLog(
+            @PathVariable @Pattern(regexp = ApiValidationRules.SAFE_ID_PATTERN) String taskId) {
+        RunLogService.LogFile file = runLogService.download(taskId);
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                        .filename(file.getFileName(), StandardCharsets.UTF_8)
+                        .build()
+                        .toString())
+                .contentType(MediaType.TEXT_PLAIN)
+                .body(file.getContent());
     }
 
     @GetMapping("/{taskId}")

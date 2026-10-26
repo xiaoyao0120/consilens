@@ -30,8 +30,15 @@ public class ArtifactListDto {
     /** Whether the differences file was truncated at maxRows; null for other kinds. */
     private Boolean differenceTruncated;
 
-    /** Storage URI of the differences file (jsonl); null when differences are inline/absent. */
+    /**
+     * Internal storage URI of the differences file. Never populated in API responses:
+     * it exposes server filesystem layout and clients should use the artifact
+     * differences endpoint instead. Kept for response-model compatibility.
+     */
     private String differencesUri;
+
+    /** Whether paginated diff details are available for this artifact. */
+    private Boolean differenceDetailsAvailable;
 
     /** Parsed statistics (summary/column stats) for RUN_RESULT artifacts; null when absent. */
     private Map<String, Object> statistics;

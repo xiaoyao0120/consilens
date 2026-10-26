@@ -13,18 +13,25 @@ const loadError = ref(false);
 const nodes = ref([]);
 const refreshing = ref(false);
 
+let nodesSeq = 0;
 async function loadNodes(showRefresh = false) {
+  const seq = ++nodesSeq;
   if (showRefresh) refreshing.value = true;
   else loading.value = true;
   loadError.value = false;
   try {
-    nodes.value = await listNodes();
+    const result = await listNodes();
+    if (seq !== nodesSeq) return;
+    nodes.value = result;
   } catch {
+    if (seq !== nodesSeq) return;
     loadError.value = true;
     nodes.value = [];
   } finally {
-    loading.value = false;
-    refreshing.value = false;
+    if (seq === nodesSeq) {
+      loading.value = false;
+      refreshing.value = false;
+    }
   }
 }
 
@@ -33,16 +40,23 @@ const detailVisible = ref(false);
 const detailLoading = ref(false);
 const detail = ref(null);
 
+let detailSeq = 0;
 async function openDetail(node) {
+  const seq = ++detailSeq;
   detail.value = node;
   detailVisible.value = true;
   detailLoading.value = true;
   try {
-    detail.value = await getNode(node.nodeKey);
+    const result = await getNode(node.nodeKey);
+    if (seq !== detailSeq) return;
+    detail.value = result;
   } catch (e) {
+    if (seq !== detailSeq) return;
     message.error(e.message);
   } finally {
-    detailLoading.value = false;
+    if (seq === detailSeq) {
+      detailLoading.value = false;
+    }
   }
 }
 
@@ -67,6 +81,12 @@ function memoryColor(availableMb) {
 function loadBar(loadAverage) {
   if (loadAverage === null || loadAverage === undefined) return 0;
   return Math.min(100, Math.round(loadAverage * 10));
+}
+
+// 0 MB 是“内存已耗尽”的有效值，不能和缺失数据一样显示 "-"
+function formatMemory(availableMb) {
+  if (availableMb === null || availableMb === undefined) return "-";
+  return Math.round(availableMb) + " MB";
 }
 
 onMounted(() => loadNodes());
@@ -111,7 +131,7 @@ onMounted(() => loadNodes());
                 height="6px"
               />
               <div class="text-muted" style="font-size: 11.5px; margin-top: 4px">
-                可用内存 {{ node.availableMemoryMb ? Math.round(node.availableMemoryMb) + " MB" : "-" }}
+                可用内存 {{ formatMemory(node.availableMemoryMb) }}
               </div>
             </div>
           </n-card>
@@ -139,7 +159,7 @@ onMounted(() => loadNodes());
             </n-descriptions-item>
             <n-descriptions-item label="负载均值">{{ detail.loadAverage?.toFixed?.(2) ?? detail.loadAverage ?? "-" }}</n-descriptions-item>
             <n-descriptions-item label="可用内存">
-              {{ detail.availableMemoryMb ? Math.round(detail.availableMemoryMb) + " MB" : "-" }}
+              {{ formatMemory(detail.availableMemoryMb) }}
             </n-descriptions-item>
           </n-descriptions>
         </n-spin>

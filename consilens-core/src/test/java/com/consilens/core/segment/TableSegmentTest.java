@@ -292,6 +292,87 @@ public class TableSegmentTest {
         assertFalse(whereClause.contains("id >= '123'"));
     }
 
+    /**
+     * 只有上界的分段（尾扫 below-min 场景）必须生成上界谓词。
+     * 旧实现把整个键区间块挂在 minKey.isPresent() 上，导致该段退化为整表扫描。
+     */
+    @Test
+    public void testBuildWhereClauseWithOnlyUpperBound() {
+        TableSegment inclusive = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Collections.singletonList("id"))
+                .maxKey(Optional.of(Collections.singletonList("100")))
+                .upperBoundInclusive(true)
+                .build();
+
+        assertEquals("id <= 100", inclusive.buildWhereClause());
+
+        TableSegment exclusive = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Collections.singletonList("id"))
+                .maxKey(Optional.of(Collections.singletonList("100")))
+                .build();
+
+        assertEquals("id < 100", exclusive.buildWhereClause());
+    }
+
+    @Test
+    public void testBuildWhereClauseWithOnlyLowerBound() {
+        TableSegment segment = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Collections.singletonList("id"))
+                .minKey(Optional.of(Collections.singletonList("10")))
+                .build();
+
+        assertEquals("id >= 10", segment.buildWhereClause());
+    }
+
+    @Test
+    public void testBuildWhereClauseCompositeWithOnlyUpperBound() {
+        TableSegment segment = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Arrays.asList("id", "type"))
+                .maxKey(Optional.of(Arrays.asList(100, "Z")))
+                .upperBoundInclusive(true)
+                .build();
+
+        assertEquals("(id < 100 OR (id = 100 AND type <= 'Z'))", segment.buildWhereClause());
+    }
+
+    @Test
+    public void testBuildWhereClauseCompositeWithOnlyLowerBound() {
+        TableSegment segment = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Arrays.asList("id", "type"))
+                .minKey(Optional.of(Arrays.asList(1, "A")))
+                .build();
+
+        assertEquals("(id > 1 OR (id = 1 AND type >= 'A'))", segment.buildWhereClause());
+    }
+
+    @Test
+    public void testCompositeLowerBoundWithNullLastComponentIncludesPrefixRows() {
+        // last 维为 NULL 时它就是该前缀下的最小值：>= (1, NULL) 应包含所有 id=1 的行
+        TableSegment segment = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Arrays.asList("id", "type"))
+                .minKey(Optional.of(Arrays.asList(1, null)))
+                .build();
+
+        assertEquals("(id > 1 OR (id = 1))", segment.buildWhereClause());
+    }
+
+    @Test
+    public void testCompositeLowerBoundWithNullFirstComponentKeepsNullRows() {
+        TableSegment segment = TableSegment.builder()
+                .tablePath(TablePath.of("test_table"))
+                .keyColumns(Arrays.asList("id", "type"))
+                .minKey(Optional.of(Arrays.asList(null, "B")))
+                .build();
+
+        assertEquals("(id IS NOT NULL OR (id IS NULL AND type >= 'B'))", segment.buildWhereClause());
+    }
+
     private ColumnInfo column(String name, DataType type) {
         return ColumnInfo.builder()
                 .name(name)

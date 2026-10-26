@@ -7,8 +7,7 @@ on:
       - main
     paths:
       - '.github/workflows/ci.yml'
-      - 'agent-skills/**'
-      - 'consilens-ai/**'
+      - 'mcp-skills/**'
       - 'consilens-cli/**'
       - 'consilens-common/**'
       - 'consilens-connector/**'

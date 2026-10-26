@@ -47,7 +47,7 @@ public class DiffService {
      * @return diff result
      */
     public CliDiffResult performDiff(CliConfiguration config) throws Exception {
-        log.info("Starting diff operation with strategy: {}, algorithm: {}",
+        log.info("Starting diff operation with configured strategy: {}, algorithm: {}",
                 config.getStrategyMode(), config.getAlgorithm());
 
         long startTime = System.currentTimeMillis();
@@ -61,6 +61,14 @@ public class DiffService {
             lifecycle.onDiffStart(diffContext);
             CompareRuntime runtime = createCompareRuntime();
             DiffResult coreResult = runtime.execute(toCompareRequest(config));
+            if (coreResult == null) {
+                throw new IllegalStateException("compare runtime returned no result");
+            }
+            Object executedPlan = coreResult.getMetadata() == null ? null
+                    : coreResult.getMetadata().get("executedPlan");
+            if (executedPlan != null) {
+                log.info("Executed compare plan: {}", executedPlan);
+            }
 
             publishDifferences(coreResult, lifecycle, diffContext);
             lifecycle.onDiffComplete(coreResult, diffContext);
@@ -148,8 +156,12 @@ public class DiffService {
      * Convert core DiffResult to CLI DiffResult.
      */
     private CliDiffResult convertToCLIResult(DiffResult coreResult, String strategy, CliConfiguration config) {
-        if (coreResult == null || coreResult.getStatistics() == null) {
-            return createEmptyResult(strategy);
+        if (coreResult == null) {
+            throw new IllegalStateException("compare runtime returned no result");
+        }
+        if (coreResult.getStatistics() == null) {
+            // 没有统计不能当成 0 差异：那会把“没比/比失败”显示成完全一致。
+            throw new IllegalStateException("compare result has no statistics");
         }
 
         DiffResult.DiffStatistics stats = coreResult.getStatistics();
@@ -225,32 +237,6 @@ public class DiffService {
         // For now, return the core diff rows directly
         // In the future, we might need to convert to CLI-specific diff row model
         return new ArrayList<>(coreDiffRows);
-    }
-
-    /**
-     * Create an empty diff result for cases where diff operation fails or returns
-     * null.
-     */
-    private CliDiffResult createEmptyResult(String strategy) {
-        // Create empty metadata for empty result
-        TableMetadata emptyMetadata = TableMetadata.builder()
-                .sourceTable("")
-                .targetTable("")
-                .sourceColumns(new ArrayList<>())
-                .targetColumns(new ArrayList<>())
-                .build();
-
-        return CliDiffResult.builder()
-                .strategy(strategy)
-                .sourceMissingCount(0)
-                .targetMissingCount(0)
-                .mismatchCount(0)
-                .totalDifferences(0)
-                .sourceRowCount(0)
-                .targetRowCount(0)
-                .differences(new java.util.ArrayList<>())
-                .tableMetadata(emptyMetadata)
-                .build();
     }
 
     private CompareRequest toCompareRequest(CliConfiguration config) {

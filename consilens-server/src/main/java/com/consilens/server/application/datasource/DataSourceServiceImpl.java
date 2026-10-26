@@ -15,6 +15,7 @@ import com.consilens.server.domain.model.DataSourcePage;
 import com.consilens.server.domain.model.DataSourceRecord;
 import com.consilens.server.domain.repository.DataSourceRepository;
 import com.consilens.server.support.crypto.SecretProtector;
+import com.consilens.server.support.metadata.MetadataNullableSupport;
 import com.consilens.conncetor.base.BaseDataSourceConfigBuilder;
 import com.consilens.connector.api.DataSourceConfigBuilder;
 import com.consilens.connector.api.DataSourceField;
@@ -22,6 +23,7 @@ import com.consilens.connector.api.DatabaseDialect;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 import java.net.InetAddress;
@@ -128,7 +130,7 @@ public class DataSourceServiceImpl implements DataSourceService {
         stripMaskedSensitiveProperties(param);
         validateParam(param);
         protectPassword(param);
-        DataSourceRecord saved = dataSourceRepository.save(DataSourceRecord.builder()
+        DataSourceRecord saved = saveDatasource(DataSourceRecord.builder()
                 .name(request.getName())
                 .type(request.getType())
                 .paramJson(toParamJson(param))
@@ -179,16 +181,27 @@ public class DataSourceServiceImpl implements DataSourceService {
         definitionValidator.validateDefinition(request.getType(), newParam, false);
         stripMaskedSensitiveProperties(newParam);
         validateParam(newParam);
-        // 密码留空（null/空串）时保留旧密码，避免前端编辑时丢失
+        // 密码留空或回传掩码时保留旧密码，避免编辑回显把 ****** 当成真实新密码落库
         Object newPassword = newParam.get("password");
-        if (newPassword == null || String.valueOf(newPassword).isBlank()) {
+        if (newPassword == null || String.valueOf(newPassword).isBlank()
+                || String.valueOf(newPassword).matches("\\*+")) {
             newParam.put("password", oldParam.get("password"));
         }
         protectPassword(newParam);
         record.setName(request.getName());
         record.setType(request.getType());
         record.setParamJson(toParamJson(newParam));
-        return toDto(dataSourceRepository.save(record));
+        return toDto(saveDatasource(record));
+    }
+
+    /** 名称唯一键在并发写入时可能于预检查之后冲突；映射成 400 而不是 500。 */
+    private DataSourceRecord saveDatasource(DataSourceRecord record) {
+        try {
+            return dataSourceRepository.save(record);
+        } catch (DataIntegrityViolationException exception) {
+            throw new IllegalArgumentException(
+                    "datasource name already exists: " + record.getName(), exception);
+        }
     }
 
     @Override
@@ -286,11 +299,10 @@ public class DataSourceServiceImpl implements DataSourceService {
         try (Statement statement = connection.createStatement();
              ResultSet resultSet = statement.executeQuery(sql)) {
             while (resultSet.next()) {
-                String nullable = resultSet.getString(3);
                 columns.add(MetadataColumnDto.builder()
                         .name(resultSet.getString(1))
                         .dataType(resultSet.getString(2))
-                        .nullable(nullable == null ? null : !"NO".equalsIgnoreCase(nullable))
+                        .nullable(MetadataNullableSupport.parse(resultSet.getString(3)))
                         .build());
             }
         } catch (Exception exception) {
@@ -352,7 +364,11 @@ public class DataSourceServiceImpl implements DataSourceService {
         return builder.toString();
     }
 
-    /** 落库前移除 properties 中的掩码敏感键（值为纯 * 视为未修改的占位，不写入）。 */
+    /**
+     * 落库前移除 properties 中的掩码敏感键（值为纯 * 视为未修改的占位，不写入）。
+     * 敏感键在入口即被 {@link DatasourceConnectionPolicy} 拒绝，因此掩码只可能来自
+     * 存量数据回显；丢弃是正确语义，回填旧值反而会覆盖 username/password。
+     */
     private static void stripMaskedSensitiveProperties(Map<String, Object> param) {
         Object properties = param.get("properties");
         if (properties == null) {

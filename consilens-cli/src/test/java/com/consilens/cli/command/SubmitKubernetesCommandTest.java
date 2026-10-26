@@ -92,6 +92,26 @@ class SubmitKubernetesCommandTest {
     }
 
     @Test
+    void shouldReadImageFromPropertiesFile() throws Exception {
+        Path properties = temporaryDirectory.resolve("kubernetes.properties");
+        Files.writeString(properties,
+                "consilens.kubernetes.image=registry.example/consilens:2.0.0\n");
+        AtomicReference<ClusterSubmitRequest> captured = new AtomicReference<>();
+
+        int exitCode = commandLine(command(captured, () -> ClusterSubmission.builder()
+                .submissionId("submission-kubernetes-1")
+                .executionMode(ExecutionMode.KUBERNETES)
+                .clusterApplicationId("default/consilens-submission-kubernetes-1")
+                .build()), new ByteArrayOutputStream(), new ByteArrayOutputStream()).execute(
+                "--properties-file", properties.toString(),
+                "--descriptor-uri", "https://configs.example/consilens/submission.yaml");
+
+        assertEquals(0, exitCode);
+        assertEquals("registry.example/consilens:2.0.0",
+                captured.get().getKubernetesSubmission().getImage());
+    }
+
+    @Test
     void shouldRejectMissingRequiredKubernetesOptionsBeforeSubmitterCall() throws Exception {
         AtomicBoolean called = new AtomicBoolean();
         SubmitKubernetesCommand command = new SubmitKubernetesCommand(

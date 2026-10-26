@@ -2,7 +2,9 @@ package com.consilens.core.thread;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
@@ -73,7 +75,33 @@ public class ExecutorProvider {
                 new LinkedBlockingQueue<>(Math.max(1, effective.getQueueSize())),
                 factory,
                 new ThreadPoolExecutor.CallerRunsPolicy()
-        );
+        ) {
+            /**
+             * 提交时捕获 MDC 并在执行线程上恢复：分片比对跑在池线程里，
+             * 若不做传播，运行实例日志只能拿到调度线程的少数几行。
+             */
+            @Override
+            public void execute(Runnable command) {
+                Map<String, String> context = MDC.getCopyOfContextMap();
+                if (context == null || context.isEmpty()) {
+                    super.execute(command);
+                    return;
+                }
+                super.execute(() -> {
+                    Map<String, String> previous = MDC.getCopyOfContextMap();
+                    MDC.setContextMap(context);
+                    try {
+                        command.run();
+                    } finally {
+                        if (previous == null || previous.isEmpty()) {
+                            MDC.clear();
+                        } else {
+                            MDC.setContextMap(previous);
+                        }
+                    }
+                });
+            }
+        };
     }
 
     private void shutdownExecutor(String name, ExecutorService executor) {

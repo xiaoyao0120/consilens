@@ -52,12 +52,15 @@ public class OracleCapabilityProvider extends BaseCapabilityProvider {
             return "";
         }
         if (isAlreadyQuoted(identifier)) {
-            return identifier;
+            // 不能原样透传：内部引号必须先反转义再转义，否则可提前闭合标识符注入 SQL。
+            String inner = identifier.substring(1, identifier.length() - 1)
+                    .replace("\"\"", "\"");
+            return getOpenQuote() + inner.replace("\"", "\"\"") + getCloseQuote();
         }
         if (identifier.matches("[a-z][a-z0-9_$#]*")) {
             return getOpenQuote() + identifier.toUpperCase(java.util.Locale.ROOT) + getCloseQuote();
         }
-        return getOpenQuote() + identifier + getCloseQuote();
+        return getOpenQuote() + identifier.replace("\"", "\"\"") + getCloseQuote();
     }
 
     private boolean isAlreadyQuoted(String identifier) {

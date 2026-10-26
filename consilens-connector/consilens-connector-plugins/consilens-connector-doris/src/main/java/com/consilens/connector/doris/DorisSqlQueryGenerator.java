@@ -25,6 +25,11 @@ import java.util.Map;
  */
 public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
 
+    @Override
+    public boolean backslashEscapesStringLiterals() {
+        return true;
+    }
+
     private final CapabilityProvider capabilityProvider;
     private final DataTypeHandler dataTypeHandler;
 
@@ -102,7 +107,7 @@ public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
                 }
                 String col = keyColumns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append(") as pk_key, ");
 
@@ -114,7 +119,7 @@ public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
                 }
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append(")) as row_checksum ");
 
@@ -154,7 +159,7 @@ public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
         for (String col : columns) {
             sql.append(", ");
             DataType dataType = columnDataTypes.get(col);
-            sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+            sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
         }
 
         sql.append(")) AS row_hash");

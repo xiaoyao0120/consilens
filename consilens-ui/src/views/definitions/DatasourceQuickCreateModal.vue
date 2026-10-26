@@ -68,7 +68,7 @@ function bindFormRef(instance) {
   font-size: 12px;
 
   &.ok {
-    color: var(--success);
+    color: var(--success-text);
 
     .conn-dot {
       background: var(--success);

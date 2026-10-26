@@ -53,4 +53,6 @@ public interface TaskService extends IService<TaskInstanceEntity> {
                                                         int limit);
 
     List<TaskInstanceEntity> listStaleRunning(LocalDateTime before, int limit);
+
+    List<TaskInstanceEntity> listStaleByStatus(TaskStatus status, LocalDateTime before, int limit);
 }

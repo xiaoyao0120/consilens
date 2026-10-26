@@ -32,6 +32,12 @@ public class ServerCompareConfig {
     @Builder.Default
     private ComparisonConfig comparison = new ComparisonConfig();
 
+    /**
+     * 顶层归一化配置（与 CLI 配置同形）。UI/CLI 形内容把它放在顶层，
+     * 解析后合并进 {@link ComparisonConfig#getNormalization()}。
+     */
+    private NormalizationConfig normalization;
+
     @Builder.Default
     private Map<String, Object> hints = new LinkedHashMap<>();
 

@@ -181,11 +181,21 @@ public class LocalDiffEngine {
             String column = keyColumns.get(index);
             DataType dataType = columnTypes == null ? null : columnTypes.get(column);
             Object value = normalizeForComparison(row[index], dataType, dataTypeHandler);
-            builder.append(ValueNormalizer.normalizeValue(value,
-                    dataType == null ? DataType.UNKNOWN : dataType));
-            builder.append('\u0001');
+            // 长度前缀避免键值本身含分隔符时不同复合键碰撞被并成同一组
+            String text = normalizeKeyValue(value, dataType);
+            builder.append(text.length()).append(':').append(text);
         }
         return builder.toString();
+    }
+
+    /**
+     * 主键分量归一化。DECIMAL/NUMERIC 键不能用 ValueNormalizer 的 4 位小数形态：
+     * 1.00001 与 1.00002 都会被渲染成 "1.0000"，两个不同的主键会被并进同一个分组，
+     * 从而把"两侧各有一条不同键"误判成"同一键且值相同"（整体差异被吃掉）。
+     * {@link ValueNormalizer#normalizeKey} 对定点键用精确十进制（去尾零）。
+     */
+    private static String normalizeKeyValue(Object value, DataType dataType) {
+        return ValueNormalizer.normalizeKey(value, dataType == null ? DataType.UNKNOWN : dataType);
     }
 
     /**
@@ -229,16 +239,21 @@ public class LocalDiffEngine {
         // 4. Multiple rows with same PK in either table -> handle duplicates
 
         if (relevantRows1.isEmpty() && !relevantRows2.isEmpty()) {
-            // Rows only in table 2, therefore ADDED
-            for (Object[] row2 : rows2) {
-                List<Object> values = Arrays.asList(row2);
-                differences.add(DiffRow.added(primaryKey, values, columnNames2));
+            // Rows only in table 2, therefore ADDED. Iterate the *relevant* (projected) rows:
+            // rows2 still contains ignored columns, so its values would not line up with
+            // columnNames2. Each row needs an occurrence, otherwise storeDifferences()
+            // deduplicates all rows of the key into a single diff row.
+            for (int i = 0; i < relevantRows2.size(); i++) {
+                DiffRow diff = DiffRow.added(primaryKey, Arrays.asList(relevantRows2.get(i)), columnNames2);
+                differences.add(DiffRow.withExtraMetadata(diff, MultisetRowPairing.metadata(
+                        i + 1, 0, relevantRows2.size())));
             }
         } else if (!relevantRows1.isEmpty() && relevantRows2.isEmpty()) {
             // Rows only in table 1, therefore REMOVED
-            for (Object[] row1 : rows1) {
-                List<Object> values = Arrays.asList(row1);
-                differences.add(DiffRow.removed(primaryKey, values, columnNames1));
+            for (int i = 0; i < relevantRows1.size(); i++) {
+                DiffRow diff = DiffRow.removed(primaryKey, Arrays.asList(relevantRows1.get(i)), columnNames1);
+                differences.add(DiffRow.withExtraMetadata(diff, MultisetRowPairing.metadata(
+                        i + 1, relevantRows1.size(), 0)));
             }
         } else if (!relevantRows1.isEmpty()) {
             // Rows exist in both tables
@@ -246,15 +261,15 @@ public class LocalDiffEngine {
                 // Single row in each - compare values
                 Object[] row1 = relevantRows1.get(0);
                 Object[] row2 = relevantRows2.get(0);
-                if (!rowsEqualNormalized(row1, row2, columnNames1, columnTypes1, columnTypes2,
+                if (!rowsEqualNormalized(row1, row2, columnNames1, columnNames2, columnTypes1, columnTypes2,
                         dataTypeHandler1, dataTypeHandler2)) {
                     // Values differ - identify which columns changed separately for each table
                     List<String> changedColumns1 = new ArrayList<>();
                     List<String> changedColumns2 = new ArrayList<>();
                     // Use columnNames1 for finding changed columns since both tables should have
                     // same structure for comparison
-                    findChangedColumnsWithDetails(row1, row2, columnNames1, changedColumns1, changedColumns2,
-                            columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2);
+                    findChangedColumnsWithDetails(row1, row2, columnNames1, columnNames2, changedColumns1,
+                            changedColumns2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2);
                     log.debug("Creating modified diff row with changed columns1: {}, columns2: {} for PK: {}",
                             changedColumns1, changedColumns2, primaryKey);
                     // Normalize values for output to ensure consistent formatting
@@ -273,13 +288,11 @@ public class LocalDiffEngine {
                  */
                 List<String> sourceSignatures = new ArrayList<>(relevantRows1.size());
                 for (Object[] row : relevantRows1) {
-                    sourceSignatures.add(MultisetRowPairing.signature(
-                            normalizeRowValues(row, columnNames1, columnTypes1)));
+                    sourceSignatures.add(standardRowSignature(row, columnNames1, columnTypes1));
                 }
                 List<String> targetSignatures = new ArrayList<>(relevantRows2.size());
                 for (Object[] row : relevantRows2) {
-                    targetSignatures.add(MultisetRowPairing.signature(
-                            normalizeRowValues(row, columnNames2, columnTypes2)));
+                    targetSignatures.add(standardRowSignature(row, columnNames2, columnTypes2));
                 }
                 MultisetRowPairing.Outcome outcome = MultisetRowPairing.pair(sourceSignatures, targetSignatures);
                 log.info("Duplicate-key group PK={}: sourceRows={}, targetRows={}, equal={}, pairedMismatch={},"
@@ -292,8 +305,8 @@ public class LocalDiffEngine {
                     Object[] row2 = relevantRows2.get(pair[1]);
                     List<String> changedColumns1 = new ArrayList<>();
                     List<String> changedColumns2 = new ArrayList<>();
-                    findChangedColumnsWithDetails(row1, row2, columnNames1, changedColumns1, changedColumns2,
-                            columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2);
+                    findChangedColumnsWithDetails(row1, row2, columnNames1, columnNames2, changedColumns1,
+                            changedColumns2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2);
                     DiffRow diff = DiffRow.modified(primaryKey,
                             normalizeRowValues(row1, columnNames1, columnTypes1),
                             normalizeRowValues(row2, columnNames2, columnTypes2),
@@ -302,12 +315,12 @@ public class LocalDiffEngine {
                             outcome.sourceOccurrence[pair[0]], relevantRows1.size(), relevantRows2.size())));
                 }
                 for (int index : outcome.sourceOnly) {
-                    DiffRow diff = DiffRow.removed(primaryKey, Arrays.asList(rows1.get(index)), columnNames1);
+                    DiffRow diff = DiffRow.removed(primaryKey, Arrays.asList(relevantRows1.get(index)), columnNames1);
                     differences.add(DiffRow.withExtraMetadata(diff, MultisetRowPairing.metadata(
                             outcome.sourceOccurrence[index], relevantRows1.size(), relevantRows2.size())));
                 }
                 for (int index : outcome.targetOnly) {
-                    DiffRow diff = DiffRow.added(primaryKey, Arrays.asList(rows2.get(index)), columnNames2);
+                    DiffRow diff = DiffRow.added(primaryKey, Arrays.asList(relevantRows2.get(index)), columnNames2);
                     differences.add(DiffRow.withExtraMetadata(diff, MultisetRowPairing.metadata(
                             outcome.targetOccurrence[index], relevantRows1.size(), relevantRows2.size())));
                 }
@@ -319,57 +332,10 @@ public class LocalDiffEngine {
 
     /**
      * Find which columns have changed between two rows with separate tracking for
-     * each table.
-     */
-    private static List<Integer> findChangedColumnsWithDetails(Object[] row1, Object[] row2, List<String> columnNames,
-            List<String> changedColumns1, List<String> changedColumns2) {
-        List<Integer> changedColumnIndices = new ArrayList<>();
-
-        log.debug("Finding changed columns between rows with lengths: {} and {}", row1.length, row2.length);
-
-        if (row1.length != row2.length) {
-            // If rows have different lengths, consider all columns as changed
-            log.debug("Rows have different lengths, marking all columns as changed");
-            for (int i = 0; i < Math.max(row1.length, row2.length); i++) {
-                changedColumnIndices.add(i);
-                if (columnNames != null && i < columnNames.size()) {
-                    String columnName = columnNames.get(i);
-                    if (i < row1.length)
-                        changedColumns1.add(columnName);
-                    if (i < row2.length)
-                        changedColumns2.add(columnName);
-                }
-            }
-            return changedColumnIndices;
-        }
-
-        for (int i = 0; i < row1.length; i++) {
-            Object val1 = row1[i];
-            Object val2 = row2[i];
-
-            if (!valuesEqual(val1, val2)) {
-                changedColumnIndices.add(i);
-                if (columnNames != null && i < columnNames.size()) {
-                    String columnName = columnNames.get(i);
-                    changedColumns1.add(columnName);
-                    changedColumns2.add(columnName);
-                    log.debug("Column {} ({}) changed: '{}' -> '{}'", i, columnName, val1, val2);
-                } else {
-                    log.debug("Column {} changed: '{}' -> '{}'", i, val1, val2);
-                }
-            }
-        }
-
-        log.debug("Found {} changed columns: {}", changedColumnIndices.size(), changedColumnIndices);
-        return changedColumnIndices;
-    }
-
-    /**
-     * Find which columns have changed between two rows with separate tracking for
      * each table (type-aware).
      */
     private static List<Integer> findChangedColumnsWithDetails(
-            Object[] row1, Object[] row2, List<String> columnNames,
+            Object[] row1, Object[] row2, List<String> columnNames1, List<String> columnNames2,
             List<String> changedColumns1, List<String> changedColumns2,
             Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2,
             DataTypeHandler dataTypeHandler1, DataTypeHandler dataTypeHandler2) {
@@ -383,40 +349,36 @@ public class LocalDiffEngine {
             log.debug("Rows have different lengths, marking all columns as changed");
             for (int i = 0; i < Math.max(row1.length, row2.length); i++) {
                 changedColumnIndices.add(i);
-                if (columnNames != null && i < columnNames.size()) {
-                    String columnName = columnNames.get(i);
-                    if (i < row1.length)
-                        changedColumns1.add(columnName);
-                    if (i < row2.length)
-                        changedColumns2.add(columnName);
+                if (i < row1.length && columnNames1 != null && i < columnNames1.size()) {
+                    changedColumns1.add(columnNames1.get(i));
+                }
+                if (i < row2.length && columnNames2 != null && i < columnNames2.size()) {
+                    changedColumns2.add(columnNames2.get(i));
                 }
             }
             return changedColumnIndices;
         }
 
         for (int i = 0; i < row1.length; i++) {
-            String columnName = (columnNames != null && i < columnNames.size()) ? columnNames.get(i) : null;
-            DataType dataType1 = columnTypes1 != null && columnName != null ? columnTypes1.get(columnName) : null;
-            DataType dataType2 = columnTypes2 != null && columnName != null ? columnTypes2.get(columnName) : null;
+            String columnName1 = (columnNames1 != null && i < columnNames1.size()) ? columnNames1.get(i) : null;
+            String columnName2 = (columnNames2 != null && i < columnNames2.size()) ? columnNames2.get(i) : null;
+            DataType dataType1 = columnTypes1 != null && columnName1 != null ? columnTypes1.get(columnName1) : null;
+            DataType dataType2 = columnTypes2 != null && columnName2 != null ? columnTypes2.get(columnName2) : null;
             Object val1 = normalizeForComparison(row1[i], dataType1, dataTypeHandler1);
             Object val2 = normalizeForComparison(row2[i], dataType2, dataTypeHandler2);
-
-            boolean changed = false;
 
             // CRITICAL: In NONE mode, rows contain database-normalized values (strings)
             // Direct string comparison is sufficient - no need for ValueNormalizer
             // This ensures consistency with database-side normalization
-            if (!valuesEqual(val1, val2)) {
-                changed = true;
-                log.trace("Column {} values differ: '{}' vs '{}'", columnName != null ? columnName : i, val1, val2);
-            }
-
-            if (changed) {
+            if (!valuesEqual(val1, val2, preferExactType(dataType1, dataType2))) {
                 changedColumnIndices.add(i);
-                if (columnName != null) {
-                    changedColumns1.add(columnName);
-                    changedColumns2.add(columnName);
+                if (columnName1 != null) {
+                    changedColumns1.add(columnName1);
                 }
+                if (columnName2 != null) {
+                    changedColumns2.add(columnName2);
+                }
+                log.trace("Column {} values differ: '{}' vs '{}'", columnName1 != null ? columnName1 : i, val1, val2);
             }
         }
 
@@ -428,7 +390,11 @@ public class LocalDiffEngine {
      * Compare two values with special handling for different types.
      */
     private static boolean valuesEqual(Object val1, Object val2) {
-        boolean result = compareValuesInternal(val1, val2);
+        return valuesEqual(val1, val2, null);
+    }
+
+    private static boolean valuesEqual(Object val1, Object val2, DataType dataType) {
+        boolean result = compareValuesInternal(val1, val2, dataType);
         log.trace("Comparing values: '{}' vs '{}' = {}", val1, val2, result);
         return result;
     }
@@ -437,7 +403,7 @@ public class LocalDiffEngine {
      * Internal method to compare two values with special handling for different
      * types.
      */
-    private static boolean compareValuesInternal(Object val1, Object val2) {
+    private static boolean compareValuesInternal(Object val1, Object val2, DataType dataType) {
         // Handle null cases
         if (val1 == null && val2 == null) {
             return true;
@@ -446,8 +412,13 @@ public class LocalDiffEngine {
             return false;
         }
 
-        // Handle numeric types with tolerance
+        // 定点数/整数必须精确比较：原来的相对容差（1e-6）会把大数的小数差异
+        // （如 1000000.1 vs 1000000.2）判成相等，属于静默漏报。
+        // 只有浮点类型保留容差，用于吸收不同引擎对同一 DOUBLE 的二进制表示差异。
         if (val1 instanceof Number && val2 instanceof Number) {
+            if (requiresExactNumericComparison(dataType)) {
+                return compareNumbersExactly((Number) val1, (Number) val2);
+            }
             return compareNumericValues((Number) val1, (Number) val2);
         }
 
@@ -501,6 +472,57 @@ public class LocalDiffEngine {
     /**
      * Compare numeric values with appropriate tolerance.
      */
+    /** 两侧类型不一致时优先选"需要精确比较"的那一侧（例如 source INT / target DECIMAL）。 */
+    private static DataType preferExactType(DataType left, DataType right) {
+        if (requiresExactNumericComparison(left)) {
+            return left;
+        }
+        if (requiresExactNumericComparison(right)) {
+            return right;
+        }
+        return left != null ? left : right;
+    }
+
+    private static boolean requiresExactNumericComparison(DataType dataType) {
+        if (dataType == null) {
+            return false;
+        }
+        switch (dataType) {
+            case DECIMAL:
+            case NUMERIC:
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static boolean compareNumbersExactly(Number num1, Number num2) {
+        try {
+            return toBigDecimal(num1).compareTo(toBigDecimal(num2)) == 0;
+        } catch (NumberFormatException e) {
+            // 非有限浮点（NaN/Infinity）落到近似比较，避免误判
+            return compareNumericValues(num1, num2);
+        }
+    }
+
+    private static java.math.BigDecimal toBigDecimal(Number number) {
+        if (number instanceof java.math.BigDecimal) {
+            return (java.math.BigDecimal) number;
+        }
+        if (number instanceof java.math.BigInteger) {
+            return new java.math.BigDecimal((java.math.BigInteger) number);
+        }
+        if (number instanceof Long || number instanceof Integer
+                || number instanceof Short || number instanceof Byte) {
+            return java.math.BigDecimal.valueOf(number.longValue());
+        }
+        return new java.math.BigDecimal(number.toString());
+    }
+
     private static boolean compareNumericValues(Number num1, Number num2) {
         // Handle integer types exactly
         if (num1 instanceof Long || num2 instanceof Long ||
@@ -550,13 +572,15 @@ public class LocalDiffEngine {
         return str;
     }
 
-    private static final com.fasterxml.jackson.databind.ObjectMapper JSON_MAPPER =
-            new com.fasterxml.jackson.databind.ObjectMapper();
-
+    /**
+     * 语义等价的 JSON 必须比较规范形：键排序 + 紧凑分隔符。
+     * 直接复用 {@link ValueNormalizer#canonicalJson(String)}——此前这里用
+     * {@code readTree} + {@code writeValueAsString}，只压空格不排键序，
+     * 导致 {"a":1,"b":2} 与 {"b":2,"a":1} 被误报为 MISMATCH。
+     */
     private static String compactJson(String str) {
         try {
-            Object tree = JSON_MAPPER.readTree(str);
-            return JSON_MAPPER.writeValueAsString(tree);
+            return ValueNormalizer.canonicalJson(str);
         } catch (Exception e) {
             return null;
         }
@@ -573,6 +597,23 @@ public class LocalDiffEngine {
      * @param columnTypes Column data types
      * @return List of values (already normalized by database)
      */
+    /**
+     * 同键多行配对用的整行签名。必须按类型归一化后再拼：两侧对同一个 DECIMAL 可能给出
+     * 不同 scale（25.0000 vs 25）或不同 JDBC 形态（BigDecimal vs String），直接 toString
+     * 会让"数据相同"的两行签名不同，配对后误报成 MISMATCH。
+     */
+    private static String standardRowSignature(Object[] row, List<String> columnNames,
+            Map<String, DataType> columnTypes) {
+        List<String> normalized = new ArrayList<>(row.length);
+        for (int i = 0; i < row.length; i++) {
+            String columnName = columnNames != null && i < columnNames.size() ? columnNames.get(i) : null;
+            DataType dataType = columnTypes != null && columnName != null ? columnTypes.get(columnName) : null;
+            normalized.add(ValueNormalizer.normalizeValue(row[i],
+                    dataType == null ? DataType.UNKNOWN : dataType));
+        }
+        return MultisetRowPairing.signature(normalized);
+    }
+
     private static List<Object> normalizeRowValues(
             Object[] row,
             List<String> columnNames,
@@ -602,7 +643,8 @@ public class LocalDiffEngine {
     private static boolean rowsEqualNormalized(
             Object[] row1,
             Object[] row2,
-            List<String> columnNames,
+            List<String> columnNames1,
+            List<String> columnNames2,
             Map<String, DataType> columnTypes1,
             Map<String, DataType> columnTypes2,
             DataTypeHandler dataTypeHandler1,
@@ -615,14 +657,15 @@ public class LocalDiffEngine {
         // CRITICAL: Rows already contain database-normalized values
         // Direct comparison is sufficient
         for (int i = 0; i < row1.length; i++) {
-            String columnName = i < columnNames.size() ? columnNames.get(i) : null;
-            DataType dataType1 = columnTypes1 != null && columnName != null ? columnTypes1.get(columnName) : null;
-            DataType dataType2 = columnTypes2 != null && columnName != null ? columnTypes2.get(columnName) : null;
+            String columnName1 = i < columnNames1.size() ? columnNames1.get(i) : null;
+            String columnName2 = i < columnNames2.size() ? columnNames2.get(i) : null;
+            DataType dataType1 = columnTypes1 != null && columnName1 != null ? columnTypes1.get(columnName1) : null;
+            DataType dataType2 = columnTypes2 != null && columnName2 != null ? columnTypes2.get(columnName2) : null;
             Object val1 = normalizeForComparison(row1[i], dataType1, dataTypeHandler1);
             Object val2 = normalizeForComparison(row2[i], dataType2, dataTypeHandler2);
 
-            if (!valuesEqual(val1, val2)) {
-                String logColumn = columnName != null ? columnName : String.valueOf(i);
+            if (!valuesEqual(val1, val2, preferExactType(dataType1, dataType2))) {
+                String logColumn = columnName1 != null ? columnName1 : String.valueOf(i);
                 log.trace("Column {} values differ: '{}' vs '{}'", logColumn, val1, val2);
                 return false;
             }

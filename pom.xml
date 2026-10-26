@@ -66,8 +66,6 @@
     </properties>
 
     <modules>
-        <module>consilens-agent</module>
-        <module>consilens-ai</module>
         <module>consilens-common</module>
         <module>consilens-spi</module>
         <module>consilens-connector</module>
@@ -91,30 +89,6 @@
         <dependency>
             <groupId>com.consilens</groupId>
             <artifactId>consilens-core</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.consilens</groupId>
-            <artifactId>consilens-agent-api</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.consilens</groupId>
-            <artifactId>consilens-agent-core</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.consilens</groupId>
-            <artifactId>consilens-agent-model-openai-compatible</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.consilens</groupId>
-            <artifactId>consilens-agent-eval</artifactId>
             <version>${project.version}</version>
         </dependency>
 
@@ -307,26 +281,7 @@
                 <version>${project.version}</version>
             </dependency>
 
-            <!-- AI modules -->
-            <dependency>
-                <groupId>com.consilens</groupId>
-                <artifactId>consilens-ai-analyzer-api</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.consilens</groupId>
-                <artifactId>consilens-ai-llm-api</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>com.consilens</groupId>
-                <artifactId>consilens-ai-tool-api</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <!-- OkHttp for LLM backends -->
+            <!-- OkHttp (MCP client) -->
             <dependency>
                 <groupId>com.squareup.okhttp3</groupId>
                 <artifactId>okhttp</artifactId>

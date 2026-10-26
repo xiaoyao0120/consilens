@@ -25,6 +25,12 @@ import java.util.Map;
  */
 public class PostgreSQLSqlQueryGenerator extends BaseSqlQueryGenerator {
 
+    /** 归并比较把 NULL 当空串排在最前；这些方言升序默认 NULLS LAST，必须显式对齐。 */
+    @Override
+    protected String orderByExpression(String column) {
+        return super.orderByExpression(column) + " NULLS FIRST";
+    }
+
     private final CapabilityProvider capabilityProvider;
     private final DataTypeHandler dataTypeHandler;
 
@@ -113,7 +119,7 @@ public class PostgreSQLSqlQueryGenerator extends BaseSqlQueryGenerator {
                         sql.append(", '|', ");
                     String column = keyColumns.get(i);
                     DataType dataType = columnDataTypes.get(column);
-                    sql.append(dataTypeHandler.normalizeColumn(column, dataType));
+                    sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(column, dataType)));
                 }
                 sql.append(") as pk_key, ");
             } else {
@@ -127,7 +133,7 @@ public class PostgreSQLSqlQueryGenerator extends BaseSqlQueryGenerator {
                     sql.append(", ");
                 String column = columns.get(i);
                 DataType dataType = columnDataTypes.get(column);
-                sql.append(dataTypeHandler.normalizeColumn(column, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(column, dataType)));
             }
             sql.append(")) as row_checksum ");
 
@@ -177,7 +183,7 @@ public class PostgreSQLSqlQueryGenerator extends BaseSqlQueryGenerator {
                 DataType dataType = columnDataTypes.get(col);
                 String normalizedCol = dataTypeHandler.normalizeColumn(col, dataType);
                 
-                sql.append(normalizedCol);
+                sql.append(escapeHashValue(normalizedCol));
             }
             
             sql.append(")), 1, 16))::bit(64)::bigint)::bigint)), 16, '0') as checksum ");
@@ -253,7 +259,7 @@ public class PostgreSQLSqlQueryGenerator extends BaseSqlQueryGenerator {
             DataType dataType = columnDataTypes.get(col);
             // Use dataTypeHandler.normalizeColumn directly (same as getChecksumSQL)
             // normalizeColumn already handles NULL values with COALESCE
-            sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+            sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
         }
 
         sql.append(")) AS row_hash");

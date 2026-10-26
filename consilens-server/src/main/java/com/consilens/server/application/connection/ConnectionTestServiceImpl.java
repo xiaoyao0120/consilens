@@ -3,12 +3,17 @@ package com.consilens.server.application.connection;
 import com.consilens.server.api.dto.ConnectionTestRequest;
 import com.consilens.server.api.dto.ConnectionTestResponse;
 import com.consilens.server.application.datasource.DialectSupport;
+import com.consilens.server.domain.model.DataSourceRecord;
+import com.consilens.server.domain.repository.DataSourceRepository;
+import com.consilens.server.support.crypto.SecretProtector;
 import com.consilens.connector.api.DatabaseDialect;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.net.InetAddress;
 import java.sql.Connection;
+import java.util.Map;
 import java.util.Properties;
 
 /**
@@ -27,15 +32,33 @@ public class ConnectionTestServiceImpl implements ConnectionTestService {
 
     private final ConnectionOpener connectionOpener;
     private final DialectSupport dialectSupport;
+    private final DataSourceRepository dataSourceRepository;
+    private final SecretProtector secretProtector;
+    private final ObjectMapper objectMapper;
 
     @Autowired
-    public ConnectionTestServiceImpl(DialectSupport dialectSupport) {
-        this(ConnectionTestServiceImpl::openConnection, dialectSupport);
+    public ConnectionTestServiceImpl(DialectSupport dialectSupport,
+                                     DataSourceRepository dataSourceRepository,
+                                     SecretProtector secretProtector,
+                                     ObjectMapper objectMapper) {
+        this(ConnectionTestServiceImpl::openConnection, dialectSupport,
+                dataSourceRepository, secretProtector, objectMapper);
     }
 
     ConnectionTestServiceImpl(ConnectionOpener connectionOpener, DialectSupport dialectSupport) {
+        this(connectionOpener, dialectSupport, null, null, null);
+    }
+
+    ConnectionTestServiceImpl(ConnectionOpener connectionOpener,
+                              DialectSupport dialectSupport,
+                              DataSourceRepository dataSourceRepository,
+                              SecretProtector secretProtector,
+                              ObjectMapper objectMapper) {
         this.connectionOpener = connectionOpener;
         this.dialectSupport = dialectSupport;
+        this.dataSourceRepository = dataSourceRepository;
+        this.secretProtector = secretProtector;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -47,6 +70,21 @@ public class ConnectionTestServiceImpl implements ConnectionTestService {
             DatabaseDialect dialect = dialectSupport.find(request.getType())
                     .orElseThrow(() -> new IllegalArgumentException(
                             "unsupported datasource type: " + request.getType()));
+            Map<String, Object> options = whitelistedOptions(request.getOptions());
+            // 直接调用（AI probe 等）不经过 Web 层 @Valid，必须在 service 内复用同一套
+            // 字符白名单，避免 database 注入 JDBC URL 参数。
+            Map<String, Object> connectionParams = new java.util.LinkedHashMap<>();
+            connectionParams.put("host", request.getHost());
+            if (request.getPort() != null) {
+                connectionParams.put("port", request.getPort());
+            }
+            if (request.getDatabase() != null && !request.getDatabase().isBlank()) {
+                connectionParams.put("database", request.getDatabase());
+            }
+            if (options != null) {
+                connectionParams.putAll(options);
+            }
+            DatasourceConnectionPolicy.validateParam(connectionParams);
             // 校验与建连使用同一解析结果（IP 字面量），避免 DNS rebinding TOCTOU
             InetAddress target = JdbcConnectionSupport.validateTargetHost(request.getHost());
             url = JdbcConnectionSupport.buildJdbcUrl(
@@ -54,8 +92,10 @@ public class ConnectionTestServiceImpl implements ConnectionTestService {
                     JdbcConnectionSupport.formatHost(target.getHostAddress()),
                     request.getPort(),
                     request.getDatabase(),
-                    whitelistedOptions(request.getOptions()));
-            properties = buildProperties(request.getUsername(), request.getPassword());
+                    options);
+            properties = buildProperties(request.getUsername(), resolvePassword(request));
+            JdbcConnectionSupport.applyJdbcProperties(properties,
+                    options == null ? null : options.get("properties"));
         } catch (Exception exception) {
             return failure(startedAt, exception);
         }
@@ -70,6 +110,37 @@ public class ConnectionTestServiceImpl implements ConnectionTestService {
                     .build();
         } catch (Exception exception) {
             return failure(startedAt, exception);
+        }
+    }
+
+    /**
+     * 编辑态表单不回显密码：显式密码优先，留空时回填该数据源已保存的密码，
+     * 这样“测试连接”测的是当前表单独连接参数，而不是已保存的旧连接。
+     */
+    private String resolvePassword(ConnectionTestRequest request) {
+        String password = request.getPassword();
+        // 编辑态回显的 ****** 不是真实密码：与留空一样回填已保存密码
+        if (password != null && !password.isBlank() && !password.matches("\\*+")) {
+            return password;
+        }
+        if (request.getDatasourceId() == null || dataSourceRepository == null
+                || secretProtector == null || objectMapper == null) {
+            return null;
+        }
+        return dataSourceRepository.findById(request.getDatasourceId())
+                .map(DataSourceRecord::getParamJson)
+                .map(this::decryptStoredPassword)
+                .orElse(null);
+    }
+
+    private String decryptStoredPassword(String paramJson) {
+        try {
+            Map<?, ?> param = objectMapper.readValue(paramJson, Map.class);
+            Object stored = param.get("password");
+            return stored == null ? null : secretProtector.reveal(String.valueOf(stored));
+        } catch (Exception exception) {
+            // 历史明文/换 key 等情况按无密码处理，由驱动返回真实的认证失败
+            return null;
         }
     }
 

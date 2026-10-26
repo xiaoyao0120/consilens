@@ -51,11 +51,23 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
 
     @Override
     public String getLimitClause(long offset, long limit) {
-        if (offset <= 0) {
-            return ""; // Use TOP in SELECT clause
-        }
-        // SQL Server 2012+ OFFSET...FETCH syntax
-        return "OFFSET " + offset + " ROWS FETCH NEXT " + limit + " ROWS ONLY";
+        // 调用方始终在 ORDER BY 之后追加；offset=0 也必须真正限制行数。
+        long safeOffset = Math.max(0L, offset);
+        return "OFFSET " + safeOffset + " ROWS FETCH NEXT " + limit + " ROWS ONLY";
+    }
+
+    @Override
+    public String getLimitClause(long limit) {
+        return getLimitClause(0L, limit);
+    }
+
+    /**
+     * CAST(... AS VARCHAR) 默认长度 30，会截断长字符串键并让不同键并列；
+     * CONVERT(..., 121) 同时把 datetime 渲染成与 Java 归一化一致的 ISO 形态。
+     */
+    @Override
+    protected String orderByExpression(String column) {
+        return "CONVERT(NVARCHAR(MAX), " + capabilityProvider.quote(column) + ", 121)";
     }
     @Override
     public String getChecksumSQL(String schemaName, String tableName,
@@ -72,14 +84,15 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
             // Two-step approach matching MySQL: per-row MD5 + aggregate MD5
             // Note: STRING_AGG returns VARCHAR(8000) by default which overflows for large tables.
             // Cast row_checksum to VARCHAR(MAX) so the aggregate result is also VARCHAR(MAX).
-            sql.append("COALESCE(CONVERT(VARCHAR(MAX), HASHBYTES('MD5', ");
+            // LOWER(): 与 MySQL/PG 的 MD5() 输出（小写）对齐，否则跨源校验和永不相等
+            sql.append("COALESCE(LOWER(CONVERT(VARCHAR(MAX), HASHBYTES('MD5', ");
             // 聚合串只含 32 位 hex 与 '|'（纯 ASCII），UTF-8 与 ASCII 同字节，无需转换
             sql.append("(SELECT STRING_AGG(CAST(row_checksum AS VARCHAR(MAX)), '|') WITHIN GROUP (ORDER BY pk_key, row_checksum) FROM (SELECT ");
 
             // Build primary key for stable ordering
             // SQL Server CONCAT_WS requires 3+ args (sep + 2+ exprs), so handle single key specially
             if (keyColumns.size() == 1) {
-                sql.append(dataTypeHandler.normalizeColumn(keyColumns.get(0), columnDataTypes.get(keyColumns.get(0))));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(keyColumns.get(0), columnDataTypes.get(keyColumns.get(0)))));
                 sql.append(" as pk_key, ");
             } else {
                 sql.append("CONCAT_WS('|', ");
@@ -88,7 +101,7 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
                         sql.append(", ");
                     String col = keyColumns.get(i);
                     DataType dataType = columnDataTypes.get(col);
-                    sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                    sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
                 }
                 sql.append(") as pk_key, ");
             }
@@ -98,20 +111,20 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
             // 行摘要必须按 UTF-8 字节：否则含非 ASCII 的行摘要与 MySQL 侧不同（全表误报）
             String concatExpr;
             if (columns.size() == 1) {
+                // 与 MySQL 的 CONCAT_WS('|', x)（单列时等价于 x）保持同字节，不能多一个前缀分隔符
                 String col = columns.get(0);
-                concatExpr = "CONCAT('|', "
-                        + dataTypeHandler.normalizeColumn(col, columnDataTypes.get(col)) + ")";
+                concatExpr = escapeHashValue(dataTypeHandler.normalizeColumn(col, columnDataTypes.get(col)));
             } else {
                 StringBuilder concat = new StringBuilder("CONCAT_WS('|'");
                 for (String col : columns) {
-                    concat.append(", ").append(dataTypeHandler.normalizeColumn(col, columnDataTypes.get(col)));
+                    concat.append(", ").append(escapeHashValue(dataTypeHandler.normalizeColumn(col, columnDataTypes.get(col))));
                 }
                 concat.append(")");
                 concatExpr = concat.toString();
             }
-            sql.append("CONVERT(VARCHAR(32), HASHBYTES('MD5', ")
+            sql.append("LOWER(CONVERT(VARCHAR(32), HASHBYTES('MD5', ")
                     .append(utf8Text(concatExpr))
-                    .append("), 2) as row_checksum");
+                    .append("), 2)) as row_checksum");
 
             sql.append(" FROM ");
             sql.append(buildRelationRef(schemaName, tableName));
@@ -119,7 +132,7 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
                 sql.append(" WHERE ").append(whereClause);
             }
 
-            sql.append(") t)), 2), '') as checksum ");
+            sql.append(") t)), 2)), '') as checksum ");
         }
 
         sql.append("FROM ");
@@ -152,24 +165,21 @@ public class SQLServerSqlQueryGenerator extends BaseSqlQueryGenerator {
 
         StringBuilder rowHashConcat = new StringBuilder("CONCAT(");
 
-        // Build canonical expression using CHAR(31) as separator
+        // 与其它方言同一口径：'|' 作分隔符，NULL 由 CONCAT 视作空串（等价于 MySQL 的 ''）
         for (int i = 0; i < columns.size(); i++) {
             if (i > 0) {
-                rowHashConcat.append(", CHAR(31), ");
+                rowHashConcat.append(", '|', ");
             }
             String col = columns.get(i);
             DataType dataType = columnDataTypes.get(col);
-            String normalizedCol = dataTypeHandler.normalizeColumn(col, dataType);
-
-            // Use ISNULL to convert NULL to CHAR(1) (unified across all databases)
-            rowHashConcat.append("ISNULL(").append(normalizedCol).append(", CHAR(1))");
+            rowHashConcat.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
         }
         rowHashConcat.append(")");
 
         // 同 getChecksumSQL：按 UTF-8 字节摘要，保证跨源行哈希可比
-        sql.append(", CONVERT(VARCHAR(32), HASHBYTES('MD5', ")
+        sql.append(", LOWER(CONVERT(VARCHAR(32), HASHBYTES('MD5', ")
                 .append(utf8Text(rowHashConcat.toString()))
-                .append("), 2) as row_hash");
+                .append("), 2)) as row_hash");
 
         sql.append(" FROM ");
         sql.append(buildRelationRef(schemaName, tableName));

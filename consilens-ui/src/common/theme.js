@@ -6,15 +6,17 @@ import { useAppStore } from "@/store";
  * 亮色：浅灰外壳 + 纯白面板；暗色：板岩外壳 #202A2C + 深蓝黑面板 #0F161C。
  */
 
+// primary.base 同时驱动 naive 实底按钮（白字压色），12px 小字需 >=4.5:1，
+// 故比 CSS --primary 深一档；深色主题同理（暗色下 naive 主按钮仍是白字）。
 const palette = {
-  primary: { base: "#3B77F1", hover: "#2F63D6", pressed: "#2A55B8" },
+  primary: { base: "#3570E0", hover: "#2F63D6", pressed: "#2A55B8" },
   success: { base: "#1B8A4E", hover: "#167A44", pressed: "#12683A" },
   warning: { base: "#A87C1F", hover: "#946C18", pressed: "#7E5C13" },
   error: { base: "#C63F2C", hover: "#AE3625", pressed: "#952E1F" },
 };
 
 const darkPalette = {
-  primary: { base: "#3B77F1", hover: "#5A8DF5", pressed: "#6F9CF7" },
+  primary: { base: "#2F63D6", hover: "#3D74E8", pressed: "#4A82F0" },
   success: { base: "#34A853", hover: "#3FBB60", pressed: "#4CC96E" },
   warning: { base: "#D9A93B", hover: "#E2B855", pressed: "#EAC56F" },
   error: { base: "#E8705C", hover: "#EF8574", pressed: "#F49A8C" },
@@ -67,15 +69,15 @@ function tagTones(variant) {
       textColor: isDark ? "#BCBEC4" : "#4A5058",
       // 主色徽章：靛蓝底 + 雾紫蓝字
       colorPrimary: isDark ? "#22305C" : "#E3EDF7",
-      textColorPrimary: isDark ? "#9AA9E6" : "#3F6FE0",
+      textColorPrimary: isDark ? "#9AA9E6" : "#2F63D6",
       colorInfo: isDark ? "#22305C" : "#E3EDF7",
-      textColorInfo: isDark ? "#9AA9E6" : "#3F6FE0",
+      textColorInfo: isDark ? "#9AA9E6" : "#2F63D6",
       colorSuccess: soft(isDark ? "#34A853" : "#22A45D", isDark ? 0.16 : 0.13),
-      textColorSuccess: isDark ? "#6FD79A" : "#1B8A4E",
+      textColorSuccess: isDark ? "#6FD79A" : "#17784A",
       colorWarning: soft(isDark ? "#D9A93B" : "#D9A93B", isDark ? 0.14 : 0.16),
-      textColorWarning: isDark ? "#E8C77A" : "#A87C1F",
+      textColorWarning: isDark ? "#E8C77A" : "#7E5C13",
       colorError: soft("#E8543F", isDark ? 0.18 : 0.12),
-      textColorError: isDark ? "#F5A192" : "#C63F2C",
+      textColorError: isDark ? "#F5A192" : "#AE3625",
     },
   };
 }
@@ -97,9 +99,10 @@ const naiveThemeLight = {
     fontSizeTiny: "11px",
     textColor1: "#1F2329",
     textColor2: "#5A6169",
-    textColor3: "#8A9099",
+    // 与 --text-muted 同源：12px 说明文字需满足 WCAG AA 4.5:1
+    textColor3: "#6B7178",
     textColorDisabled: "#B9BDC2",
-    placeholderColor: "#9AA0A6",
+    placeholderColor: "#6B7178",
     placeholderColorDisabled: "#9AA0A6",
     bodyColor: "#F3F4F6",
     cardColor: "#FFFFFF",

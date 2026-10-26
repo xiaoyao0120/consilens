@@ -7,11 +7,13 @@ import com.consilens.cluster.api.ClusterSubmitRequest;
 import com.consilens.cluster.api.ClusterSubmitter;
 import com.consilens.server.api.dto.RunRequest;
 import com.consilens.server.application.capability.config.ServerCompareConfig;
+import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.model.TaskExecutionContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.nio.file.Files;
@@ -35,14 +37,24 @@ public class ClusterSubmitSupport {
     private static final Logger log = LoggerFactory.getLogger(ClusterSubmitSupport.class);
 
     private static final long COMPLETION_POLL_SECONDS = 3;
-    private static final String DEFAULT_STRATEGY_MODE = "join";
+    /** 与 CLI/服务端默认一致：checksum 是默认计划，join 仅在显式指定时使用。 */
+    private static final String DEFAULT_STRATEGY_MODE = "checksum";
 
     private final ClusterSubmitterLocator submitterLocator;
+    private final ConsilensServerProperties properties;
 
     private final ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
 
+    /** 测试用构造：未配置 loopback 替换。 */
     public ClusterSubmitSupport(ClusterSubmitterLocator submitterLocator) {
+        this(submitterLocator, new ConsilensServerProperties());
+    }
+
+    @Autowired
+    public ClusterSubmitSupport(ClusterSubmitterLocator submitterLocator,
+                                ConsilensServerProperties properties) {
         this.submitterLocator = submitterLocator;
+        this.properties = properties;
     }
 
     public boolean isClusterPlatform(RunRequest.Options options) {
@@ -58,7 +70,7 @@ public class ClusterSubmitSupport {
         String platform = normalizedPlatform(request);
         ClusterSubmitter submitter = submitterLocator.locate(platform);
         String descriptor = yamlMapper.writeValueAsString(
-                buildDescriptor(config, submitter.descriptorRedactsPasswords()));
+                buildDescriptor(config, submitter.descriptorRedactsPasswords(), platform));
         Path descriptorFile = submitter.requiresDescriptorFile() ? writeDescriptor(descriptor) : null;
         ClusterSubmission submission = null;
         boolean reachedTerminalState = false;
@@ -97,7 +109,14 @@ public class ClusterSubmitSupport {
                 }
             }
             if (descriptorFile != null) {
-                Files.deleteIfExists(descriptorFile);
+                try {
+                    Files.deleteIfExists(descriptorFile);
+                } catch (Exception exception) {
+                    // 临时文件清理失败不能覆盖提交结果：成功时会把 SUCCEEDED 变成异常，
+                    // 失败时又会丢掉原始错误。留给 /tmp 清理即可。
+                    log.warn("failed to delete cluster descriptor file {}: {}",
+                            descriptorFile, exception.getMessage());
+                }
             }
         }
     }
@@ -140,9 +159,13 @@ public class ClusterSubmitSupport {
 
     /** ServerCompareConfig → CLI 兼容 descriptor（与 examples/*.yaml 同构）。 */
     Map<String, Object> buildDescriptor(ServerCompareConfig config, boolean redactPasswords) {
+        return buildDescriptor(config, redactPasswords, null);
+    }
+
+    Map<String, Object> buildDescriptor(ServerCompareConfig config, boolean redactPasswords, String platform) {
         Map<String, Object> descriptor = new LinkedHashMap<>();
-        descriptor.put("source", endpointDescriptor(config.getSource(), "source", redactPasswords));
-        descriptor.put("target", endpointDescriptor(config.getTarget(), "target", redactPasswords));
+        descriptor.put("source", endpointDescriptor(config.getSource(), "source", redactPasswords, platform));
+        descriptor.put("target", endpointDescriptor(config.getTarget(), "target", redactPasswords, platform));
 
         Map<String, Object> keys = new LinkedHashMap<>();
         keys.put("source", keyColumns(config, true));
@@ -153,12 +176,40 @@ public class ClusterSubmitSupport {
         Map<String, Object> comparison = new LinkedHashMap<>();
         comparison.put("keys", keys);
         comparison.put("fields", fields);
+        // 忽略列必须随 descriptor 下发，否则集群侧会把用户明确排除的列也纳入比较，
+        // 产生一份与本地执行不同的差异结果。
+        java.util.List<String> exclude = config.getComparison() != null
+                && config.getComparison().getIgnoreColumns() != null
+                ? config.getComparison().getIgnoreColumns() : java.util.List.of();
+        if (!exclude.isEmpty()) {
+            Map<String, Object> excludePair = new LinkedHashMap<>();
+            excludePair.put("source", exclude);
+            excludePair.put("target", exclude);
+            comparison.put("exclude", excludePair);
+        }
+        // CLI 的过滤条件在 comparison.filters（且要求两端同时配置），
+        // 不能放在 endpoint 顶层，否则集群侧反序列化直接失败。
+        String sourceFilter = config.getSource() != null ? config.getSource().getFilter() : null;
+        String targetFilter = config.getTarget() != null ? config.getTarget().getFilter() : null;
+        boolean hasSourceFilter = sourceFilter != null && !sourceFilter.isBlank();
+        boolean hasTargetFilter = targetFilter != null && !targetFilter.isBlank();
+        if (hasSourceFilter != hasTargetFilter) {
+            throw new IllegalArgumentException(
+                    "cluster submission requires comparison filters on both source and target");
+        }
+        if (hasSourceFilter) {
+            Map<String, Object> filters = new LinkedHashMap<>();
+            filters.put("source", sourceFilter);
+            filters.put("target", targetFilter);
+            comparison.put("filters", filters);
+        }
         descriptor.put("comparison", comparison);
 
         Map<String, Object> execution = config.getExecutionOptions();
         Map<String, Object> strategy = new LinkedHashMap<>();
-        // CLI 兼容默认 join；显式 executionOptions.mode 可覆盖（如 bisection）。
-        Object mode = execution.get("mode");
+        // 默认 checksum（与服务端/CLI 一致）；显式 executionOptions.mode 或
+        // hints.strategyPreference.preferredPlans 可覆盖（join / bisection）。
+        Object mode = preferredMode(config, execution);
         strategy.put("mode", mode == null || String.valueOf(mode).isBlank() ? DEFAULT_STRATEGY_MODE : mode);
         copyIfPresent(execution, "bisectionFactor", strategy);
         copyIfPresent(execution, "bisectionThreshold", strategy);
@@ -171,6 +222,9 @@ public class ClusterSubmitSupport {
         if (localCompareMode != null) {
             strategy.put("localCompare", Map.of("mode", localCompareMode));
         }
+        copyIfPresent(execution, "validateUniqueKeys", strategy);
+        copyIfPresent(execution, "allowNullableKeys", strategy);
+        copyIfPresent(execution, "maxDifferences", strategy);
         descriptor.put("strategy", strategy);
 
         if (config.getResult() != null) {
@@ -179,26 +233,157 @@ public class ClusterSubmitSupport {
         return descriptor;
     }
 
+    /**
+     * 用户显式选择的计划优先于执行参数默认值：CLI 形态把 mode 映射进
+     * hints.strategyPreference.preferredPlans，旧代码只读 executionOptions.mode，
+     * 于是服务端提交永远回落到固定默认值，与用户配置不符。
+     */
+    private Object preferredMode(ServerCompareConfig config, Map<String, Object> execution) {
+        Object explicit = execution.get("mode");
+        if (explicit != null && !String.valueOf(explicit).isBlank()) {
+            return explicit;
+        }
+        Object preference = config.getHints() != null ? config.getHints().get("strategyPreference") : null;
+        if (preference instanceof Map) {
+            Object plans = ((Map<?, ?>) preference).get("preferredPlans");
+            if (plans instanceof java.util.List && !((java.util.List<?>) plans).isEmpty()) {
+                Object first = ((java.util.List<?>) plans).get(0);
+                if (first != null && !String.valueOf(first).isBlank()) {
+                    return first;
+                }
+            }
+        }
+        return null;
+    }
+
     private Map<String, Object> endpointDescriptor(com.consilens.server.application.capability.config.EndpointConfig endpoint,
                                                    String name,
-                                                   boolean redactPasswords) {
+                                                   boolean redactPasswords,
+                                                   String platform) {
         if (endpoint == null || endpoint.getConnection() == null || endpoint.getConnection().isEmpty()) {
             throw new IllegalArgumentException("endpoint connection is required for cluster submission: " + name);
         }
         Map<String, Object> connection = new LinkedHashMap<>(endpoint.getConnection());
+        rewriteLoopbackHost(connection, platform);
         if (redactPasswords && connection.get("password") != null) {
             connection.put("password", "${env." + name.toUpperCase(Locale.ROOT) + "_PASSWORD}");
         }
         boolean query = endpoint.getQuery() != null && !endpoint.getQuery().isBlank();
         Map<String, Object> resource = new LinkedHashMap<>();
+        // CLI 约定：table 用 name，sql 用 path（type=sql 时 name 不允许）
         resource.put("type", query ? "sql" : "table");
-        resource.put("name", query ? endpoint.getQuery() : endpoint.getTable());
+        if (query) {
+            resource.put("path", endpoint.getQuery());
+        } else {
+            resource.put("name", endpoint.getTable());
+        }
         Map<String, Object> section = new LinkedHashMap<>();
         section.put("type", endpoint.getType());
         section.put("name", name + "-" + endpoint.getType());
         section.put("connection", connection);
         section.put("resource", resource);
+        // CLI 的 readOptions 是 endpoint 级字段（与 connection 平级），
+        // 放进 connection 会被 @JsonAnySetter 当成 JDBC 属性吞掉，读取参数静默失效。
+        if (endpoint.getReadOptions() != null && !endpoint.getReadOptions().isEmpty()) {
+            section.put("readOptions", new LinkedHashMap<>(endpoint.getReadOptions()));
+        }
         return section;
+    }
+
+    /**
+     * 本机开发环境：业务数据源统一写 127.0.0.1（宿主机可直连），但 YARN AM / K8s Pod
+     * 需要集群内可达的地址。提交 descriptor 时按平台把 loopback host/port 换成配置值
+     * （同时替换 host/port 字段与 JDBC URL），无需为每个平台单独建数据源。
+     */
+    private void rewriteLoopbackHost(Map<String, Object> connection, String platform) {
+        if (platform == null || platform.isBlank()) {
+            return;
+        }
+        String replacement = properties.getCluster().getLoopbackHosts().get(platform);
+        Integer replacementPort = properties.getCluster().getLoopbackPorts().get(platform);
+        if ((replacement == null || replacement.isBlank()) && replacementPort == null) {
+            return;
+        }
+        Object host = connection.get("host");
+        Object url = connection.get("url");
+        boolean hostLoopback = host != null && isLoopbackHost(String.valueOf(host));
+        boolean urlLoopback = url != null && isLoopbackHost(jdbcHost(String.valueOf(url)));
+        if (!hostLoopback && !urlLoopback) {
+            return;
+        }
+        int originalPort = intValue(connection.get("port"));
+        if (hostLoopback && replacement != null && !replacement.isBlank()) {
+            connection.put("host", replacement);
+        }
+        if (replacementPort != null && originalPort > 0) {
+            connection.put("port", replacementPort);
+        }
+        if (url != null) {
+            String rewritten = String.valueOf(url);
+            // 只替换 JDBC URL 的 host 段：裸字符串替换会改坏 query 参数/密码里出现的
+            // "localhost"（例如 ?socketFactory=...localhost...）。
+            if (replacement != null && !replacement.isBlank()) {
+                rewritten = rewriteLoopbackInUrl(rewritten, replacement);
+            }
+            if (replacementPort != null && originalPort > 0 && originalPort != replacementPort) {
+                rewritten = rewriteJdbcPort(rewritten, originalPort, replacementPort);
+            }
+            connection.put("url", rewritten);
+        }
+    }
+
+    private static final java.util.regex.Pattern JDBC_AUTHORITY = java.util.regex.Pattern
+            .compile("(?i)^(jdbc:[^:]+:(?://)?(?:[^@/]*@)?)(\\[[^\\]]+\\]|[^/:?;]+)(.*)$");
+
+    private String rewriteLoopbackInUrl(String url, String replacement) {
+        java.util.regex.Matcher matcher = JDBC_AUTHORITY.matcher(url);
+        if (!matcher.matches()) {
+            return url;
+        }
+        if (!isLoopbackHost(matcher.group(2).replace("[", "").replace("]", ""))) {
+            return url;
+        }
+        return matcher.group(1) + replacement + matcher.group(3);
+    }
+
+    /** 只替换 JDBC authority 里的端口，不能误改 query 参数或密码中相同数字。 */
+    private String rewriteJdbcPort(String url, int originalPort, int replacementPort) {
+        java.util.regex.Matcher matcher = JDBC_AUTHORITY.matcher(url);
+        if (!matcher.matches()) {
+            return url;
+        }
+        String tail = matcher.group(3);
+        String prefix = ":" + originalPort;
+        if (!tail.startsWith(prefix)) {
+            return url;
+        }
+        return matcher.group(1) + matcher.group(2) + ":" + replacementPort
+                + tail.substring(prefix.length());
+    }
+
+    /** 提取 JDBC URL 的 host 段；非 JDBC 形态返回 null。 */
+    private String jdbcHost(String url) {
+        java.util.regex.Matcher matcher = JDBC_AUTHORITY.matcher(url);
+        return matcher.matches() ? matcher.group(2).replace("[", "").replace("]", "") : null;
+    }
+
+    private int intValue(Object value) {
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        try {
+            return value == null ? -1 : Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private boolean isLoopbackHost(String host) {
+        if (host == null) {
+            return false;
+        }
+        String normalized = host.trim().toLowerCase(Locale.ROOT);
+        return "127.0.0.1".equals(normalized) || "localhost".equals(normalized) || "::1".equals(normalized);
     }
 
     private List<String> compareColumns(ServerCompareConfig config, boolean source) {

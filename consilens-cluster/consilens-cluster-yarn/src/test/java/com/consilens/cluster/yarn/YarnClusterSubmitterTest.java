@@ -29,6 +29,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -114,6 +115,20 @@ class YarnClusterSubmitterTest {
         ContainerLaunchContext context = gateway.submittedContext.getAMContainerSpec();
         assertTrue(context.getLocalResources().containsKey("submission-descriptor.yaml"));
         assertTrue(context.getCommands().get(0).contains("--descriptor submission-descriptor.yaml"));
+    }
+
+    @Test
+    void shouldRejectPercentEncodedShellMetacharactersInDerivedJarName() {
+        RecordingYarnGateway gateway = new RecordingYarnGateway();
+        YarnSubmissionSpec spec = validYarnSpec();
+        // URI.getPath() 会解码 %22/%3B，派生文件名必须重新校验字符集
+        spec.setJars(List.of("hdfs://namenode/libs/x%22%3Btouch%20/tmp%3B%22.jar"));
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+                () -> new YarnClusterSubmitter(gateway, hadoopConfDirectory).submit(yarnRequest(spec)));
+
+        assertTrue(error.getMessage().contains("destination name"), error.getMessage());
+        assertEquals(0, gateway.submitCalls);
     }
 
     @Test
@@ -283,7 +298,7 @@ class YarnClusterSubmitterTest {
         assertEquals("/apps/staging/consilens/submission-yarn-1/descriptor.json",
                 resources.get("submission-descriptor.json").getResource().getFile());
         String command = gateway.submittedContext.getAMContainerSpec().getCommands().get(0);
-        assertTrue(command.endsWith("--staging-dir hdfs://namenode/apps/staging/consilens/submission-yarn-1"));
+        assertTrue(command.endsWith("--staging-dir 'hdfs://namenode/apps/staging/consilens/submission-yarn-1'"), command);
         assertEquals("submission-yarn-1", submission.getSubmissionId());
     }
 
@@ -356,7 +371,7 @@ class YarnClusterSubmitterTest {
         assertEquals("/user/root/.consilens/staging/submission-yarn-1/comparison.yaml",
                 resources.get("submission-descriptor.yaml").getResource().getFile());
         String command = gateway.submittedContext.getAMContainerSpec().getCommands().get(0);
-        assertTrue(command.endsWith("--staging-dir hdfs://namenode/user/root/.consilens/staging/submission-yarn-1"));
+        assertTrue(command.endsWith("--staging-dir 'hdfs://namenode/user/root/.consilens/staging/submission-yarn-1'"), command);
     }
 
     @Test
@@ -492,14 +507,52 @@ class YarnClusterSubmitterTest {
                 .build();
     }
 
+    @Test
+    void shouldTolerateTransientFailureWhilePollingApplicationState() throws Exception {
+        RecordingYarnGateway gateway = new RecordingYarnGateway();
+        gateway.failFirstStateQuery = true;
+        YarnSubmissionSpec spec = validYarnSpec();
+        spec.setCompletionPollSeconds(1);
+        YarnClusterSubmitter submitter = new YarnClusterSubmitter(gateway, hadoopConfDirectory);
+
+        ClusterSubmission submission = submitter.submit(yarnRequest(spec));
+        com.consilens.cluster.api.ClusterApplicationResult result =
+                submitter.awaitCompletion(submission, java.time.Duration.ofSeconds(5));
+
+        // 第一次查询抛异常只应被记日志并继续轮询，不能冒泡到上层触发 kill。
+        assertNotNull(result);
+        assertEquals("FINISHED", result.getFinalStatus());
+        assertTrue(gateway.stateCalls >= 2);
+    }
+
+    @Test
+    void shouldPassApplicationMasterDiagnosticsToCaller() throws Exception {
+        RecordingYarnGateway gateway = new RecordingYarnGateway();
+        gateway.finalStatus = "FAILED";
+        gateway.diagnostics = "Coordinator failed: java.lang.IllegalStateException: boom";
+        YarnClusterSubmitter submitter = new YarnClusterSubmitter(gateway, hadoopConfDirectory);
+
+        ClusterSubmission submission = submitter.submit(yarnRequest(validYarnSpec()));
+        com.consilens.cluster.api.ClusterApplicationResult result =
+                submitter.awaitCompletion(submission, java.time.Duration.ofSeconds(5));
+
+        assertNotNull(result);
+        assertEquals("FAILED", result.getFinalStatus());
+        assertTrue(result.getDiagnostics().contains("boom"), result.getDiagnostics());
+    }
+
     private static final class RecordingYarnGateway implements YarnSubmissionGateway {
 
         private int createCalls;
         private int submitCalls;
+        private int stateCalls;
+        private boolean failFirstStateQuery;
         private boolean defaultStagingAvailable = true;
         private ApplicationSubmissionContext submittedContext;
         private final List<URI> stagedLocals = new ArrayList<>();
         private String killedTag;
+        private String finalStatus;
+        private String diagnostics;
 
         @Override
         public ApplicationSubmissionContext createSubmissionContext() {
@@ -529,6 +582,25 @@ class YarnClusterSubmitterTest {
             submitCalls++;
             submittedContext = context;
             return context.getApplicationId();
+        }
+
+        @Override
+        public java.util.Optional<String> applicationState(String applicationId) {
+            stateCalls++;
+            if (failFirstStateQuery && stateCalls == 1) {
+                throw new RuntimeException("transient resource manager error");
+            }
+            return java.util.Optional.of("FINISHED");
+        }
+
+        @Override
+        public java.util.Optional<String> applicationFinalStatus(String applicationId) {
+            return java.util.Optional.ofNullable(finalStatus);
+        }
+
+        @Override
+        public java.util.Optional<String> applicationDiagnostics(String applicationId) {
+            return java.util.Optional.ofNullable(diagnostics);
         }
 
         @Override

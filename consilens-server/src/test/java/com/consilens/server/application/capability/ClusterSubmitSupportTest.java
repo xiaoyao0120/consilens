@@ -15,6 +15,7 @@ import com.consilens.connector.api.planner.ExecutionMode;
 import com.consilens.server.api.dto.RunRequest;
 import com.consilens.server.application.capability.config.EndpointConfig;
 import com.consilens.server.application.capability.config.ServerCompareConfig;
+import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.model.TaskExecutionContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -32,6 +33,189 @@ class ClusterSubmitSupportTest {
 
     @TempDir
     Path temporaryDirectory;
+
+    @Test
+    void shouldRewriteLoopbackHostInDescriptorForClusterPlatform() {
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        properties.getCluster().getLoopbackHosts().put("yarn", "host.docker.internal");
+        properties.getCluster().getLoopbackHosts().put("kubernetes", "mysql-host.default.svc.cluster.local");
+        ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()), properties);
+        EndpointConfig loopback = EndpointConfig.builder()
+                .type("mysql")
+                .table("dq_cmp_alltype_a")
+                .connection(Map.of(
+                        "url", "jdbc:mysql://127.0.0.1:3466/dq_benchmark",
+                        "host", "127.0.0.1",
+                        "port", 3466,
+                        "username", "root",
+                        "password", "p"))
+                .build();
+        ServerCompareConfig config = ServerCompareConfig.builder()
+                .source(loopback).target(loopback).keys(List.of("pk_id")).build();
+
+        Map<String, Object> yarn = support.buildDescriptor(config, false, "yarn");
+        Map<String, Object> yarnConnection = connectionOf(yarn, "source");
+        assertThat(yarnConnection.get("host")).isEqualTo("host.docker.internal");
+        assertThat(String.valueOf(yarnConnection.get("url")))
+                .contains("host.docker.internal:3466")
+                .doesNotContain("127.0.0.1");
+
+        Map<String, Object> k8s = support.buildDescriptor(config, false, "kubernetes");
+        Map<String, Object> k8sConnection = connectionOf(k8s, "source");
+        assertThat(k8sConnection.get("host")).isEqualTo("mysql-host.default.svc.cluster.local");
+
+        // local 平台不替换
+        Map<String, Object> local = support.buildDescriptor(config, false, "local");
+        assertThat(connectionOf(local, "source").get("host")).isEqualTo("127.0.0.1");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> connectionOf(Map<String, Object> descriptor, String endpoint) {
+        return (Map<String, Object>) ((Map<String, Object>) descriptor.get(endpoint)).get("connection");
+    }
+
+    @Test
+    void shouldPlaceFiltersAndReadOptionsInCliCompatibleLocations() {
+        ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()));
+        EndpointConfig endpoint = EndpointConfig.builder()
+                .type("mysql")
+                .table("dq_cmp_alltype_a")
+                .filter("pk_id IS NOT NULL")
+                .readOptions(Map.of("fetchSize", 1000))
+                .connection(Map.of(
+                        "url", "jdbc:mysql://db:3306/dq_benchmark",
+                        "host", "db",
+                        "port", 3306,
+                        "username", "root",
+                        "password", "p"))
+                .build();
+        ServerCompareConfig config = ServerCompareConfig.builder()
+                .source(endpoint).target(endpoint).keys(List.of("pk_id")).build();
+
+        Map<String, Object> descriptor = support.buildDescriptor(config, false, "yarn");
+
+        // CLI 模型：过滤条件在 comparison.filters，读取参数在 endpoint.readOptions
+        Map<String, Object> comparison = (Map<String, Object>) descriptor.get("comparison");
+        Map<String, Object> filters = (Map<String, Object>) comparison.get("filters");
+        assertThat(filters.get("source")).isEqualTo("pk_id IS NOT NULL");
+        assertThat(filters.get("target")).isEqualTo("pk_id IS NOT NULL");
+        Map<String, Object> sourceSection = (Map<String, Object>) descriptor.get("source");
+        assertThat(sourceSection.get("readOptions")).isEqualTo(Map.of("fetchSize", 1000));
+        // connection 里不能出现 readOptions（CLI 不读该位置）
+        assertThat(connectionOf(descriptor, "source")).doesNotContainKey("readOptions");
+        // endpoint 顶层不能出现 CLI 不认识的 filter
+        assertThat(sourceSection).doesNotContainKey("filter");
+        // table 模式用 name，sql 模式用 path
+        assertThat((Map<String, Object>) sourceSection.get("resource"))
+                .containsEntry("type", "table")
+                .containsEntry("name", "dq_cmp_alltype_a");
+    }
+
+    @Test
+    void shouldCarryAllowNullableKeysIntoClusterDescriptor() {
+        ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()));
+        ServerCompareConfig config = ServerCompareConfig.builder()
+                .source(endpoint("p")).target(endpoint("p")).keys(List.of("id"))
+                .executionOptions(Map.of("allowNullableKeys", true))
+                .build();
+
+        Map<String, Object> descriptor = support.buildDescriptor(config, false, "yarn");
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> strategy = (Map<String, Object>) descriptor.get("strategy");
+        assertThat(strategy).containsEntry("allowNullableKeys", true);
+    }
+
+    @Test
+    void shouldEmitSqlResourcePathForClusterDescriptor() {
+        ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()));
+        EndpointConfig endpoint = EndpointConfig.builder()
+                .type("mysql")
+                .query("SELECT id, name FROM orders WHERE dt = '2026-01-01'")
+                .connection(Map.of("url", "jdbc:mysql://db:3306/x", "host", "db",
+                        "port", 3306, "username", "u", "password", "p"))
+                .build();
+        Map<String, Object> descriptor = support.buildDescriptor(
+                ServerCompareConfig.builder().source(endpoint).target(endpoint).keys(List.of("id")).build(),
+                false, "yarn");
+        Map<String, Object> resource = (Map<String, Object>) ((Map<String, Object>) descriptor.get("source")).get("resource");
+        assertThat(resource).containsEntry("type", "sql");
+        assertThat(resource.get("path")).isEqualTo("SELECT id, name FROM orders WHERE dt = '2026-01-01'");
+        assertThat(resource).doesNotContainKey("name");
+    }
+
+    @Test
+    void shouldRewriteLoopbackPortWhenConfigured() {
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        properties.getCluster().getLoopbackHosts().put("yarn", "kuanilens-mysql");
+        properties.getCluster().getLoopbackPorts().put("yarn", 3306);
+        ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()), properties);
+        EndpointConfig loopback = EndpointConfig.builder()
+                .type("mysql")
+                .table("t")
+                .connection(Map.of(
+                        "url", "jdbc:mysql://127.0.0.1:3466/dq_benchmark",
+                        "host", "127.0.0.1",
+                        "port", 3466,
+                        "username", "root",
+                        "password", "p"))
+                .build();
+
+        Map<String, Object> descriptor = support.buildDescriptor(
+                ServerCompareConfig.builder().source(loopback).target(loopback).keys(List.of("id")).build(),
+                false, "yarn");
+
+        Map<String, Object> connection = connectionOf(descriptor, "source");
+        assertThat(connection.get("host")).isEqualTo("kuanilens-mysql");
+        assertThat(connection.get("port")).isEqualTo(3306);
+        assertThat(String.valueOf(connection.get("url"))).isEqualTo("jdbc:mysql://kuanilens-mysql:3306/dq_benchmark");
+    }
+
+    @Test
+    void shouldOnlyRewriteAuthorityPortInLoopbackJdbcUrl() {
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        properties.getCluster().getLoopbackHosts().put("yarn", "kuanilens-mysql");
+        properties.getCluster().getLoopbackPorts().put("yarn", 3306);
+        ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()), properties);
+        EndpointConfig loopback = EndpointConfig.builder()
+                .type("mysql")
+                .table("t")
+                .connection(Map.of(
+                        "url", "jdbc:mysql://127.0.0.1:3466/dq?connectTimeout=3466&note=:3466",
+                        "host", "127.0.0.1",
+                        "port", 3466,
+                        "username", "root",
+                        "password", "p"))
+                .build();
+
+        Map<String, Object> descriptor = support.buildDescriptor(
+                ServerCompareConfig.builder().source(loopback).target(loopback).keys(List.of("id")).build(),
+                false, "yarn");
+
+        assertThat(String.valueOf(connectionOf(descriptor, "source").get("url")))
+                .isEqualTo("jdbc:mysql://kuanilens-mysql:3306/dq?connectTimeout=3466&note=:3466");
+    }
+
+    @Test
+    void shouldRejectOneSidedFilterForClusterSubmission() {
+        ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()));
+        EndpointConfig filtered = EndpointConfig.builder()
+                .type("mysql").table("a").filter("pk_id IS NOT NULL")
+                .connection(Map.of("url", "jdbc:mysql://db:3306/x", "host", "db",
+                        "port", 3306, "username", "u", "password", "p"))
+                .build();
+        EndpointConfig plain = EndpointConfig.builder()
+                .type("mysql").table("b")
+                .connection(Map.of("url", "jdbc:mysql://db:3306/x", "host", "db",
+                        "port", 3306, "username", "u", "password", "p"))
+                .build();
+
+        assertThat(org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        support.buildDescriptor(ServerCompareConfig.builder()
+                                .source(filtered).target(plain).keys(List.of("pk_id")).build(), false, "yarn"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("both source and target")).isNotNull();
+    }
 
     @Test
     void shouldMountKubernetesDescriptorWithoutPlaintextPasswordsOrDeletingCompletedJob() throws Exception {

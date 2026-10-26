@@ -166,16 +166,28 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
         appendRunTag(spec, request.getSubmissionId());
         int maxAttempts = maxAttemptsOrDefault(request);
         String applicationStagingDir = applicationStagingDir(request.getSubmissionId(), spec);
-        YarnSubmissionSpec resolvedSpec = StageResolver.resolve(spec, applicationStagingDir, gateway());
-        ApplicationSubmissionContext context = gateway().createSubmissionContext();
-        mapSubmissionContext(context, request, resolvedSpec, maxAttempts, applicationStagingDir);
-        ApplicationId applicationId = gateway().submit(context);
-        return ClusterSubmission.builder()
-                .submissionId(request.getSubmissionId())
-                .executionMode(ExecutionMode.YARN)
-                .submittedAt(Instant.now())
-                .clusterApplicationId(applicationId.toString())
-                .build();
+        try {
+            YarnSubmissionSpec resolvedSpec = StageResolver.resolve(spec, applicationStagingDir, gateway());
+            ApplicationSubmissionContext context = gateway().createSubmissionContext();
+            mapSubmissionContext(context, request, resolvedSpec, maxAttempts, applicationStagingDir);
+            ApplicationId applicationId = gateway().submit(context);
+            return ClusterSubmission.builder()
+                    .submissionId(request.getSubmissionId())
+                    .executionMode(ExecutionMode.YARN)
+                    .submittedAt(Instant.now())
+                    .clusterApplicationId(applicationId.toString())
+                    .build();
+        } catch (RuntimeException exception) {
+            // RM 拒绝/网络失败时 AM 不会启动，没有人会清理已写入的 staging（含明文密码 descriptor）
+            if (applicationStagingDir != null) {
+                try {
+                    gateway().deleteStagingDirectory(URI.create(applicationStagingDir));
+                } catch (RuntimeException cleanupFailure) {
+                    exception.addSuppressed(cleanupFailure);
+                }
+            }
+            throw exception;
+        }
     }
 
     @Override
@@ -187,18 +199,49 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
         long deadlineNanos = timeout == null ? Long.MAX_VALUE : System.nanoTime() + timeout.toNanos();
         try {
             while (System.nanoTime() < deadlineNanos) {
-                String state = gateway().applicationState(applicationId).orElse(null);
+                // RM/网络抖动只是“暂时不知道状态”，不能因此让上层 kill 仍在运行的
+                // application（K8s 提交器同样按此处理）。
+                String state = bestEffort("application state for " + applicationId,
+                        () -> gateway().applicationState(applicationId).orElse(null), null);
                 if ("FINISHED".equals(state) || "FAILED".equals(state) || "KILLED".equals(state)) {
-                    String finalStatus = gateway().applicationFinalStatus(applicationId).orElse(state);
+                    String finalStatus = bestEffort("final status for " + applicationId,
+                            () -> gateway().applicationFinalStatus(applicationId).orElse(state), state);
+                    String trackingUrl = bestEffort("tracking URL for " + applicationId,
+                            () -> gateway().trackingUrl(applicationId).orElse(null), null);
+                    String diagnostics = bestEffort("diagnostics for " + applicationId,
+                            () -> gateway().applicationDiagnostics(applicationId).orElse(null), null);
                     return new ClusterApplicationResult(applicationId, finalStatus,
-                            gateway().trackingUrl(applicationId).orElse(null), null);
+                            trackingUrl, diagnostics);
                 }
-                Thread.sleep(completionPollSeconds * 1000L);
+                Thread.sleep(pollSleepMillis(deadlineNanos));
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
         return null;
+    }
+
+    /**
+     * 单次轮询不能睡过调用方给的 timeout：否则配置了很长的 completionPollSeconds
+     * 时会绕过上层运行超时，任务迟迟不返回。
+     */
+    private long pollSleepMillis(long deadlineNanos) {
+        long pollMillis = completionPollSeconds > Long.MAX_VALUE / 1000L
+                ? Long.MAX_VALUE : completionPollSeconds * 1000L;
+        if (deadlineNanos == Long.MAX_VALUE) {
+            return pollMillis;
+        }
+        long remainingMillis = (deadlineNanos - System.nanoTime()) / 1_000_000L;
+        return Math.max(1L, Math.min(pollMillis, remainingMillis));
+    }
+
+    private <T> T bestEffort(String description, Supplier<T> query, T fallback) {
+        try {
+            return query.get();
+        } catch (RuntimeException exception) {
+            log.warn("failed to query {}: {}", description, exception.getMessage());
+            return fallback;
+        }
     }
 
     @Override
@@ -404,7 +447,11 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
     }
 
     private String stagingDirArgument(String applicationStagingDir) {
-        return applicationStagingDir == null ? "" : " --staging-dir " + applicationStagingDir;
+        if (applicationStagingDir == null) {
+            return "";
+        }
+        // 单引号包裹并转义，避免 staging URI 中的 shell 元字符被执行
+        return " --staging-dir '" + applicationStagingDir.replace("'", "'\\''") + "'";
     }
 
     /**
@@ -573,6 +620,7 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
         private static YarnSubmissionSpec resolve(YarnSubmissionSpec spec,
                                                   String applicationStagingDir,
                                                   YarnSubmissionGateway gateway) {
+            ensureUniqueStagingNames(spec);
             YarnSubmissionSpec staged = YarnSubmissionSpec.builder()
                     .runtimeArchiveUri(stageIfLocal(spec.getRuntimeArchiveUri(), applicationStagingDir, gateway))
                     .descriptorUri(stageIfLocal(spec.getDescriptorUri(), applicationStagingDir, gateway))
@@ -613,6 +661,48 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
                 staged.add(alias == null ? resolved : resolved + "#" + alias);
             }
             return staged;
+        }
+
+        /**
+         * staging 目录按原始文件名落盘；同名文件会互相覆盖（后写的 user file 可能
+         * 覆盖 descriptor/runtime）。提交前先拒绝重名，避免 AM 读到错误内容。
+         */
+        private static void ensureUniqueStagingNames(YarnSubmissionSpec spec) {
+            Set<String> names = new java.util.HashSet<>();
+            addStagedName(names, spec.getRuntimeArchiveUri(), "runtime archive");
+            addStagedName(names, spec.getDescriptorUri(), "descriptor");
+            addReferenceNames(names, spec.getFiles(), "files");
+            addReferenceNames(names, spec.getJars(), "jars");
+        }
+
+        private static void addReferenceNames(Set<String> names, List<String> references, String kind) {
+            if (references == null) {
+                return;
+            }
+            for (String reference : references) {
+                addStagedName(names, reference, kind);
+            }
+        }
+
+        private static void addStagedName(Set<String> names, String reference, String kind) {
+            if (reference == null || reference.isBlank()) {
+                return;
+            }
+            String alias = YarnSubmissionSpec.referenceAlias(reference);
+            String name;
+            if (alias != null && !alias.isBlank()) {
+                name = alias;
+            } else {
+                String path = URI.create(YarnSubmissionSpec.referenceUri(reference)).getPath();
+                name = path == null ? "" : path.substring(path.lastIndexOf('/') + 1);
+            }
+            if (name.isEmpty()) {
+                return;
+            }
+            if (!names.add(name)) {
+                throw new IllegalStateException(
+                        "YARN staging basename collision: " + name + " (" + kind + ")");
+            }
         }
 
         private static String stageIfLocal(String value, String applicationStagingDir, YarnSubmissionGateway gateway) {

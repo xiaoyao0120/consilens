@@ -16,6 +16,12 @@ import java.util.Map;
  */
 public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
 
+    /** 归并比较把 NULL 当空串排在最前；这些方言升序默认 NULLS LAST，必须显式对齐。 */
+    @Override
+    protected String orderByExpression(String column) {
+        return super.orderByExpression(column) + " NULLS FIRST";
+    }
+
     private final CapabilityProvider capabilityProvider;
     private final DataTypeHandler dataTypeHandler;
 
@@ -69,7 +75,7 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
             if (keyColumns.size() == 1) {
                 String col = keyColumns.get(0);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType)).append(" as pk_key, ");
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType))).append(" as pk_key, ");
             } else {
                 sql.append("CONCAT(");
                 for (int i = 0; i < keyColumns.size(); i++) {
@@ -77,7 +83,7 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
                         sql.append(", '|', ");
                     String col = keyColumns.get(i);
                     DataType dataType = columnDataTypes.get(col);
-                    sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                    sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
                 }
                 sql.append(") as pk_key, ");
             }
@@ -89,7 +95,7 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
                     sql.append(", '|', ");
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append("))))) as row_checksum");
         }
@@ -132,7 +138,7 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
             }
             String col = columns.get(i);
             DataType dataType = columnDataTypes.get(col);
-            sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+            sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
         }
 
         sql.append("))))) AS row_hash");

@@ -1,12 +1,15 @@
 package com.consilens.core.integration;
 
 import com.consilens.common.enums.ChecksumAlgorithm;
+import com.consilens.common.enums.LocalCompareMode;
 import com.consilens.connector.api.model.TablePath;
 import com.consilens.core.algorithm.ChecksumDiffer;
 import com.consilens.core.algorithm.TableDiffer.DifferConfig;
+import com.consilens.core.algorithm.ValueNormalizer;
 import com.consilens.core.database.adpter.DatabaseAdapter;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.segment.TableSegment;
+import com.consilens.core.thread.ConcurrencyConfig;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.JdbcDatabaseContainer;
 import org.testcontainers.containers.MySQLContainer;
@@ -213,7 +216,11 @@ public abstract class CrossDatabaseITestBase {
      * Runs a checksum diff between two segments and returns the result.
      */
     protected static DiffResult runChecksumDiff(TableSegment seg1, TableSegment seg2) throws Exception {
-        DifferConfig config = new DifferConfig(4, 100, ChecksumAlgorithm.CONCAT);
+        // fixture 的 id 列在部分方言里是可空的；数据本身没有 NULL 键，按生产测试定义
+        // 显式允许可空键列，避免严格档把整个 fixture 拒绝掉。
+        DifferConfig config = new DifferConfig(4, 100, ChecksumAlgorithm.CONCAT,
+                LocalCompareMode.FULL, ConcurrencyConfig.defaultConfig(), 1_000_000L, false,
+                ValueNormalizer.DEFAULT_DECIMAL_SCALE, true);
         try (ChecksumDiffer differ = new ChecksumDiffer(config)) {
             return differ.diffTables(seg1, seg2).get(60, TimeUnit.SECONDS);
         }

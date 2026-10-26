@@ -429,6 +429,15 @@ public interface SqlQueryGenerator {
                         List<String> keyColumns2, List<String> compareColumns2, List<String> outputColumns2, String where2);
 
         /**
+         * Whether the dialect treats backslash as an escape character inside string
+         * literals (MySQL family, ClickHouse). When true, {@link #formatValue}
+         * doubles backslashes so a value ending in '\' cannot escape the closing quote.
+         */
+        default boolean backslashEscapesStringLiterals() {
+            return false;
+        }
+
+        /**
          * Format a value for SQL literal usage.
          *
          * @param value the value to format
@@ -439,8 +448,11 @@ public interface SqlQueryGenerator {
                 return "NULL";
             }
             if (value instanceof String) {
-                String str = value.toString().replace("'", "''");
-                return "'" + str + "'";
+                String str = value.toString();
+                if (backslashEscapesStringLiterals()) {
+                    str = str.replace("\\", "\\\\");
+                }
+                return "'" + str.replace("'", "''") + "'";
             }
             if (value instanceof Number) {
                 return value.toString();
@@ -448,7 +460,10 @@ public interface SqlQueryGenerator {
             if (value instanceof java.sql.Date || value instanceof java.sql.Timestamp) {
                 return "'" + value.toString() + "'";
             }
-            String str = value.toString().replace("'", "''");
-            return "'" + str + "'";
+            String str = value.toString();
+            if (backslashEscapesStringLiterals()) {
+                str = str.replace("\\", "\\\\");
+            }
+            return "'" + str.replace("'", "''") + "'";
         }
 }

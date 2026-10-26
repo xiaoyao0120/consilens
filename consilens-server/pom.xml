@@ -57,12 +57,6 @@
 
         <dependency>
             <groupId>com.consilens</groupId>
-            <artifactId>consilens-ai-core</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.consilens</groupId>
             <artifactId>consilens-cluster-api</artifactId>
             <version>${project.version}</version>
         </dependency>
@@ -75,6 +69,15 @@
             <groupId>com.consilens</groupId>
             <artifactId>consilens-cluster-kubernetes</artifactId>
             <version>${project.version}</version>
+        </dependency>
+
+        <!-- cluster-kubernetes 的 Fabric8 客户端为 provided；server 自身要能提交 K8s Job，
+             必须把客户端打进运行时包，否则加载提交器时会抛 NoClassDefFoundError。 -->
+        <dependency>
+            <groupId>io.fabric8</groupId>
+            <artifactId>kubernetes-client</artifactId>
+            <version>${fabric8.kubernetes.version}</version>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- 集群提交（yarn/k8s）运行时依赖：cluster-yarn 的 hadoop 依赖为 provided
@@ -111,35 +114,6 @@
             <artifactId>hadoop-yarn-client</artifactId>
             <version>${hadoop.version}</version>
             <scope>runtime</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>com.consilens</groupId>
-            <artifactId>consilens-agent-api</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>com.consilens</groupId>
-            <artifactId>consilens-agent-core</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>com.consilens</groupId>
-            <artifactId>consilens-agent-model-openai-compatible</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>com.consilens</groupId>
-            <artifactId>consilens-agent-eval</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>com.consilens</groupId>
-            <artifactId>consilens-agent-core</artifactId>
-            <type>test-jar</type>
-            <scope>test</scope>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>

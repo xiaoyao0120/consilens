@@ -18,6 +18,7 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.extern.slf4j.Slf4j;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -34,8 +35,14 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Slf4j
 public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
+
+    /** 校验和缓存键版本：行哈希/键编码规则变化时必须递增，避免复用旧版本的缓存结果。 */
+    private static final String CHECKSUM_CACHE_VERSION = "h2";
+
     /** 已上报过的 (操作, 主键) 身份串，用于跨"主扫描/尾部补扫"去重。 */
     private final Set<String> reportedRowKeys = ConcurrentHashMap.newKeySet();
+    /** 已上报过的 (操作, 主键)（不含 occurrence），尾扫按"整键已报"跳过，避免重复行。 */
+    private final Set<String> reportedKeyOps = ConcurrentHashMap.newKeySet();
 
 
     private final ChecksumCache checksumCache;
@@ -50,6 +57,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     private final ProgressReporter progressReporter;
     private final AtomicLong segmentSequence = new AtomicLong(0);
     private final Map<DatabaseAdapter, TableSegmenter> segmenterCache = new ConcurrentHashMap<>();
+    private static final int MAX_DEPTH_HEADROOM = 8;
+
     private final SegmentPermitController activeSegmentBudget;
 
     /**
@@ -208,6 +217,23 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             long maxRows,
             int level,
             String parentSegmentId) {
+        return diffSegmentsWithParent(table1, table2, infoTreeRecorder, maxRows, level, parentSegmentId, null);
+    }
+
+    /**
+     * @param releasePermit 在“继续下钻/本地比对”之前释放本段占用的并发许可。许可若一直持有到
+     *                      子段完成，预算为 N 而同时有 N 个内部分段在等子段时，子段永远拿不到许可
+     *                      （FIFO 队列被父段占满）——这是 P2-4 的根因。许可只需要覆盖本段的
+     *                      checksum 查询，分段决策一旦做出就应归还。
+     */
+    private CompletableFuture<Void> diffSegmentsWithParent(
+            TableSegment table1,
+            TableSegment table2,
+            InfoTreeRecorder infoTreeRecorder,
+            long maxRows,
+            int level,
+            String parentSegmentId,
+            Runnable releasePermit) {
 
         String segmentId = generateSegmentId(table1, table2, level);
         performanceMonitor.startDiff(segmentId);
@@ -221,7 +247,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         log.info("Diffing segment {} at level {}, size: {}, algorithm: {}", 
                 segmentId, level, maxRows, config.getChecksumAlgorithm());
 
-        return diffSegmentsWithChecksum(table1, table2, infoTreeRecorder, maxRows, level, segmentId)
+        return diffSegmentsWithChecksum(table1, table2, infoTreeRecorder, maxRows, level, segmentId, releasePermit)
                 .handle((result, error) -> {
                     infoTreeRecorder.endNode(segmentId);
                     if (error != null) {
@@ -240,7 +266,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             InfoTreeRecorder infoTreeRecorder,
             long maxRows,
             int level,
-            String segmentId) {
+            String segmentId,
+            Runnable releasePermit) {
 
         // Step 1: Calculate checksums for both segments (with caching)
         CompletableFuture<ChecksumResult> checksum1Future = getChecksumWithCache(table1, infoTreeRecorder, segmentId);
@@ -278,6 +305,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                         }
 
                         // Step 3: Determine next action based on segment size and characteristics
+                        releaseQuietly(releasePermit);
                         return determineSegmentAction(table1, table2, result1, result2, maxRows, level, infoTreeRecorder,
                                 segmentId);
 
@@ -313,7 +341,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             // Small enough for local comparison
             infoTreeRecorder.recordDecision(segmentId, "local_compare");
             infoTreeRecorder.markLocalCompareSegment();
-            return performLocalComparison(table1, table2, infoTreeRecorder, segmentId);
+            boolean depthCapped = level > config.getMaxDepth() + MAX_DEPTH_HEADROOM;
+            return performLocalComparison(table1, table2, infoTreeRecorder, segmentId, depthCapped);
         } else if (shouldUseAdaptiveSegmentation(totalRows, maxRows, sizeRatio, level)) {
             // Use adaptive segmentation
             infoTreeRecorder.recordDecision(segmentId, "adaptive_split");
@@ -337,11 +366,14 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             int bisectionFactor,
             String parentSegmentId) {
 
-        // Explicit recursion depth guard
-        if (level > config.getMaxDepth()) {
-            log.warn("Recursion depth {} exceeds maxDepth {}, forcing local comparison for segment {}",
-                    level, config.getMaxDepth(), parentSegmentId);
-            return performLocalComparison(table1, table2, infoTreeRecorder, parentSegmentId);
+        // Explicit recursion depth guard. maxDepth 是"软上限"：再给 8 层二分（行数最多再降 256 倍），
+        // 之后才整段本地比较。原来的硬上限会在一个仍然很大的分段上直接把所有行拉进内存（P2-3），
+        // 而再多切几层只是多几次 SQL，代价远小于 OOM；8 层的硬上限保证递归必然终止。
+        int softDepthLimit = config.getMaxDepth() + MAX_DEPTH_HEADROOM;
+        if (level > softDepthLimit) {
+            log.warn("Recursion depth {} exceeds soft limit {} (maxDepth={}), forcing local comparison for segment {}",
+                    level, softDepthLimit, config.getMaxDepth(), parentSegmentId);
+            return performLocalComparison(table1, table2, infoTreeRecorder, parentSegmentId, true);
         }
 
         if (!table1.isBounded() || !table2.isBounded()) {
@@ -351,7 +383,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                 // 为单侧缺失。此类形态直接整表按归一化键做哈希比较。
                 log.warn("Key ordering differs between {} and {}; comparing whole tables by normalized keys "
                         + "instead of range predicates", table1.getDisplayName(), table2.getDisplayName());
-                return performLocalComparison(table1, table2, infoTreeRecorder, parentSegmentId);
+                return performLocalComparison(table1, table2, infoTreeRecorder, parentSegmentId, false);
             }
             log.debug("Creating initial bounds for unbounded segments at level {}", level);
             return createInitialBoundsAndBisection(table1, table2, infoTreeRecorder, level, bisectionFactor, parentSegmentId);
@@ -591,10 +623,10 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         // Heuristics:
         // - totalRows < bisectionThreshold: the slice is already smaller than what we'd normally split, so recurse no further.
         // - totalRows < (bisectionFactor * 2): even if the threshold is large, a very small slice does not benefit from hashing.
-        // - level > maxDepth: guardrail to prevent runaway recursion; force a terminal comparison.
+        // - level > maxDepth + headroom: 硬兜底，防止病态键分布下无限细分。
         return totalRows < config.getBisectionThreshold()
                 || totalRows < config.getBisectionFactor() * 2L
-                || level > config.getMaxDepth();
+                || level > config.getMaxDepth() + MAX_DEPTH_HEADROOM;
     }
 
     /**
@@ -629,7 +661,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
      * This avoids pulling all column data when most rows are identical.
      */
     private CompletableFuture<Void> performLocalComparison(
-            TableSegment table1, TableSegment table2, InfoTreeRecorder infoTreeRecorder, String segmentId) {
+            TableSegment table1, TableSegment table2, InfoTreeRecorder infoTreeRecorder,
+            String segmentId, boolean depthCapped) {
 
         LocalCompareMode localCompareMode = config.getLocalCompareMode();
         log.info("Performing local comparison for segment: {} using mode: {}", segmentId, localCompareMode);
@@ -637,9 +670,14 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
 
         if (localCompareMode.isRowHash()) {
             return performRowHashBasedComparison(table1, table2, infoTreeRecorder, segmentId);
-        } else {
-            return performFullDataComparison(table1, table2, infoTreeRecorder, segmentId);
         }
+        if (depthCapped) {
+            // FULL 模式在深度上限仍然要拉全列，内存风险最高；这里改用行哈希兜底，
+            // 仍然用 LocalDiffEngine 精确复核候选键，结果口径不变。
+            infoTreeRecorder.recordMetric(segmentId, "depthCappedLocalCompare", "row_hash_fallback");
+            return performDepthCappedComparison(table1, table2, infoTreeRecorder, segmentId);
+        }
+        return performFullDataComparison(table1, table2, infoTreeRecorder, segmentId);
     }
 
     /**
@@ -655,7 +693,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
      * <p>Performance: For tables with many columns and few differences, this is 10x-100x faster
      * than pulling all data.
      */
-    private CompletableFuture<Void> performRowHashBasedComparison(
+    private CompletableFuture<RowChecksumDiffData> computeRowHashDiffData(
             TableSegment table1, TableSegment table2, InfoTreeRecorder infoTreeRecorder, String segmentId) {
 
         return CompletableFuture.supplyAsync(() -> {
@@ -666,10 +704,13 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             // Only one side is fully indexed in memory; the other side is streamed and
             // matched incrementally so large segments do not hold both hash maps at once.
             RowHashSide index1 = new RowHashSide();
+            boolean[] duplicates = new boolean[1];
             table1.getDatabase().forEachSegmentRowHash(table1, (rawKey, hash) -> {
                 infoTreeRecorder.addBytesFetched(segmentId, estimateKeyHashBytes(rawKey, hash));
                 List<Object> normalizedKey = normalizeKeyValues(rawKey, table1.getKeyColumns(), columnTypes1);
-                index1.put(normalizedKey, rawKey, hash);
+                if (index1.put(normalizedKey, rawKey, hash)) {
+                    duplicates[0] = true;
+                }
             });
 
             Set<List<Object>> keysOnlyInTable2 = new HashSet<>();
@@ -681,10 +722,14 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             Map<List<Object>, String> mismatchHashesIn2 = new HashMap<>();
 
             long[] table2RowCount = new long[1];
+            Set<List<Object>> seenInTable2 = new HashSet<>();
             table2.getDatabase().forEachSegmentRowHash(table2, (rawKey2, hash2) -> {
                 infoTreeRecorder.addBytesFetched(segmentId, estimateKeyHashBytes(rawKey2, hash2));
                 table2RowCount[0]++;
                 List<Object> normalizedKey = normalizeKeyValues(rawKey2, table2.getKeyColumns(), columnTypes2);
+                if (!seenInTable2.add(normalizedKey)) {
+                    duplicates[0] = true;
+                }
                 RowHashEntry entry1 = index1.remove(normalizedKey);
                 if (entry1 == null) {
                     infoTreeRecorder.markFirstDifference();
@@ -727,16 +772,26 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             return new RowHashSnapshot(keysOnlyInTable1, rawKeysOnlyInTable1,
                     keysOnlyInTable2, rawKeysOnlyInTable2,
                     mismatchedKeys, rawKeysMismatchedIn1, rawKeysMismatchedIn2,
-                    index1.total(), table2RowCount[0], columnTypes1, columnTypes2);
+                    index1.total(), table2RowCount[0], columnTypes1, columnTypes2, duplicates[0]);
         }, executorProvider.getIoExecutor())
-                .thenApplyAsync(snapshot -> {
-                    if (snapshot.totalDifferences() == 0) {
-                        return new RowChecksumDiffData(
+                .thenComposeAsync(snapshot -> {
+                    if (snapshot.duplicateKeys) {
+                        // 重复键交由调用方走全量多重集比较（emit 阶段决定），这里不再嵌套比较，
+                        // 以便"深度上限兜底"能在不重复产出的前提下安全回退。
+                        return CompletableFuture.completedFuture(new RowChecksumDiffData(
                                 snapshot,
                                 Collections.emptyMap(),
                                 Collections.emptyMap(),
                                 snapshot.columnTypes1,
-                                snapshot.columnTypes2);
+                                snapshot.columnTypes2));
+                    }
+                    if (snapshot.totalDifferences() == 0) {
+                        return CompletableFuture.completedFuture(new RowChecksumDiffData(
+                                snapshot,
+                                Collections.emptyMap(),
+                                Collections.emptyMap(),
+                                snapshot.columnTypes1,
+                                snapshot.columnTypes2));
                     }
                     Set<List<Object>> rawKeys1 = new LinkedHashSet<>(snapshot.rawKeysOnlyInTable1.values());
                     rawKeys1.addAll(snapshot.rawKeysMismatchedIn1.values());
@@ -747,67 +802,119 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                             table1, rawKeys1, snapshot.columnTypes1, infoTreeRecorder, segmentId);
                     Map<List<Object>, Object[]> data2 = queryRowsByKeys(
                             table2, rawKeys2, snapshot.columnTypes2, infoTreeRecorder, segmentId);
-                    return new RowChecksumDiffData(snapshot, data1, data2,
-                            snapshot.columnTypes1, snapshot.columnTypes2);
-                }, executorProvider.getIoExecutor())
-                .thenAcceptAsync(diffData -> {
-                    try {
-                        RowHashSnapshot snapshot = diffData.plan;
-                        List<DiffRow> differences = new ArrayList<>();
+                    return CompletableFuture.completedFuture(new RowChecksumDiffData(snapshot, data1, data2,
+                            snapshot.columnTypes1, snapshot.columnTypes2));
+                }, executorProvider.getIoExecutor());
+    }
 
-                        if (snapshot.totalDifferences() > 0) {
-                            for (List<Object> key : snapshot.keysOnlyInTable1) {
-                                Object[] row = diffData.data1.get(key);
-                                if (row != null) {
-                                    differences.add(createDiffRow(key, row, null,
-                                            table1.getKeyColumns(), table1.getExtraColumns(),
-                                            DiffOperation.TARGET_MISSING,
-                                            diffData.columnTypes1, diffData.columnTypes2));
-                                }
-                            }
+    /** 行哈希方案（候选键筛选 + 精确复核），失败时按调用方要求决定是否回退。 */
+    private CompletableFuture<Void> performRowHashBasedComparison(
+            TableSegment table1, TableSegment table2, InfoTreeRecorder infoTreeRecorder, String segmentId) {
+        return compareUsingRowHash(table1, table2, infoTreeRecorder, segmentId, false);
+    }
 
-                            for (List<Object> key : snapshot.keysOnlyInTable2) {
-                                Object[] row = diffData.data2.get(key);
-                                if (row != null) {
-                                    differences.add(createDiffRow(key, null, row,
-                                            table2.getKeyColumns(), table2.getExtraColumns(),
-                                            DiffOperation.SOURCE_MISSING,
-                                            diffData.columnTypes1, diffData.columnTypes2));
-                                }
-                            }
+    /**
+     * 深度上限（软上限也已用尽）时的兜底路径：优先用行哈希把内存占用从"整段全列"降到
+     * "单侧键 + 哈希"，失败再退回全量本地比较——此时行哈希尚未产出任何差异，
+     * 回退不会重复计数（storeDifferences 在 emit 阶段才发生）。
+     */
+    private CompletableFuture<Void> performDepthCappedComparison(
+            TableSegment table1, TableSegment table2, InfoTreeRecorder infoTreeRecorder, String segmentId) {
+        return compareUsingRowHash(table1, table2, infoTreeRecorder, segmentId, true);
+    }
 
-                            for (List<Object> key : snapshot.mismatchedKeys) {
-                                Object[] row1 = diffData.data1.get(key);
-                                Object[] row2 = diffData.data2.get(key);
-                                if (row1 != null && row2 != null) {
-                                    differences.add(createDiffRow(key, row1, row2,
-                                            table1.getKeyColumns(), table1.getExtraColumns(),
-                                            DiffOperation.MISMATCH,
-                                            diffData.columnTypes1, diffData.columnTypes2));
-                                }
-                            }
-                        }
-
-                        performanceMonitor.recordLocalComparison(segmentId,
-                                (int) Math.min(snapshot.table1RowCount, Integer.MAX_VALUE),
-                                (int) Math.min(snapshot.table2RowCount, Integer.MAX_VALUE),
-                                differences.size());
-
-                        storeDifferences(infoTreeRecorder, differences, segmentId);
-                        infoTreeRecorder.addRowsFetched(segmentId,
-                                snapshot.table1RowCount + snapshot.table2RowCount);
-
-                        progressReporter.segmentCompleted(segmentId,
-                                snapshot.table1RowCount + snapshot.table2RowCount,
-                                differences.size());
-
-                        log.info("Row-hash based comparison completed: {} differences for segment: {}",
-                                differences.size(), segmentId);
-                    } catch (Exception e) {
-                        log.error("Row-hash based comparison failed for segment: {}", segmentId, e);
-                        throw new RuntimeException("Row-hash based comparison failed", e);
+    private CompletableFuture<Void> compareUsingRowHash(
+            TableSegment table1, TableSegment table2, InfoTreeRecorder infoTreeRecorder,
+            String segmentId, boolean fallBackOnFailure) {
+        return computeRowHashDiffData(table1, table2, infoTreeRecorder, segmentId)
+                .handle((data, error) -> {
+                    if (error == null) {
+                        return data;
                     }
+                    if (!fallBackOnFailure) {
+                        throw new java.util.concurrent.CompletionException(error);
+                    }
+                    log.warn("Row-hash comparison failed for segment {}; falling back to full local compare",
+                            segmentId, error);
+                    return null;
+                })
+                .thenComposeAsync(data -> {
+                    if (data == null || data.plan.duplicateKeys) {
+                        if (data != null) {
+                            log.info("Row-hash comparison [{}] found duplicate keys; "
+                                    + "falling back to full data compare", segmentId);
+                        }
+                        return performFullDataComparison(table1, table2, infoTreeRecorder, segmentId);
+                    }
+                    emitRowHashDifferences(data, table1, table2, infoTreeRecorder, segmentId);
+                    return CompletableFuture.completedFuture(null);
                 }, executorProvider.getCpuExecutor());
+    }
+
+    private void emitRowHashDifferences(RowChecksumDiffData diffData, TableSegment table1, TableSegment table2,
+            InfoTreeRecorder infoTreeRecorder, String segmentId) {
+            try {
+                RowHashSnapshot snapshot = diffData.plan;
+                List<DiffRow> differences = new ArrayList<>();
+
+                if (snapshot.totalDifferences() > 0) {
+                    // 行哈希只是"候选"筛选：不同方言/格式下同一行可能哈希不同（反之
+                    // 哈希相同也可能因分隔符碰撞而误判相等）。对候选键取回完整行后，
+                    // 必须用与全量比较相同的 LocalDiffEngine 做精确判定，否则会把
+                    // "哈希不同但值相同"的行误报为 MISMATCH，也会丢掉重复键的多重集语义。
+                    DataTypeHandler handler1 = dataTypeHandler(table1);
+                    DataTypeHandler handler2 = dataTypeHandler(table2);
+                    for (List<Object> key : snapshot.keysOnlyInTable1) {
+                        Object[] row = diffData.data1.get(key);
+                        if (row != null) {
+                            differences.addAll(compareKeyRows(
+                                    Collections.singletonList(row), Collections.emptyList(),
+                                    table1, table2, diffData.columnTypes1, diffData.columnTypes2,
+                                    handler1, handler2));
+                        }
+                    }
+
+                    for (List<Object> key : snapshot.keysOnlyInTable2) {
+                        Object[] row = diffData.data2.get(key);
+                        if (row != null) {
+                            differences.addAll(compareKeyRows(
+                                    Collections.emptyList(), Collections.singletonList(row),
+                                    table1, table2, diffData.columnTypes1, diffData.columnTypes2,
+                                    handler1, handler2));
+                        }
+                    }
+
+                    for (List<Object> key : snapshot.mismatchedKeys) {
+                        Object[] row1 = diffData.data1.get(key);
+                        Object[] row2 = diffData.data2.get(key);
+                        if (row1 != null && row2 != null) {
+                            differences.addAll(compareKeyRows(
+                                    Collections.singletonList(row1), Collections.singletonList(row2),
+                                    table1, table2, diffData.columnTypes1, diffData.columnTypes2,
+                                    handler1, handler2));
+                        }
+                    }
+                }
+
+                performanceMonitor.recordLocalComparison(segmentId,
+                        (int) Math.min(snapshot.table1RowCount, Integer.MAX_VALUE),
+                        (int) Math.min(snapshot.table2RowCount, Integer.MAX_VALUE),
+                        differences.size());
+
+                storeDifferences(infoTreeRecorder, differences, segmentId);
+                infoTreeRecorder.addRowsFetched(segmentId,
+                        snapshot.table1RowCount + snapshot.table2RowCount);
+
+                progressReporter.segmentCompleted(segmentId,
+                        snapshot.table1RowCount + snapshot.table2RowCount,
+                        differences.size());
+
+                log.info("Row-hash based comparison completed: {} differences for segment: {}",
+                        differences.size(), segmentId);
+            } catch (Exception e) {
+                log.error("Row-hash based comparison failed for segment: {}", segmentId, e);
+                throw new RuntimeException("Row-hash based comparison failed", e);
+            }
     }
 
     /**
@@ -821,6 +928,21 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             return null;
         }
         return segment.getDatabase().getDialect().getDataTypeHandler();
+    }
+
+    /**
+     * 对候选键的两侧行做精确比较（与全量比较同一套归一化/多重集语义）。
+     */
+    private static List<DiffRow> compareKeyRows(List<Object[]> rows1, List<Object[]> rows2,
+            TableSegment table1, TableSegment table2,
+            Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2,
+            DataTypeHandler handler1, DataTypeHandler handler2) {
+        return LocalDiffEngine.findDifferences(
+                rows1, rows2,
+                table1.getKeyColumns(), table1.getExtraColumns(),
+                table2.getKeyColumns(), table2.getExtraColumns(),
+                columnTypes1, columnTypes2,
+                handler1, handler2);
     }
 
     private CompletableFuture<Void> performFullDataComparison(
@@ -939,7 +1061,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             DataType dataType = columnName != null
                     ? columnTypes.getOrDefault(columnName, DataType.UNKNOWN)
                     : DataType.UNKNOWN;
-            normalized.add(ValueNormalizer.normalizeValue(keyValues.get(i), dataType));
+            normalized.add(ValueNormalizer.normalizeKey(keyValues.get(i), dataType));
         }
         return List.copyOf(normalized);
     }
@@ -956,6 +1078,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         private final long table2RowCount;
         private final Map<String, DataType> columnTypes1;
         private final Map<String, DataType> columnTypes2;
+        /** 任一侧存在重复键：row-hash 每键只保留一行，无法表达多重集，退回全量精确比较。 */
+        private final boolean duplicateKeys;
 
         private RowHashSnapshot(Set<List<Object>> keysOnlyInTable1,
                                 Map<List<Object>, List<Object>> rawKeysOnlyInTable1,
@@ -967,7 +1091,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                                 long table1RowCount,
                                 long table2RowCount,
                                 Map<String, DataType> columnTypes1,
-                                Map<String, DataType> columnTypes2) {
+                                Map<String, DataType> columnTypes2,
+                                boolean duplicateKeys) {
             this.keysOnlyInTable1 = keysOnlyInTable1;
             this.rawKeysOnlyInTable1 = rawKeysOnlyInTable1;
             this.keysOnlyInTable2 = keysOnlyInTable2;
@@ -979,6 +1104,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             this.table2RowCount = table2RowCount;
             this.columnTypes1 = columnTypes1;
             this.columnTypes2 = columnTypes2;
+            this.duplicateKeys = duplicateKeys;
         }
 
         private int totalDifferences() {
@@ -990,9 +1116,11 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         private final Map<List<Object>, RowHashEntry> entries = new LinkedHashMap<>();
         private long total;
 
-        private void put(List<Object> normalizedKey, List<Object> rawKey, String hash) {
-            entries.put(normalizedKey, new RowHashEntry(rawKey, hash));
+        /** @return true when the key already existed (duplicate key on this side) */
+        private boolean put(List<Object> normalizedKey, List<Object> rawKey, String hash) {
+            boolean duplicate = entries.put(normalizedKey, new RowHashEntry(rawKey, hash)) != null;
             total++;
+            return duplicate;
         }
 
         private RowHashEntry remove(List<Object> normalizedKey) {
@@ -1049,103 +1177,6 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             this.rows1 = rows1;
             this.rows2 = rows2;
         }
-    }
-
-    /**
-     * Create a DiffRow from row data.
-     * 
-     * BUGFIX: Include ALL columns (key + extra) in sourceValues/targetValues and columnNames
-     * so that output services can access primary key values via getSourceValue()/getTargetValue().
-     * 
-     * CRITICAL: This method now supports type-aware comparison using ValueNormalizer
-     * to ensure consistency with database-side normalization (especially for timestamps).
-     */
-    private DiffRow createDiffRow(List<Object> primaryKey, Object[] sourceRow, Object[] targetRow,
-            List<String> keyColumns, List<String> extraColumns, DiffOperation operation,
-            Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2) {
-        
-        DiffRow.DiffRowBuilder builder = DiffRow.builder()
-                .primaryKey(primaryKey)
-                .operation(operation);
-
-        // Combine key columns and extra columns to get all column names
-        List<String> allColumns = new ArrayList<>();
-        allColumns.addAll(keyColumns);
-        allColumns.addAll(extraColumns);
-
-        List<Object> sourceValues = new ArrayList<>();
-        List<Object> targetValues = new ArrayList<>();
-        List<String> changedColumns1 = new ArrayList<>();
-        List<String> changedColumns2 = new ArrayList<>();
-
-        if (sourceRow != null) {
-            // Include ALL columns (key + extra)
-            sourceValues.addAll(Arrays.asList(sourceRow));
-            builder.sourceValues(Optional.of(sourceValues));
-        } else {
-            builder.sourceValues(Optional.empty());
-        }
-
-        if (targetRow != null) {
-            // Include ALL columns (key + extra)
-            Collections.addAll(targetValues, targetRow);
-            builder.targetValues(Optional.of(targetValues));
-        } else {
-            builder.targetValues(Optional.empty());
-        }
-
-        // For MISMATCH operation, identify which columns changed
-        // Only compare non-key columns (extra columns)
-        if (operation == DiffOperation.MISMATCH && sourceRow != null && targetRow != null) {
-            int keyColumnCount = keyColumns.size();
-            int minLength = Math.min(sourceRow.length, targetRow.length);
-            
-            // CRITICAL: The rows now contain database-normalized values (strings)
-            // Row structure: [pk1, pk2, ..., normalized_col1, normalized_col2, ...]
-            // Direct string comparison is sufficient - no need for ValueNormalizer
-            
-            for (int i = keyColumnCount; i < minLength; i++) {
-                Object sourceValue = sourceRow[i];
-                Object targetValue = targetRow[i];
-                
-                // Direct comparison of normalized strings
-                boolean isDifferent = !Objects.equals(sourceValue, targetValue);
-                
-                if (isDifferent) {
-                    // Get column name from allColumns
-                    String columnName = (i < allColumns.size()) ? allColumns.get(i) : null;
-                    
-                    if (columnName != null) {
-                        changedColumns1.add(columnName);
-                        changedColumns2.add(columnName);
-
-                        log.debug("Column '{}' mismatch for PK={}: " +
-                                "Source[normalized='{}'] vs Target[normalized='{}']",
-                                columnName, primaryKey, sourceValue, targetValue);
-                    } else {
-                        log.debug("Column index {} mismatch for PK={}: {} vs {}",
-                                i, primaryKey, sourceValue, targetValue);
-                    }
-                }
-            }
-            
-            log.debug("Identified {} changed columns for primary key {}: {}", 
-                    changedColumns1.size(), primaryKey, changedColumns1);
-        }
-
-        // Set column names to ALL columns (key + extra)
-        builder.columnNames1(allColumns);
-        builder.columnNames2(allColumns);
-        
-        // Set metadata with changed columns
-        Map<String, Object> metadata = new HashMap<>();
-        if (!changedColumns1.isEmpty()) {
-            metadata.put("changedColumns1", changedColumns1);
-            metadata.put("changedColumns2", changedColumns2);
-        }
-        builder.metadata(metadata);
-
-        return builder.build();
     }
 
     /**
@@ -1353,6 +1384,17 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                     TableSegment bounded1 = createBoundedSegment(table1, bounds.table1Bounds);
                     TableSegment bounded2 = createBoundedSegment(table2, bounds.table2Bounds);
 
+                    // 复合键空表/边界查询失败时 getInitialBounds 返回 null，
+                    // createBoundedSegment 会原样返回未定界段；若继续递归会以同一 level
+                    // 反复进入这里，形成无进展死循环。此时退回归一化键的本地比较。
+                    if (!bounded1.isBounded() || !bounded2.isBounded()) {
+                        log.warn("Unable to establish key bounds for {} / {}; "
+                                        + "falling back to normalized-key comparison",
+                                table1.getDisplayName(), table2.getDisplayName());
+                        return performLocalComparison(table1, table2, infoTreeRecorder,
+                                parentSegmentId, true);
+                    }
+
                     return bisectAndDiffSegmentsEnhanced(bounded1, bounded2, infoTreeRecorder, level, bounds.maxRows,
                             bisectionFactor, parentSegmentId);
                 });
@@ -1458,13 +1500,25 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                     log.debug("Segment permit acquired for {} (availablePermits={}, queueDepth={})",
                             permitRequestId, activeSegmentBudget.availablePermits(), activeSegmentBudget.queueDepth());
                     try {
-                        return diffSegmentsWithParent(table1, table2, infoTreeRecorder, maxRows, level, parentSegmentId)
+                        return diffSegmentsWithParent(table1, table2, infoTreeRecorder, maxRows, level, parentSegmentId,
+                                        lease::release)
                                 .whenComplete((ignored, error) -> lease.release());
                     } catch (Throwable error) {
                         lease.release();
                         return CompletableFuture.failedFuture(error);
                     }
                 });
+    }
+
+    private static void releaseQuietly(Runnable releasePermit) {
+        if (releasePermit == null) {
+            return;
+        }
+        try {
+            releasePermit.run();
+        } catch (RuntimeException e) {
+            log.warn("Failed to release segment permit: {}", e.getMessage());
+        }
     }
 
     /**
@@ -1485,6 +1539,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                     + "\u0001" + (occurrence == null ? "" : occurrence);
             if (reportedRowKeys.add(identity)) {
                 unique.add(row);
+                reportedKeyOps.add(keyOpIdentity(row.getOperation(), row.getPrimaryKey()));
             }
         }
         if (unique.isEmpty()) {
@@ -1640,6 +1695,10 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             int keyCount = ownerTable.getKeyColumns().size();
             List<Object> pk = new ArrayList<>(Arrays.asList(ownerRows.get(0)).subList(0, keyCount));
             List<Object> values = new ArrayList<>(Arrays.asList(ownerRows.get(0)));
+            if (reportedKeyOps.contains(keyOpIdentity(operation, pk))) {
+                emittedKeys.add(extremeKey);
+                return;
+            }
             List<String> columnNames = concatNames(ownerTable.getKeyColumns(), ownerTable.getExtraColumns());
             DiffRow diffRow = operation == DiffOperation.SOURCE_MISSING
                     ? DiffRow.added(pk, values, columnNames)
@@ -1651,6 +1710,10 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         } catch (Exception e) {
             log.warn("Tail extreme-key check [{}] failed; diff may be missed", segmentId, e);
         }
+    }
+
+    private static String keyOpIdentity(DiffOperation operation, List<Object> primaryKey) {
+        return operation + "\u0001" + primaryKey;
     }
 
     /**
@@ -1702,6 +1765,12 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             if (compareKeys(pk, boundary) == 0) {
                 continue;
             }
+            // A key already reported by the main scan (any occurrence) must not be
+            // emitted again: with union segmentation the tail scan is a safety net,
+            // and its rows overlap the main scan by design.
+            if (reportedKeyOps.contains(keyOpIdentity(operation, pk))) {
+                continue;
+            }
             List<Object> values = new ArrayList<>(Arrays.asList(row));
             DiffRow diffRow = operation == DiffOperation.SOURCE_MISSING
                     ? DiffRow.added(pk, values, columnNames)
@@ -1723,24 +1792,74 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         return names;
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
     private int compareKeys(List<Object> ka, List<Object> kb) {
         int n = Math.min(ka.size(), kb.size());
         for (int i = 0; i < n; i++) {
-            Object va = ka.get(i);
-            Object vb = kb.get(i);
-            if (va == null && vb == null) continue;
-            if (va == null) return -1;
-            if (vb == null) return 1;
-            int cmp;
-            if (va.getClass() == vb.getClass() && va instanceof Comparable) {
-                cmp = ((Comparable) va).compareTo(vb);
-            } else {
-                cmp = String.valueOf(va).compareTo(String.valueOf(vb));
+            int cmp = compareKeyPart(ka.get(i), kb.get(i));
+            if (cmp != 0) {
+                return cmp;
             }
-            if (cmp != 0) return cmp;
         }
         return Integer.compare(ka.size(), kb.size());
+    }
+
+    /**
+     * 比较单个键分量。
+     *
+     * <p>边界来自 JDBC 时可能是 {@link java.math.BigDecimal}，而行内主键是驱动/归一化后的
+     * 字符串；两者混用时按数值比较，避免 {@code "9999" > "20000"} 这类字典序错误。
+     * 两侧都是字符串时保持字典序（VARCHAR 键不能按数值比较）。
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static int compareKeyPart(Object va, Object vb) {
+        if (va == null && vb == null) {
+            return 0;
+        }
+        if (va == null) {
+            return -1;
+        }
+        if (vb == null) {
+            return 1;
+        }
+        boolean numeric = va instanceof Number || vb instanceof Number;
+        if (numeric) {
+            BigDecimal left = toBigDecimal(va);
+            BigDecimal right = toBigDecimal(vb);
+            if (left != null && right != null) {
+                return left.compareTo(right);
+            }
+        }
+        if (va.getClass() == vb.getClass() && va instanceof Comparable) {
+            return ((Comparable) va).compareTo(vb);
+        }
+        if (va instanceof Number && vb instanceof Number) {
+            return Double.compare(((Number) va).doubleValue(), ((Number) vb).doubleValue());
+        }
+        return String.valueOf(va).compareTo(String.valueOf(vb));
+    }
+
+    private static BigDecimal toBigDecimal(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof BigDecimal) {
+            return (BigDecimal) value;
+        }
+        if (value instanceof Number) {
+            return new BigDecimal(value.toString());
+        }
+        if (value instanceof String) {
+            String text = ((String) value).trim();
+            if (text.isEmpty()) {
+                return null;
+            }
+            try {
+                return new BigDecimal(text);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /**
@@ -1836,6 +1955,9 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         String databaseId;
         if (segment.getDatabase() != null) {
             String jdbcUrl = segment.getDatabase().getConnectionPool().getConfiguration().getJdbcUrl();
+            if (jdbcUrl == null) {
+                jdbcUrl = "";
+            }
             try {
                 MessageDigest md = MessageDigest.getInstance("MD5");
                 byte[] digest = md.digest(jdbcUrl.getBytes(StandardCharsets.UTF_8));
@@ -1855,11 +1977,19 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         // Include full table path to ensure different tables have different cache keys
         String tablePath = segment.getTablePath() != null ? segment.getTablePath().toString() : "null";
         
-        return databaseId + "_" + encodeKeyParts(
+        // Every dimension that changes the selected row set must be part of the key:
+        // an exclusive [k,k) empty segment and an inclusive [k,k] segment used to share
+        // the same key, so the empty count could be reused for a segment that has rows.
+        return CHECKSUM_CACHE_VERSION + "_" + databaseId + "_" + encodeKeyParts(
                 tablePath,
                 segment.getMinKey().map(Object::toString).orElse("null"),
                 segment.getMaxKey().map(Object::toString).orElse("null"),
-                segment.getWhereClause().orElse("null"));
+                String.valueOf(segment.isUpperBoundInclusive()),
+                segment.getWhereClause().orElse("null"),
+                segment.getLimitOffset().map(Object::toString).orElse("null"),
+                segment.hasRelationSource() ? segment.getRelationFromSql() : "",
+                String.join(",", segment.getKeyColumns()),
+                String.join(",", segment.getExtraColumns()));
     }
 
     @Override

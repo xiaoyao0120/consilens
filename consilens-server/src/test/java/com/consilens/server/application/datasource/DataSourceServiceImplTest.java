@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -108,6 +109,17 @@ class DefaultDataSourceServiceTest {
 
         assertThrows(IllegalArgumentException.class, () -> service.create(
                 DataSourceCreateRequest.builder().name("dup").type("mysql").build()));
+    }
+
+    @Test
+    void shouldMapConcurrentDuplicateNameToInputError() {
+        when(repository.save(any()))
+                .thenThrow(new org.springframework.dao.DuplicateKeyException("uk_cs_datasource_name"));
+
+        assertThrows(IllegalArgumentException.class, () -> service.create(
+                DataSourceCreateRequest.builder().name("dup-race").type("mysql")
+                        .param(Map.of("host", "10.0.0.5", "port", 3306, "database", "orders"))
+                        .build()));
     }
 
     @Test
@@ -489,6 +501,31 @@ class DefaultDataSourceServiceTest {
     }
 
     @Test
+    void shouldKeepPasswordWhenUpdatingWithMaskedPassword() {
+        AesGcmSecretProtector crypto = SecretProtectorTestKeys.protector();
+        DataSourceServiceImpl encryptedService = new DataSourceServiceImpl(repository,
+                dialectSupport, connectionTestService, new ObjectMapper(), crypto,
+                mock(DatasourceDefinitionValidator.class), opener);
+        when(repository.findById(DS_ID)).thenReturn(Optional.of(DataSourceRecord.builder()
+                .id(DS_ID).name("secure").type("mysql")
+                .paramJson("{\"host\":\"10.0.0.5\",\"password\":\"" + crypto.protect("old-pass") + "\"}")
+                .build()));
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        encryptedService.update(DS_ID, DataSourceCreateRequest.builder()
+                .name("secure").type("mysql")
+                .param(Map.of("host", "10.0.0.6", "password", "******"))
+                .build());
+
+        ArgumentCaptor<DataSourceRecord> captor = ArgumentCaptor.forClass(DataSourceRecord.class);
+        verify(repository).save(captor.capture());
+        String stored = captor.getValue().getParamJson();
+        assertTrue(stored.contains("v2:"));
+        assertTrue(!stored.contains("******"), stored);
+        assertTrue(!stored.contains("old-pass"), stored);
+    }
+
+    @Test
     void protectNeverReturnsPlaintext() {
         AesGcmSecretProtector protector = SecretProtectorTestKeys.protector();
         String envelope = protector.protect("secret");
@@ -563,6 +600,37 @@ class DefaultDataSourceServiceTest {
     }
 
     @Test
+    void shouldStripMaskedSensitivePropertiesOnUpdate() {
+        DataSourceRecord existing = DataSourceRecord.builder()
+                .id(DS_ID)
+                .name("masked-db")
+                .type("mysql")
+                .paramJson("{\"host\":\"10.0.0.5\",\"port\":3306,\"database\":\"orders\","
+                        + "\"properties\":\"useSSL=false&password=legacy-secret&ApplicationName=consilens\"}")
+                .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
+                .updatedAt(Instant.parse("2026-01-01T00:00:00Z"))
+                .build();
+        when(repository.findById(DS_ID)).thenReturn(Optional.of(existing));
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        // 编辑回显的掩码占位不能回填旧明文：properties 是 JDBC 连接属性，
+        // 回填会覆盖系统注入的 username/password，且会被敏感键校验拒绝。
+        service.update(DS_ID, DataSourceCreateRequest.builder()
+                .name("masked-db")
+                .type("mysql")
+                .param(Map.of("host", "10.0.0.5", "port", 3306, "database", "orders",
+                        "properties", "useSSL=false&password=******&ApplicationName=consilens"))
+                .build());
+
+        ArgumentCaptor<DataSourceRecord> captor = ArgumentCaptor.forClass(DataSourceRecord.class);
+        verify(repository).save(captor.capture());
+        String paramJson = captor.getValue().getParamJson();
+        assertTrue(paramJson.contains("useSSL=false"), paramJson);
+        assertFalse(paramJson.contains("password"), paramJson);
+        assertTrue(paramJson.contains("ApplicationName"), paramJson);
+    }
+
+    @Test
     void shouldMaskLegacyPlaintextPropertiesInList() throws Exception {
         AesGcmSecretProtector protector = SecretProtectorTestKeys.protector();
         // 存量数据：paramJson 里 properties 含明文密码
@@ -583,6 +651,27 @@ class DefaultDataSourceServiceTest {
         assertEquals(1, dtos.size());
         assertEquals(null, dtos.get(0).getParam().get("password"));
         assertEquals("ssl=true&password=******&search_path=public",
+                dtos.get(0).getParam().get("properties"));
+    }
+
+    @Test
+    void shouldMaskDriverSpecificCredentialPropertiesInList() throws Exception {
+        AesGcmSecretProtector protector = SecretProtectorTestKeys.protector();
+        DataSourceRecord legacy = DataSourceRecord.builder()
+                .id(10L)
+                .name("legacy-ssl-db")
+                .type("mysql")
+                .paramJson("{\"host\":\"10.0.0.10\",\"port\":3306,\"database\":\"orders\","
+                        + "\"username\":\"app\",\"password\":\"" + protector.protect("real-secret") + "\","
+                        + "\"properties\":\"useSSL=true&sslpassword=ssl-secret&accessToken=token-1&ApplicationName=consilens\"}")
+                .createdAt(Instant.parse("2025-01-01T00:00:00Z"))
+                .updatedAt(Instant.parse("2025-01-01T00:00:00Z"))
+                .build();
+        when(repository.listAll()).thenReturn(List.of(legacy));
+
+        List<DataSourceDto> dtos = service.list();
+
+        assertEquals("useSSL=true&sslpassword=******&accessToken=******&ApplicationName=consilens",
                 dtos.get(0).getParam().get("properties"));
     }
 }

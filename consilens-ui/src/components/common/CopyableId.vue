@@ -38,7 +38,7 @@ async function copy() {
 .copyable {
   font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-variant-numeric: tabular-nums;
-  color: var(--primary);
+  color: var(--primary-text);
   cursor: pointer;
   white-space: nowrap;
 

@@ -31,7 +31,7 @@ const pagination = reactive({
 
 // 筛选状态与 URL 双向同步：初始从 query 恢复，每次加载写回（可分享 / 刷新保留）
 const filters = reactive({
-  status: null,
+  status: [],
   keyword: "",
   executeNodeKey: "",
   startTime: null,
@@ -39,20 +39,23 @@ const filters = reactive({
 });
 
 const { filtersActive, syncToUrl } = useListQuerySync(filters, pagination, {
-  status: { parse: (v) => v || null },
+  status: { parse: (v) => (Array.isArray(v) ? v : v ? [v] : []) },
   keyword: {},
   executeNodeKey: { queryKey: "node" },
   startTime: { parse: (v) => Number(v) || null, serialize: String },
   endTime: { parse: (v) => Number(v) || null, serialize: String },
 });
 
+let loadSeq = 0;
+
 async function loadData() {
+  const seq = ++loadSeq;
   loading.value = true;
   loadError.value = false;
   syncToUrl();
   try {
     const params = buildPageParams(pagination.page, pagination.pageSize, {
-      status: filters.status ? [filters.status] : undefined,
+      status: filters.status.length ? filters.status : undefined,
       keyword: filters.keyword,
       executeNodeKey: filters.executeNodeKey,
       startTime: filters.startTime,
@@ -60,15 +63,19 @@ async function loadData() {
       includeDiffSummary: true,
     });
     const result = await listTaskInstances(params);
+    if (seq !== loadSeq) return;
     data.total = result.total;
     data.items = result.items || [];
     pagination.itemCount = result.total;
   } catch {
+    if (seq !== loadSeq) return;
     loadError.value = true;
     data.items = [];
     pagination.itemCount = 0;
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) {
+      loading.value = false;
+    }
   }
 }
 
@@ -78,7 +85,7 @@ function handleSearch() {
 }
 
 function handleReset() {
-  filters.status = null;
+  filters.status = [];
   filters.keyword = "";
   filters.executeNodeKey = "";
   filters.startTime = null;
@@ -99,9 +106,9 @@ const columns = [
         {
           class: "app-name-link mono",
           style: "white-space: nowrap; display: inline-block;",
-          onClick: () => router.push(`/instances/${row.id || row.taskId}`),
+          onClick: () => router.push(`/instances/${row.taskId || row.id}`),
         },
-        row.id || row.taskId
+        row.taskId || row.id
       ),
   },
   { title: "序号", key: "serialNo", width: 160, ellipsis: { tooltip: true }, render: (row) => h("span", { class: "mono text-secondary" }, row.serialNo) },
@@ -231,7 +238,9 @@ onMounted(loadData);
           v-model:value="filters.status"
           :options="TASK_STATUS_OPTIONS"
           placeholder="全部状态"
+          multiple
           clearable
+          collapse-tags
           size="small"
           class="filter-item"
         />

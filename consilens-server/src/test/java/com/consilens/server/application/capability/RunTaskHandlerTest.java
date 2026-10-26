@@ -52,7 +52,7 @@ class RunTaskHandlerTest {
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
 
         com.consilens.server.application.capability.config.ServerCompareConfig config =
                 configService.fromContent(java.util.Map.of(
@@ -63,6 +63,34 @@ class RunTaskHandlerTest {
 
         assertThrows(com.consilens.server.domain.exception.ResourceNotFoundException.class,
                 () -> handler.injectConnections(config));
+    }
+
+    @Test
+    void shouldRevealEncryptedSinkPasswordBeforeOpeningSinks() throws Exception {
+        var protector = SecretProtectorTestKeys.protector();
+        RunTaskHandler handler = new RunTaskHandler(null, null, null,
+                mock(com.consilens.server.domain.repository.DataSourceRepository.class),
+                protector,
+                new com.consilens.server.application.datasource.DialectSupport(),
+                new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
+        SinkConfig sink = new SinkConfig();
+        sink.setFormat("table");
+        sink.setType("result");
+        sink.setProperties(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(Map.of(
+                "url", "jdbc:mysql://127.0.0.1:3306/dq",
+                "username", "sink-user",
+                "password", protector.protect("sink-secret"))));
+        ServerCompareConfig config = ServerCompareConfig.builder()
+                .result(ResultConfig.builder().sinks(List.of(sink)).build())
+                .build();
+
+        handler.injectSinkSecrets(config);
+
+        com.fasterxml.jackson.databind.JsonNode properties = new com.fasterxml.jackson.databind.ObjectMapper()
+                .readTree(config.getResult().getSinks().get(0).getProperties());
+        assertEquals("sink-secret", properties.path("password").asText());
     }
 
     /**
@@ -78,7 +106,7 @@ class RunTaskHandlerTest {
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
         DiffRow row = DiffRow.modified(List.of(1),
                 List.of("source-value"),
                 List.of("target-value"),
@@ -105,7 +133,7 @@ class RunTaskHandlerTest {
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
 
         Map<String, Object> sourceMissing = handler.diffRow(
                 DiffRow.added(List.of(7), List.of("target-value"), List.of("name")));
@@ -133,7 +161,7 @@ class RunTaskHandlerTest {
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
 
         com.consilens.server.domain.model.DataSourceRecord ds = com.consilens.server.domain.model.DataSourceRecord.builder()
                 .id(6L).name("ds-6").type("oracle")
@@ -176,12 +204,13 @@ class RunTaskHandlerTest {
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
 
         com.consilens.server.domain.model.DataSourceRecord ds = com.consilens.server.domain.model.DataSourceRecord.builder()
                 .id(5L).name("ds-5").type("mysql")
                 .paramJson("{\"host\":\"10.0.0.5\",\"port\":3306,\"database\":\"orders\","
-                        + "\"username\":\"root\",\"password\":\""
+                        + "\"username\":\"root\",\"properties\":\"useSSL=false&socketTimeout=1000\","
+                        + "\"password\":\""
                         + SecretProtectorTestKeys.protector().protect("p@ss") + "\"}")
                 .build();
         when(dataSourceRepository.findById(5L)).thenReturn(java.util.Optional.of(ds));
@@ -199,6 +228,9 @@ class RunTaskHandlerTest {
         java.util.Map<String, Object> connection = config.getSource().getConnection();
         assertThat(connection.get("url")).isEqualTo("jdbc:mysql://10.0.0.5:3306/orders");
         assertThat(connection.get("password")).isEqualTo("p@ss");
+        assertThat(connection.get("useSSL")).isEqualTo("false");
+        assertThat(connection.get("socketTimeout")).isEqualTo("1000");
+        assertThat(connection).doesNotContainKey("properties");
         assertThat(config.getTarget().getConnection().get("url")).isEqualTo("jdbc:mysql://10.0.0.5:3306/orders");
     }
 
@@ -219,7 +251,7 @@ class RunTaskHandlerTest {
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
         when(dataSourceRepository.findById(5L)).thenReturn(java.util.Optional.of(
                 com.consilens.server.domain.model.DataSourceRecord.builder()
                         .id(5L).type("mysql")
@@ -257,7 +289,7 @@ class RunTaskHandlerTest {
                 new com.consilens.server.application.datasource.DialectSupport(),
                 new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
 
         com.consilens.server.application.capability.config.ServerCompareConfig config =
                 configService.fromContent(java.util.Map.of(
@@ -282,7 +314,7 @@ class RunTaskHandlerTest {
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
         List<DiffRow> rows = new ArrayList<>();
         for (int i = 0; i < 2500; i++) {
             rows.add(DiffRow.added(List.of(i), List.of("v" + i), List.of("id", "value")));
@@ -327,7 +359,7 @@ class RunTaskHandlerTest {
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator())) {
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore()) {
             @Override
             protected CompareRuntime createCompareRuntime() {
                 return compareRequest -> result;
@@ -408,7 +440,7 @@ class RunTaskHandlerTest {
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator())) {
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore()) {
             @Override
             protected CompareRuntime createCompareRuntime() {
                 return compareRequest -> result;
@@ -428,7 +460,7 @@ class RunTaskHandlerTest {
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
         SinkConfig userJsonl = new SinkConfig();
         userJsonl.setFormat("jsonl");
         userJsonl.setType("diff-record");
@@ -444,7 +476,7 @@ class RunTaskHandlerTest {
             try {
                 assertThat(new com.fasterxml.jackson.databind.ObjectMapper()
                         .readTree(sink.getProperties()).get("path").asText())
-                        .isEqualTo("./.consilens-server/artifacts/run-result-${taskId}.jsonl");
+                        .endsWith("/.consilens-server/artifacts/run-result-${taskId}.jsonl");
             } catch (Exception exception) {
                 throw new AssertionError("cannot parse sink properties", exception);
             }
@@ -462,7 +494,7 @@ class RunTaskHandlerTest {
                         new com.consilens.server.application.datasource.DialectSupport(),
                         new com.consilens.server.boot.ConsilensServerProperties(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
-                new ClusterSubmitSupport(new ClusterSubmitterLocator()));
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
         SinkConfig userJsonl = new SinkConfig();
         userJsonl.setFormat("jsonl");
         userJsonl.setType("diff-record");
@@ -561,5 +593,60 @@ class RunTaskHandlerTest {
         public void close() {
             closed = true;
         }
+    }
+
+    private static com.consilens.server.infrastructure.log.RunLogStore runLogStore() {
+        return new com.consilens.server.infrastructure.log.RunLogStore(
+                java.nio.file.Paths.get("target/test-run-logs"), false);
+    }
+
+    @Test
+    void attemptScopedIdSeparatesRetriesOfTheSameInstance() {
+        TaskExecutionContext first = TaskExecutionContext.builder()
+                .instanceKey("inst_1")
+                .traceId("trace_aaaaaaaaaaaa1111")
+                .build();
+        TaskExecutionContext retry = TaskExecutionContext.builder()
+                .instanceKey("inst_1")
+                .traceId("trace_bbbbbbbbbbbb2222")
+                .build();
+        TaskExecutionContext noTrace = TaskExecutionContext.builder()
+                .instanceKey("inst_1")
+                .build();
+
+        assertEquals("inst_1-trace_aaaaaa", RunTaskHandler.attemptScopedId(first));
+        assertEquals("inst_1-trace_bbbbbb", RunTaskHandler.attemptScopedId(retry));
+        assertEquals("inst_1", RunTaskHandler.attemptScopedId(noTrace));
+    }
+
+    @Test
+    void parsesClusterStatisticsFromDiagnostics() {
+        RunTaskHandler handler = new RunTaskHandler(null, null, null, null,
+                SecretProtectorTestKeys.protector(),
+                new com.consilens.server.application.datasource.DialectSupport(),
+                new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
+
+        Map<String, Object> statistics = handler.parseClusterStatistics(
+                "{\"submissionId\":\"s-1\",\"statistics\":{\"sourceRowCount\":100,"
+                        + "\"targetRowCount\":100,\"totalDifferences\":3}}");
+
+        assertEquals(3, ((Number) statistics.get("totalDifferences")).intValue());
+        assertEquals(100, ((Number) statistics.get("sourceRowCount")).intValue());
+    }
+
+    @Test
+    void returnsEmptyStatisticsWhenDiagnosticsIsNotASummary() {
+        RunTaskHandler handler = new RunTaskHandler(null, null, null, null,
+                SecretProtectorTestKeys.protector(),
+                new com.consilens.server.application.datasource.DialectSupport(),
+                new com.consilens.server.boot.ConsilensServerProperties(),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                new ClusterSubmitSupport(new ClusterSubmitterLocator()), runLogStore());
+
+        assertThat(handler.parseClusterStatistics(null)).isEmpty();
+        assertThat(handler.parseClusterStatistics("not-json")).isEmpty();
+        assertThat(handler.parseClusterStatistics("{\"submissionId\":\"s-1\"}")).isEmpty();
     }
 }

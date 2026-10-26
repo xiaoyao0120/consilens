@@ -27,27 +27,51 @@ export function useDefinitionConfig({
     if (compareForm.ignoreColumns.length) {
       hints.ignoreColumns = compareForm.ignoreColumns;
     }
+    // 跨方言归一化：仅提交用户显式填写的项，未填写时保持引擎默认（不生成空规则）
+    const normalization = {};
+    if (advForm.decimalPrecision !== null && advForm.decimalPrecision !== undefined
+        && advForm.decimalPrecision !== "") {
+      normalization.global = {
+        ...(normalization.global || {}),
+        decimal: { precision: Number(advForm.decimalPrecision) },
+      };
+    }
+    if (advForm.timezone) {
+      normalization.global = {
+        ...(normalization.global || {}),
+        timestamp: { timezone: advForm.timezone },
+        datetime: { timezone: advForm.timezone },
+      };
+    }
+    if (Object.keys(normalization).length) {
+      hints.normalization = normalization;
+    }
     return hints;
+  }
+
+  // 只序列化当前模式对应的资源：服务端 resource() 优先使用 query，
+  // 同时写入 table 和 query 会让旧 SQL 悄悄覆盖用户刚选择的表。
+  function buildResource(side) {
+    const form = planForm[side];
+    const resource = {
+      type: form.type,
+      datasourceId: form.datasourceId || undefined,
+      database: form.database || undefined,
+    };
+    if (form.mode === "sql") {
+      resource.query = form.query.trim() || undefined;
+    } else {
+      resource.table = form.table.trim() || undefined;
+    }
+    return resource;
   }
 
   function buildConfig() {
     const config = {
       version: "1.0",
       goal: planForm.goal,
-      source: {
-        type: planForm.source.type,
-        table: planForm.source.table.trim() || undefined,
-        query: planForm.source.query.trim() || undefined,
-        datasourceId: planForm.source.datasourceId || undefined,
-        database: planForm.source.database || undefined,
-      },
-      target: {
-        type: planForm.target.type,
-        table: planForm.target.table.trim() || undefined,
-        query: planForm.target.query.trim() || undefined,
-        datasourceId: planForm.target.datasourceId || undefined,
-        database: planForm.target.database || undefined,
-      },
+      source: buildResource("source"),
+      target: buildResource("target"),
       keys: compareForm.keyMappings.map((m) => m.source).filter(Boolean),
       comparison: {},
       executionOptions: {
@@ -57,6 +81,7 @@ export function useDefinitionConfig({
         checksumAlgorithm: advForm.algorithm,
         localCompareMode: advForm.localCompareMode,
         validateUniqueKeys: advForm.validateUniqueKeys,
+        allowNullableKeys: advForm.allowNullableKeys,
         maxDifferences: advForm.maxDifferences || undefined,
         batchSize: advForm.batchSize,
       },
@@ -73,6 +98,7 @@ export function useDefinitionConfig({
       config.properties = platformProperties();
     }
     const hints = buildHints();
+    if (hints.normalization) config.normalization = hints.normalization;
     if (hints.keyMappings) config.comparison.keyMappings = hints.keyMappings;
     if (hints.ignoreColumns) config.comparison.ignoreColumns = hints.ignoreColumns;
     if (Array.isArray(hints.compareColumns)) {
@@ -93,16 +119,18 @@ export function useDefinitionConfig({
     }
   });
 
+  function resourceLabel(side) {
+    const form = planForm[side];
+    if (form.mode === "sql") {
+      return form.query.trim() ? `SQL · ${form.query.trim()}` : "SQL · (未填写查询)";
+    }
+    return `${form.type} · ${form.table || "(未选择表)"}`;
+  }
+
   const summary = computed(() => [
     { label: "目标描述", value: planForm.goal },
-    {
-      label: "源端",
-      value: `${planForm.source.type} · ${planForm.source.table || "(自定义查询)"}`,
-    },
-    {
-      label: "目标端",
-      value: `${planForm.target.type} · ${planForm.target.table || "(自定义查询)"}`,
-    },
+    { label: "源端", value: resourceLabel("source") },
+    { label: "目标端", value: resourceLabel("target") },
     { label: "主键列", value: compareForm.keyMappings.filter((m) => m.source).map((m) => m.source).join(", ") || "-" },
     { label: "超时时间", value: `${runForm.timeoutMs} ms` },
     { label: "试运行", value: runForm.dryRun ? "开启" : "关闭" },

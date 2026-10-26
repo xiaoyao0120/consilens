@@ -42,7 +42,10 @@ const { filtersActive, syncToUrl } = useListQuerySync(filters, pagination, {
   endTime: { parse: (v) => Number(v) || null, serialize: String },
 });
 
+let loadSeq = 0;
+
 async function loadData() {
+  const seq = ++loadSeq;
   loading.value = true;
   loadError.value = false;
   syncToUrl();
@@ -55,15 +58,19 @@ async function loadData() {
         endTime: filters.endTime,
       })
     );
+    if (seq !== loadSeq) return;
     data.total = result.total;
     data.items = result.items || [];
     pagination.itemCount = result.total;
   } catch {
+    if (seq !== loadSeq) return;
     loadError.value = true;
     data.items = [];
     pagination.itemCount = 0;
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) {
+      loading.value = false;
+    }
   }
 }
 
@@ -84,6 +91,7 @@ const columns = [
   {
     title: "Artifact ID",
     key: "id",
+    ellipsis: { tooltip: true },
     render: (row) =>
       h(
         "a",

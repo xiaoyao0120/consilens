@@ -78,6 +78,18 @@ class DiffServiceTest {
     }
 
     @Test
+    void shouldFailWhenRuntimeReturnsNoStatistics() {
+        DiffResult noStats = DiffResult.builder()
+                .differences(List.of(DiffRow.removed(List.of(1), List.of("Alice"), List.of("name"))))
+                .build();
+        TestableDiffService service = new TestableDiffService(new RecordingLifecycle(false), request -> noStats);
+
+        Exception exception = assertThrows(Exception.class, () -> service.performDiff(createConfig()));
+
+        assertTrue(exception.getMessage().contains("no statistics"), exception.getMessage());
+    }
+
+    @Test
     void shouldNotParseCustomSqlAsTablePathInDiffContext() {
         TestableDiffService service = new TestableDiffService(new RecordingLifecycle(false), request -> DiffResult.empty(
                 com.consilens.connector.api.model.TablePath.of("source_table"),

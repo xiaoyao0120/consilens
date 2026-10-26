@@ -437,12 +437,21 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
                 columnTypes1, columnTypes2);
         String t1KeysNull = buildKeysNullExpression(alias1, keyColumns1);
         String t2KeysNull = buildKeysNullExpression(alias2, keyColumns2);
-        // NULL 键语义：两侧键都为 NULL 的"匹配对"归一化后相等，应按普通行比较，
-        // 而不是被 IS NULL 归因成同时 SM+TM（旧写法对 NULL 键行恒误报）。
-        String rowMatched = "((" + t1KeysNull + " AND " + t2KeysNull + ")"
-                + " OR (NOT (" + t1KeysNull + ") AND NOT (" + t2KeysNull + ")))";
-        String sourceMissing = "(" + t1KeysNull + " AND NOT (" + t2KeysNull + "))";
-        String targetMissing = "(" + t2KeysNull + " AND NOT (" + t1KeysNull + "))";
+        // NULL 键语义：归一化 join 把 NULL 与 ''/空白都映射成同一个键，因此"存在性"必须
+        // 用归一化后的等值判断，而不是裸 IS NULL —— 否则 t1(key=NULL) 与 t2(key='')
+        // 明明 join 上了，却被归因成 source_missing，真实值差异也随之漏报。
+        String normalizedKeyEqual = buildNormalizedKeyEquality(alias1, keyColumns1, alias2, keyColumns2,
+                columnTypes1, columnTypes2);
+        String rowMatched = normalizedKeyEqual != null
+                ? "(" + normalizedKeyEqual + " OR (" + t1KeysNull + " AND " + t2KeysNull + "))"
+                : "((" + t1KeysNull + " AND " + t2KeysNull + ")"
+                        + " OR (NOT (" + t1KeysNull + ") AND NOT (" + t2KeysNull + ")))";
+        String sourceMissing = normalizedKeyEqual != null
+                ? "(" + t1KeysNull + " AND NOT (" + t2KeysNull + ") AND NOT (" + normalizedKeyEqual + "))"
+                : "(" + t1KeysNull + " AND NOT (" + t2KeysNull + "))";
+        String targetMissing = normalizedKeyEqual != null
+                ? "(" + t2KeysNull + " AND NOT (" + t1KeysNull + ") AND NOT (" + normalizedKeyEqual + "))"
+                : "(" + t2KeysNull + " AND NOT (" + t1KeysNull + "))";
 
         // 列形状契约：调用方按 (source_count, target_count, source_missing, target_missing,
         // mismatch) 五列读取（JoinDiffer.collectStatistics / JoinPerformanceMonitor
@@ -522,25 +531,45 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
                 columnTypes1, columnTypes2);
         String diffPredicate = buildDiffPredicate(alias1, alias2, compareColumns1, compareColumns2,
                 columnTypes1, columnTypes2);
-        String diffColumns = buildDiffColumnsExpression(alias1, alias2, compareColumns1, compareColumns2,
-                columnTypes1, columnTypes2);
+        // 两侧列名可能不同（如 source.id / target.uid），差异列清单必须按各自侧命名，
+        // 否则 changedColumns2 会显示成 source 的列名，前端"目标侧变更列"全是错的。
+        String diffColumns1 = buildDiffColumnsExpression(alias1, alias2, compareColumns1, compareColumns2,
+                columnTypes1, columnTypes2, compareColumns1);
+        String diffColumns2 = buildDiffColumnsExpression(alias1, alias2, compareColumns1, compareColumns2,
+                columnTypes1, columnTypes2, compareColumns2);
         String t1KeysNull = buildKeysNullExpression(alias1, keyColumns1);
         String t2KeysNull = buildKeysNullExpression(alias2, keyColumns2);
-        // NULL 键语义见 buildJoinCondition：两侧键都为 NULL 的"匹配对"按普通行比较；
-        // 只有"恰好一侧键为 NULL"才是 SM/TM（另一侧行不存在）。
-        String onlyT1Null = "(" + t1KeysNull + " AND NOT (" + t2KeysNull + "))";
-        String onlyT2Null = "(" + t2KeysNull + " AND NOT (" + t1KeysNull + "))";
-        String rowMatched = "((" + t1KeysNull + " AND " + t2KeysNull + ")"
-                + " OR (NOT (" + t1KeysNull + ") AND NOT (" + t2KeysNull + ")))";
+        // 归一化 join 下 NULL 与 '' 等价，存在性判断同样用归一化等值，避免把已匹配的行
+        // 标成 SM/TM（统计与明细必须同一口径，否则页面上"缺失"和"差异"对不上）。
+        String normalizedKeyEqual = buildNormalizedKeyEquality(alias1, keyColumns1, alias2, keyColumns2,
+                columnTypes1, columnTypes2);
+        // 三值逻辑安全：键为 NULL 时 normalizedKeyEqual 可能是 UNKNOWN。
+        // 直接写 NOT(normalizedKeyEqual) 会得到 UNKNOWN，导致 FULL OUTER JOIN 的
+        // source_missing/target_missing 分支不命中（OceanBase 复合键 + NULL 键实测漏报）。
+        // 用 CASE 把 UNKNOWN 归入 false，保证“对侧缺行”始终可判定。
+        String normalizedKeyTrue = normalizedKeyEqual != null
+                ? "(CASE WHEN " + normalizedKeyEqual + " THEN 1 ELSE 0 END = 1)" : null;
+        String normalizedKeyFalse = normalizedKeyEqual != null
+                ? "(CASE WHEN " + normalizedKeyEqual + " THEN 1 ELSE 0 END = 0)" : null;
+        String onlyT1Null = normalizedKeyEqual != null
+                ? "(" + t1KeysNull + " AND NOT (" + t2KeysNull + ") AND " + normalizedKeyFalse + ")"
+                : "(" + t1KeysNull + " AND NOT (" + t2KeysNull + "))";
+        String onlyT2Null = normalizedKeyEqual != null
+                ? "(" + t2KeysNull + " AND NOT (" + t1KeysNull + ") AND " + normalizedKeyFalse + ")"
+                : "(" + t2KeysNull + " AND NOT (" + t1KeysNull + "))";
+        String rowMatched = normalizedKeyEqual != null
+                ? "(" + normalizedKeyTrue + " OR (" + t1KeysNull + " AND " + t2KeysNull + "))"
+                : "((" + t1KeysNull + " AND " + t2KeysNull + ")"
+                        + " OR (NOT (" + t1KeysNull + ") AND NOT (" + t2KeysNull + ")))";
 
         if (capabilityProvider.supportsFeature(DatabaseFeature.FULL_OUTER_JOIN)) {
             List<String> selectExprs = new java.util.ArrayList<>();
             selectExprs.add("CASE WHEN " + onlyT1Null + " THEN 'source_missing' " +
                     "WHEN " + onlyT2Null + " THEN 'target_missing' ELSE 'mismatch' END AS nl_dq_diff_type");
             selectExprs.add("CASE WHEN " + onlyT1Null + " OR " + onlyT2Null + " THEN NULL ELSE "
-                    + diffColumns + " END AS nl_dq_diff_columns1");
+                    + diffColumns1 + " END AS nl_dq_diff_columns1");
             selectExprs.add("CASE WHEN " + onlyT1Null + " OR " + onlyT2Null + " THEN NULL ELSE "
-                    + diffColumns + " END AS nl_dq_diff_columns2");
+                    + diffColumns2 + " END AS nl_dq_diff_columns2");
             selectExprs.addAll(buildOutputSelect(alias1, outputColumns1, "_1"));
             selectExprs.addAll(buildOutputSelect(alias2, outputColumns2, "_2"));
 
@@ -555,7 +584,7 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
         }
 
         String mismatchSelect = buildMismatchSelect(t1, t2, alias1, alias2,
-                outputColumns1, outputColumns2, diffPredicate, joinCondition, diffColumns);
+                outputColumns1, outputColumns2, diffPredicate, joinCondition, diffColumns1, diffColumns2);
         String sourceMissingSelect = buildMissingSelect("source_missing", t2, t1, alias2, alias1,
                 outputColumns2, outputColumns1, t1KeysNull, t2KeysNull, joinCondition, false);
         String targetMissingSelect = buildMissingSelect("target_missing", t1, t2, alias1, alias2,
@@ -674,6 +703,36 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
         return "(" + expr + ")";
     }
 
+    /**
+     * 归一化键等值：与 {@link #buildJoinCondition} 完全同口径（方言 normalizeExpression +
+     * binarySafe）。任一侧缺少类型信息时返回 null，调用方回退到旧的存在性判断。
+     */
+    private String buildNormalizedKeyEquality(String alias1, List<String> keyColumns1,
+            String alias2, List<String> keyColumns2,
+            Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2) {
+        if (columnTypes1 == null || columnTypes2 == null
+                || columnTypes1.isEmpty() || columnTypes2.isEmpty()) {
+            return null;
+        }
+        StringBuilder equality = new StringBuilder();
+        for (int i = 0; i < keyColumns1.size(); i++) {
+            String col1 = keyColumns1.get(i);
+            String col2 = keyColumns2.size() > i ? keyColumns2.get(i) : col1;
+            DataType type1 = typeOf(columnTypes1, col1);
+            DataType type2 = typeOf(columnTypes2, col2);
+            if (type1 == null || type2 == null) {
+                return null;
+            }
+            if (i > 0) {
+                equality.append(" AND ");
+            }
+            equality.append(binarySafeExpression(compareExpression(alias1, col1, type1)))
+                    .append(" = ")
+                    .append(binarySafeExpression(compareExpression(alias2, col2, type2)));
+        }
+        return equality.toString();
+    }
+
     protected String buildNullSafeNotEquals(String left, String right) {
         return "((" + left + " IS NOT NULL AND " + right + " IS NOT NULL AND " + left + " <> " + right + ")"
                 + " OR (" + left + " IS NULL AND " + right + " IS NOT NULL)"
@@ -691,6 +750,21 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
      */
     protected String stringJoin(String separator, List<String> args) {
         return "CONCAT_WS(" + separator + ", " + String.join(", ", args) + ")";
+    }
+
+    /**
+     * 转义行哈希 / pk_key 拼接值中的分隔符。
+     *
+     * <p>归一化后的列值以 {@code '|'} 拼接；若值本身含 {@code '|'}，相邻列可以重新切分，
+     * 例如 {@code ('a|b','c')} 与 {@code ('a','b|c')} 会拼成同一个字符串、得到同一个
+     * row_checksum，导致整段校验和相等而静默漏报。把值内的 {@code '|'} 双写后，拼接串
+     * 可以唯一解码（{@code '||'} 是字面量，单个 {@code '|'} 是分隔符）。
+     *
+     * <p>归一化表达式本身已是字符串（numeric/temporal 的归一化也会 CAST/TO_CHAR），
+     * 因此这里的 REPLACE 不需要额外的类型转换。各方言生成器必须使用同一规则。
+     */
+    protected String escapeHashValue(String normalizedExpr) {
+        return "REPLACE(" + normalizedExpr + ", '|', '||')";
     }
 
     /**
@@ -739,6 +813,23 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
         return columnTypes.get(column);
     }
 
+    /**
+     * 比较列数必须一致：按 {@code Math.min} 静默截断会让多出来的列完全不参与比较（漏报），
+     * 按 max 又会把不存在的列当成 NULL。列映射错误应当显式失败。
+     */
+    private int comparedColumnCount(List<String> compareColumns1, List<String> compareColumns2) {
+        if (compareColumns2 == null) {
+            return compareColumns1.size();
+        }
+        if (compareColumns1.size() != compareColumns2.size()) {
+            throw new IllegalArgumentException(String.format(
+                "Compare column count mismatch: source=%d %s, target=%d %s",
+                compareColumns1.size(), compareColumns1,
+                compareColumns2.size(), compareColumns2));
+        }
+        return compareColumns1.size();
+    }
+
     protected String buildDiffColumnsExpression(String alias1, String alias2,
             List<String> compareColumns1, List<String> compareColumns2) {
         return buildDiffColumnsExpression(alias1, alias2, compareColumns1, compareColumns2, null, null);
@@ -747,19 +838,32 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
     protected String buildDiffColumnsExpression(String alias1, String alias2,
             List<String> compareColumns1, List<String> compareColumns2,
             Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2) {
+        return buildDiffColumnsExpression(alias1, alias2, compareColumns1, compareColumns2,
+                columnTypes1, columnTypes2, compareColumns1);
+    }
+
+    /**
+     * @param reportedNames 输出差异列清单时使用的列名（按侧传入，允许两侧列名不同）
+     */
+    protected String buildDiffColumnsExpression(String alias1, String alias2,
+            List<String> compareColumns1, List<String> compareColumns2,
+            Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2,
+            List<String> reportedNames) {
         if (compareColumns1 == null || compareColumns1.isEmpty()) {
             return "'[]'";
         }
-        int count = Math.min(compareColumns1.size(),
-                compareColumns2 != null ? compareColumns2.size() : compareColumns1.size());
+        int count = comparedColumnCount(compareColumns1, compareColumns2);
         List<String> caseExprs = new java.util.ArrayList<>();
         for (int i = 0; i < count; i++) {
             String col1 = compareColumns1.get(i);
             String col2 = compareColumns2 != null && compareColumns2.size() > i ? compareColumns2.get(i) : col1;
             String e1 = binarySafeExpression(compareExpression(alias1, col1, typeOf(columnTypes1, col1)));
             String e2 = binarySafeExpression(compareExpression(alias2, col2, typeOf(columnTypes2, col2)));
+            String reported = reportedNames != null && reportedNames.size() > i ? reportedNames.get(i) : col1;
+            // 列名来自数据库元数据：既要按 JSON 规则转义（双引号/反斜杠），
+            // 再按方言转义成 SQL 字符串字面量，否则含引号的列名会破坏查询。
             caseExprs.add("CASE WHEN " + buildNullSafeNotEquals(e1, e2)
-                    + " THEN '\"" + col1 + "\"' ELSE NULL END");
+                    + " THEN " + formatValue(jsonString(reported)) + " ELSE NULL END");
         }
         // Wrap with CONCAT('[', ..., ']') to produce a JSON-like array string
         List<String> joinArgs = new java.util.ArrayList<>();
@@ -767,6 +871,39 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
         joinArgs.addAll(caseExprs);
         joinArgs.add("']'");
         return stringJoin("', '", joinArgs);
+    }
+
+    /** JSON 字符串字面量（不含外层 SQL 引号），用于把列名安全地拼进差异列数组。 */
+    private String jsonString(String value) {
+        StringBuilder escaped = new StringBuilder(value.length() + 2);
+        escaped.append('"');
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"':
+                    escaped.append("\\\"");
+                    break;
+                case '\\':
+                    escaped.append("\\\\");
+                    break;
+                case '\n':
+                    escaped.append("\\n");
+                    break;
+                case '\r':
+                    escaped.append("\\r");
+                    break;
+                case '\t':
+                    escaped.append("\\t");
+                    break;
+                default:
+                    if (c < 0x20) {
+                        escaped.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        escaped.append(c);
+                    }
+            }
+        }
+        return escaped.append('"').toString();
     }
 
     protected String buildDiffPredicate(String alias1, String alias2,
@@ -780,8 +917,7 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
         if (compareColumns1 == null || compareColumns1.isEmpty()) {
             return "1=0";
         }
-        int count = Math.min(compareColumns1.size(),
-                compareColumns2 != null ? compareColumns2.size() : compareColumns1.size());
+        int count = comparedColumnCount(compareColumns1, compareColumns2);
         StringBuilder predicate = new StringBuilder();
         for (int i = 0; i < count; i++) {
             if (i > 0) {
@@ -802,9 +938,14 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
             return selectExprs;
         }
         for (String col : outputColumns) {
-            selectExprs.add(columnRef(alias, col) + " AS " + col + suffix);
+            selectExprs.add(columnRef(alias, col) + " AS " + outputAlias(col, suffix));
         }
         return selectExprs;
+    }
+
+    /** 输出别名同样来自列名，必须按方言引用，避免空格/引号列名生成非法 SQL。 */
+    private String outputAlias(String column, String suffix) {
+        return capabilityProvider.quote(column + suffix);
     }
 
     private String buildMismatchSelect(String t1, String t2, String alias1, String alias2,
@@ -813,16 +954,18 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
             String diffPredicate, String joinCondition) {
         return buildMismatchSelect(t1, t2, alias1, alias2, outputColumns1, outputColumns2,
                 diffPredicate, joinCondition,
+                buildDiffColumnsExpression(alias1, alias2, compareColumns1, compareColumns2),
                 buildDiffColumnsExpression(alias1, alias2, compareColumns1, compareColumns2));
     }
 
     private String buildMismatchSelect(String t1, String t2, String alias1, String alias2,
             List<String> outputColumns1, List<String> outputColumns2,
-            String diffPredicate, String joinCondition, String diffColumnsExpression) {
+            String diffPredicate, String joinCondition,
+            String diffColumnsExpression1, String diffColumnsExpression2) {
         List<String> selectExprs = new java.util.ArrayList<>();
         selectExprs.add("'" + "mismatch" + "' AS nl_dq_diff_type");
-        selectExprs.add(diffColumnsExpression + " AS nl_dq_diff_columns1");
-        selectExprs.add(diffColumnsExpression + " AS nl_dq_diff_columns2");
+        selectExprs.add(diffColumnsExpression1 + " AS nl_dq_diff_columns1");
+        selectExprs.add(diffColumnsExpression2 + " AS nl_dq_diff_columns2");
         selectExprs.addAll(buildOutputSelect(alias1, outputColumns1, "_1"));
         selectExprs.addAll(buildOutputSelect(alias2, outputColumns2, "_2"));
 
@@ -845,11 +988,11 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
         if (primaryIsTable1) {
             selectExprs.addAll(buildOutputSelect(primaryAlias, primaryColumns, "_1"));
             for (String col : otherColumns) {
-                selectExprs.add("NULL AS " + col + "_2");
+                selectExprs.add("NULL AS " + outputAlias(col, "_2"));
             }
         } else {
             for (String col : otherColumns) {
-                selectExprs.add("NULL AS " + col + "_1");
+                selectExprs.add("NULL AS " + outputAlias(col, "_1"));
             }
             selectExprs.addAll(buildOutputSelect(primaryAlias, primaryColumns, "_2"));
         }
@@ -892,6 +1035,10 @@ public abstract class BaseSqlQueryGenerator implements SqlQueryGenerator {
                     .map(pk -> formatValue(pk.get(0)))
                     .reduce((a, b) -> a + ", " + b)
                     .orElse("");
+            if (values.isEmpty()) {
+                // 全部 key 都是空列表时不能生成 `IN ()`（非法 SQL），交给调用方省略谓词。
+                return "";
+            }
             inClause.append(values).append(")");
             return inClause.toString();
         }

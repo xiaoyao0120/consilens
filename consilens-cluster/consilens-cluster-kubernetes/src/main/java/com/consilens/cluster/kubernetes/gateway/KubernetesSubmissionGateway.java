@@ -22,9 +22,33 @@ public interface KubernetesSubmissionGateway extends AutoCloseable {
     }
 
     /**
+     * 作业 Pod 的 stdout 尾部（用于回传 coordinator 摘要 JSON）。不可用或实现
+     * 不支持时返回 empty，调用方据此把统计标为 unavailable，而不是当成零差异。
+     */
+    default java.util.Optional<String> jobLogs(String namespace, String jobName) {
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * Job 失败时 Kubernetes 自己记录的原因：Job condition 的 reason/message
+     * 以及 Pod 容器的 waiting/terminated 状态。覆盖 coordinator 还没启动
+     * （镜像拉取、调度、OOM）因而没有日志可读的失败。
+     */
+    default java.util.Optional<String> jobFailureDetails(String namespace, String jobName) {
+        return java.util.Optional.empty();
+    }
+
+    /**
      * Deletes the Job (cascading to pods); idempotent.
      */
     default void deleteJob(String namespace, String jobName) {
+    }
+
+    /**
+     * Deletes the descriptor ConfigMap; idempotent. Called once the Job is in a
+     * terminal state (or killed) so descriptor data does not accumulate.
+     */
+    default void deleteConfigMap(String namespace, String configMapName) {
     }
 
     @Override

@@ -91,6 +91,7 @@ public class ArtifactRepositoryImpl implements ArtifactRepository {
                                 ArtifactEntity::getArtifactType,
                                 ArtifactEntity::getStorageUri,
                                 ArtifactEntity::getMetadataJson,
+                                ArtifactEntity::getDifferenceCount,
                                 ArtifactEntity::getCreatedAt)
                         .ge(ArtifactEntity::getCreatedAt, DbTimeSupport.toLocalDateTime(start)))
                 .stream()

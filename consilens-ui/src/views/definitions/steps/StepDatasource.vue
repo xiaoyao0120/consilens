@@ -81,6 +81,7 @@ const emit = defineEmits(["open-ds-modal", "datasource-change", "database-change
               :loading="planForm[side].databasesLoading"
               :disabled="!planForm[side].datasourceId"
               placeholder="选择数据库（用于连接 URL）"
+              @update:value="emit('database-change', side)"
             />
           </div>
           <div class="field">
@@ -135,11 +136,11 @@ const emit = defineEmits(["open-ds-modal", "datasource-change", "database-change
     color: var(--on-primary);
 
     &.source {
-      background: var(--primary);
+      background: var(--primary-solid);
     }
 
     &.target {
-      background: var(--success);
+      background: var(--success-solid);
     }
   }
 

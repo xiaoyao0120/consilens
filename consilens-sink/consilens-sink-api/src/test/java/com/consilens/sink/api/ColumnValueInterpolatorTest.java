@@ -2,9 +2,13 @@ package com.consilens.sink.api;
 
 import com.consilens.connector.api.model.TablePath;
 import com.consilens.core.diff.DiffResult;
+import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
 import com.consilens.sink.api.model.ColumnMapping;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -67,5 +71,26 @@ class ColumnValueInterpolatorTest {
         String resolved = ColumnValueInterpolator.resolveField(field, context, result);
 
         assertEquals("128", resolved);
+    }
+
+    @Test
+    void shouldProduceValidJsonForChangedColumnsWithControlCharacters() throws Exception {
+        ColumnMapping field = new ColumnMapping();
+        field.setName("changed");
+        field.setValue("${changedColumns1}");
+
+        DiffRow row = DiffRow.modified(List.of(1),
+                List.of("a"), List.of("b"),
+                List.of("line\nbreak", "quote\"x"),
+                List.of("line\nbreak", "quote\"x"),
+                List.of("line\nbreak", "quote\"x"),
+                List.of("line\nbreak", "quote\"x"));
+
+        String resolved = ColumnValueInterpolator.resolveField(field,
+                DiffContext.builder().taskId("task-json").build(), row);
+
+        var parsed = new ObjectMapper().readTree(resolved);
+        assertEquals("line\nbreak", parsed.get(0).asText());
+        assertEquals("quote\"x", parsed.get(1).asText());
     }
 }

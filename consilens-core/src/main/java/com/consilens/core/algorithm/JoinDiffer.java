@@ -5,6 +5,7 @@ import com.consilens.connector.api.DataTypeHandler;
 import com.consilens.connector.api.model.DataType;
 import com.consilens.connector.api.model.TableSchema;
 import com.consilens.core.segment.TableSegment;
+import com.consilens.core.segment.TableSegmenter;
 import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.diff.DiffOperation;
@@ -149,8 +150,204 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
                 });
     }
 
+    /**
+     * P2-2：join 不再对整表只发一条 SQL。根段先取边界，随后按并集键空间分段，
+     * 每段各发一条 join 查询；小表（低于 bisectionThreshold）保持单条 SQL。
+     */
     @Override
     protected CompletableFuture<Void> diffSegments(
+            TableSegment table1,
+            TableSegment table2,
+            InfoTreeRecorder infoTreeRecorder,
+            long maxRows,
+            int level) {
+
+        if (level == 0 && (!table1.isBounded() || !table2.isBounded())) {
+            return establishJoinBounds(table1, table2)
+                    .thenCompose(bounds -> bounds.bounded
+                            ? diffSegments(bounds.table1, bounds.table2, infoTreeRecorder, bounds.maxRows, 0)
+                            : diffSingleSegment(table1, table2, infoTreeRecorder, 0L, 0));
+        }
+        if (shouldSegmentJoin(table1, table2, level)) {
+            return segmentJoinAndDiff(table1, table2, infoTreeRecorder, maxRows, level);
+        }
+        return diffSingleSegment(table1, table2, infoTreeRecorder, maxRows, level);
+    }
+
+    // ------------------------------------------------------------------
+    // P2-2: join 分段
+    // ------------------------------------------------------------------
+
+    private static final int JOIN_MAX_DEPTH = 10;
+
+    /** 根段无边界时先取 count+min/max，再交给分段器（与 checksum 的根段处理一致）。 */
+    private CompletableFuture<JoinBounds> establishJoinBounds(TableSegment table1, TableSegment table2) {
+        return CompletableFuture.supplyAsync(() -> {
+            TableSegment.ChecksumResult bounds1;
+            TableSegment.ChecksumResult bounds2;
+            try {
+                bounds1 = table1.countAndBounds();
+                bounds2 = table2.countAndBounds();
+            } catch (RuntimeException e) {
+                // 方言不支持 count+min/max 时不强行分段：退回"单段一条 join"，行为与旧版一致。
+                log.warn("JoinDiff cannot establish key bounds; keeping single-pass join: {}", e.getMessage());
+                return JoinBounds.unbounded(table1, table2);
+            }
+            if (bounds1 == null || bounds2 == null) {
+                log.warn("JoinDiff key bounds unavailable; keeping single-pass join");
+                return JoinBounds.unbounded(table1, table2);
+            }
+            TableSegment bounded1 = withBounds(table1, bounds1.getMinKey(), bounds1.getMaxKey(), true);
+            TableSegment bounded2 = withBounds(table2, bounds2.getMinKey(), bounds2.getMaxKey(), true);
+            long maxRows = Math.max(bounds1.getCount(), bounds2.getCount());
+            log.info("JoinDiff bounds: table1 count={} min={} max={}, table2 count={} min={} max={}",
+                    bounds1.getCount(), bounds1.getMinKey(), bounds1.getMaxKey(),
+                    bounds2.getCount(), bounds2.getMinKey(), bounds2.getMaxKey());
+            return new JoinBounds(bounded1, bounded2, maxRows, true);
+        }, executorProvider.getIoExecutor());
+    }
+
+    private boolean shouldSegmentJoin(TableSegment table1, TableSegment table2, int level) {
+        if (!table1.isBounded() || !table2.isBounded()) {
+            return false;
+        }
+        int depthLimit = Math.min(JOIN_MAX_DEPTH, config.getMaxDepth() + 8);
+        if (level >= depthLimit) {
+            return false;
+        }
+        long rows = Math.max(segmentRows(table1), segmentRows(table2));
+        return rows > config.getBisectionThreshold();
+    }
+
+    private CompletableFuture<Void> segmentJoinAndDiff(TableSegment table1, TableSegment table2,
+            InfoTreeRecorder infoTreeRecorder, long maxRows, int level) {
+        TableSegment base = unionKeySpace(table1, table2);
+        int factor = Math.max(2, Math.min(config.getBisectionFactor(), 32));
+        TableSegmenter segmenter = new TableSegmenter(base.getDatabase(),
+                new TableSegmenter.SegmenterConfig(config.getBisectionThreshold(), 1000, factor),
+                executorProvider);
+        return segmenter.createOptimalSegments(base, factor, config.getBisectionThreshold())
+                .thenCompose(segments -> {
+                    if (segments == null || segments.size() <= 1) {
+                        return diffSingleSegment(table1, table2, infoTreeRecorder, maxRows, level);
+                    }
+                    log.info("JoinDiff segmenting {} <-> {} into {} slices at level {}",
+                            table1.getTablePath(), table2.getTablePath(), segments.size(), level);
+                    List<CompletableFuture<Void>> futures = new ArrayList<>(segments.size());
+                    long perSegmentRows = Math.max(1L, maxRows / segments.size());
+                    for (TableSegment slice : segments) {
+                        // 切片来自并集基座（table1 的副本）。两侧可能共用同一个 DatabaseAdapter
+                        // 实例，不能按 adapter 身份判断归属，否则会把 table1 的切片当成 table2，
+                        // 变成 table1 自连接。按表路径 + 过滤条件判断。
+                        TableSegment slice1 = sameSource(slice, table1)
+                                ? slice : withBounds(table1, slice.getMinKey().orElse(null),
+                                        slice.getMaxKey().orElse(null), slice.isUpperBoundInclusive());
+                        TableSegment slice2 = sameSource(slice, table2)
+                                ? slice : withBounds(table2, slice.getMinKey().orElse(null),
+                                        slice.getMaxKey().orElse(null), slice.isUpperBoundInclusive());
+                        futures.add(diffSegments(slice1, slice2, infoTreeRecorder, perSegmentRows, level + 1));
+                    }
+                    return CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
+                });
+    }
+
+    private static boolean sameSource(TableSegment slice, TableSegment table) {
+        return slice.getTablePath().equals(table.getTablePath())
+                && slice.getWhereClause().equals(table.getWhereClause());
+    }
+
+    private static TableSegment withBounds(TableSegment segment, List<Object> minKey, List<Object> maxKey,
+            boolean upperInclusive) {
+        return segment.toBuilder()
+                .minKey(Optional.ofNullable(minKey))
+                .maxKey(Optional.ofNullable(maxKey))
+                .upperBoundInclusive(upperInclusive)
+                .build();
+    }
+
+    /** 分段基座：两侧键范围的分量级并集，保证任一侧的行都落在某个分段内。 */
+    private static TableSegment unionKeySpace(TableSegment table1, TableSegment table2) {
+        List<Object> min1 = table1.getMinKey().orElse(null);
+        List<Object> min2 = table2.getMinKey().orElse(null);
+        List<Object> max1 = table1.getMaxKey().orElse(null);
+        List<Object> max2 = table2.getMaxKey().orElse(null);
+        List<Object> unionMin = componentExtreme(min1, min2, true);
+        List<Object> unionMax = componentExtreme(max1, max2, false);
+        return table1.toBuilder()
+                .minKey(Optional.ofNullable(unionMin))
+                .maxKey(Optional.ofNullable(unionMax))
+                .upperBoundInclusive(true)
+                .build();
+    }
+
+    static List<Object> componentExtreme(List<Object> left, List<Object> right, boolean wantMin) {
+        if (left == null) {
+            return right;
+        }
+        if (right == null) {
+            return left;
+        }
+        int dimensions = Math.min(left.size(), right.size());
+        List<Object> result = new ArrayList<>(Math.max(left.size(), right.size()));
+        for (int i = 0; i < Math.max(left.size(), right.size()); i++) {
+            Object l = i < left.size() ? left.get(i) : null;
+            Object r = i < right.size() ? right.get(i) : null;
+            if (l == null || r == null) {
+                // NULL 是最小值：求并集下界时任一列为 NULL 就必须保留 NULL，
+                // 否则会从所有分段中漏掉该侧 NULL 键行；上界则取非 NULL 的一侧。
+                result.add(wantMin ? null : (l != null ? l : r));
+                continue;
+            }
+            int cmp = compareKeyValues(l, r);
+            result.add(wantMin ? (cmp <= 0 ? l : r) : (cmp >= 0 ? l : r));
+        }
+        return result;
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static int compareKeyValues(Object left, Object right) {
+        if (left instanceof Number && right instanceof Number) {
+            return new java.math.BigDecimal(left.toString()).compareTo(new java.math.BigDecimal(right.toString()));
+        }
+        if (left.getClass().equals(right.getClass()) && left instanceof Comparable) {
+            return ((Comparable) left).compareTo(right);
+        }
+        return String.valueOf(left).compareTo(String.valueOf(right));
+    }
+
+    private long segmentRows(TableSegment segment) {
+        long size = segment.approximateSize();
+        if (size >= 0) {
+            return size;
+        }
+        try {
+            return segment.count();
+        } catch (Exception e) {
+            log.debug("Failed to estimate join segment rows for {}, assuming threshold", segment.getTablePath(), e);
+            return config.getBisectionThreshold();
+        }
+    }
+
+    private static final class JoinBounds {
+        private final TableSegment table1;
+        private final TableSegment table2;
+        private final long maxRows;
+        /** false 表示边界不可得，调用方必须直接走单段 join，不能再次进入本方法（否则递归）。 */
+        private final boolean bounded;
+
+        private JoinBounds(TableSegment table1, TableSegment table2, long maxRows, boolean bounded) {
+            this.table1 = table1;
+            this.table2 = table2;
+            this.maxRows = maxRows;
+            this.bounded = bounded;
+        }
+
+        private static JoinBounds unbounded(TableSegment table1, TableSegment table2) {
+            return new JoinBounds(table1, table2, 0L, false);
+        }
+    }
+
+    private CompletableFuture<Void> diffSingleSegment(
             TableSegment table1,
             TableSegment table2,
             InfoTreeRecorder infoTreeRecorder,
@@ -235,26 +432,14 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
         String tableName1 = table1.getTablePath().getTableName();
         String schema2 = table2.getTablePath().getSchema().orElse(null);
         String tableName2 = table2.getTablePath().getTableName();
-        String where1 = table1.buildWhereClause();
-        String where2 = table2.buildWhereClause();
         Map<String, DataType> types1 = extractColumnTypes(table1);
         Map<String, DataType> types2 = extractColumnTypes(table2);
 
-        // 每个谓词的外层限定名 = **被过滤行所在侧**的表名：本侧重复键判定与"对侧键是否重复"
-        // 都要针对本侧的行来求值（跨表谓词的子查询查对侧表，外层引用本侧列）。
-        return new DupKeySplit(true, false, where1, where2,
-                generator.getKeyMultiplicityFilterSQL(schema1, tableName1, table1.getKeyColumns(), types1,
-                        where1, false, tableName1),
-                generator.getKeyMultiplicityFilterSQL(schema2, tableName2, table2.getKeyColumns(), types2,
-                        where2, false, tableName2),
-                generator.getKeyMultiplicityFilterSQL(schema1, tableName1, table1.getKeyColumns(), types1,
-                        where1, true, tableName1),
-                generator.getKeyMultiplicityFilterSQL(schema2, tableName2, table2.getKeyColumns(), types2,
-                        where2, true, tableName2),
-                generator.getKeyMultiplicityFilterSQL(schema2, tableName2, table2.getKeyColumns(), types2,
-                        where2, true, tableName1),
-                generator.getKeyMultiplicityFilterSQL(schema1, tableName1, table1.getKeyColumns(), types1,
-                        where1, true, tableName2));
+        // 谓词不能在这里一次性生成：分段后每段的键范围不同，且 join 会把 where 放进
+        // 带别名的派生表。DupKeySplit 保留表/键/类型元数据，按当前 segment 现算。
+        return new DupKeySplit(true, false, database,
+                schema1, tableName1, table1.getKeyColumns(), types1,
+                schema2, tableName2, table2.getKeyColumns(), types2);
     }
 
     /**
@@ -350,57 +535,48 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
     /**
      * 开放档下重复键的划分谓词。
      *
-     * <p>字段按构造器参数出现顺序：
-     * <ol>
-     *   <li>{@code duplicates}：两侧是否存在重复键，需要走多重集配对；</li>
-     *   <li>{@code localOnly}：方言不支持键多重性过滤器，整表本地多重集配对（不做 SQL join）；</li>
-     *   <li>{@code where1}：表1 的基础过滤条件；</li>
-     *   <li>{@code where2}：表2 的基础过滤条件；</li>
-     *   <li>{@code unique1}：表1 中"本侧键唯一"的行谓词；</li>
-     *   <li>{@code unique2}：表2 中"本侧键唯一"的行谓词；</li>
-     *   <li>{@code dup1}：表1 中"本侧键重复"的行谓词；</li>
-     *   <li>{@code dup2}：表2 中"本侧键重复"的行谓词；</li>
-     *   <li>{@code otherDupFor1}：对侧键重复、但外层限定为表1 的过滤谓词；</li>
-     *   <li>{@code otherDupFor2}：对侧键重复、但外层限定为表2 的过滤谓词。</li>
-     * </ol>
+     * <p>只保留表/键/类型元数据；多重性谓词在 {@link #joinWhere}/{@link #dupFetchWhere}
+     * 中按当前 segment 的键范围现算，避免分段后仍用根段的全表条件。
      */
     private static final class DupKeySplit {
         private final boolean duplicates;
         /** 方言不支持键多重性过滤器：整表走本地多重集配对（不做 SQL join）。 */
         private final boolean localOnly;
-        private final String where1;
-        private final String where2;
-        /** 本侧键唯一 / 本侧键重复（外层限定=本侧表名）。 */
-        private final String unique1;
-        private final String unique2;
-        private final String dup1;
-        private final String dup2;
-        /** 对侧键重复，但外层限定=本侧表名（用于过滤本侧行）。 */
-        private final String otherDupFor1;
-        private final String otherDupFor2;
+        private final DatabaseAdapter database;
+        private final String schema1;
+        private final String tableName1;
+        private final List<String> keys1;
+        private final Map<String, DataType> types1;
+        private final String schema2;
+        private final String tableName2;
+        private final List<String> keys2;
+        private final Map<String, DataType> types2;
 
-        private DupKeySplit(boolean duplicates, boolean localOnly, String where1, String where2,
-                String unique1, String unique2, String dup1, String dup2,
-                String otherDupFor1, String otherDupFor2) {
+        private DupKeySplit(boolean duplicates, boolean localOnly, DatabaseAdapter database,
+                String schema1, String tableName1, List<String> keys1, Map<String, DataType> types1,
+                String schema2, String tableName2, List<String> keys2, Map<String, DataType> types2) {
             this.duplicates = duplicates;
             this.localOnly = localOnly;
-            this.where1 = where1;
-            this.where2 = where2;
-            this.unique1 = unique1;
-            this.unique2 = unique2;
-            this.dup1 = dup1;
-            this.dup2 = dup2;
-            this.otherDupFor1 = otherDupFor1;
-            this.otherDupFor2 = otherDupFor2;
+            this.database = database;
+            this.schema1 = schema1;
+            this.tableName1 = tableName1;
+            this.keys1 = keys1;
+            this.types1 = types1;
+            this.schema2 = schema2;
+            this.tableName2 = tableName2;
+            this.keys2 = keys2;
+            this.types2 = types2;
         }
 
         private static DupKeySplit none() {
-            return new DupKeySplit(false, false, null, null, null, null, null, null, null, null);
+            return new DupKeySplit(false, false, null,
+                    null, null, null, null, null, null, null, null);
         }
 
         /** 方言不支持过滤器时的划分（整表本地配对）。 */
         private static DupKeySplit localOnlySplit() {
-            return new DupKeySplit(true, true, null, null, null, null, null, null, null, null);
+            return new DupKeySplit(true, true, null,
+                    null, null, null, null, null, null, null, null);
         }
 
         private boolean hasDuplicates() {
@@ -413,24 +589,38 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
 
         /** join 的 where：本侧键唯一 且 对侧键不重复（对侧重复的键由多重集配对统一处理）。 */
         private String joinWhere(TableSegment table1, TableSegment table2, boolean side1) {
-            if (localOnly) {
-                return side1 ? table1.buildWhereClause() : table2.buildWhereClause();
+            String base = side1 ? table1.buildWhereClause() : table2.buildWhereClause();
+            if (localOnly || !duplicates) {
+                return base;
             }
-            if (!duplicates) {
-                return side1 ? table1.buildWhereClause() : table2.buildWhereClause();
-            }
-            String base = side1 ? where1 : where2;
-            String selfUnique = side1 ? unique1 : unique2;
-            String otherDup = side1 ? otherDupFor1 : otherDupFor2;
+            // 谓词按当前 segment 现算：必须包含本段键范围，否则每个分段都会扫全表并重复报差异
+            String selfUnique = multiplicityPredicate(side1, true, table1, table2, false);
+            String otherDup = multiplicityPredicate(side1, false, table1, table2, true);
             return combine(base, selfUnique, "NOT (" + otherDup + ")");
         }
 
         /** 多重集配对的行范围：本侧键重复 或 对侧键重复（对侧重复的键需要本侧行一起配对）。 */
         private String dupFetchWhere(TableSegment table1, TableSegment table2, boolean side1) {
-            String base = side1 ? where1 : where2;
-            String selfDup = side1 ? dup1 : dup2;
-            String otherDup = side1 ? otherDupFor1 : otherDupFor2;
+            String base = side1 ? table1.buildWhereClause() : table2.buildWhereClause();
+            String selfDup = multiplicityPredicate(side1, true, table1, table2, true);
+            String otherDup = multiplicityPredicate(side1, false, table1, table2, true);
             return combine(base, "(" + selfDup + " OR " + otherDup + ")");
+        }
+
+        /**
+         * @param self  true=检查本侧表的键重复；false=检查对侧表的键是否重复
+         * @param outerQualifier 外层行所属表名（本侧），与 where 所处的查询作用域一致
+         */
+        private String multiplicityPredicate(boolean side1, boolean self,
+                TableSegment table1, TableSegment table2, boolean duplicates) {
+            TableSegment inner = self ? (side1 ? table1 : table2) : (side1 ? table2 : table1);
+            String schema = self ? (side1 ? schema1 : schema2) : (side1 ? schema2 : schema1);
+            String tableName = self ? (side1 ? tableName1 : tableName2) : (side1 ? tableName2 : tableName1);
+            List<String> keys = self ? (side1 ? keys1 : keys2) : (side1 ? keys2 : keys1);
+            Map<String, DataType> types = self ? (side1 ? types1 : types2) : (side1 ? types2 : types1);
+            String outerQualifier = side1 ? tableName1 : tableName2;
+            return database.getSqlQueryGenerator().getKeyMultiplicityFilterSQL(
+                    schema, tableName, keys, types, inner.buildWhereClause(), duplicates, outerQualifier);
         }
 
         private static String combine(String... parts) {

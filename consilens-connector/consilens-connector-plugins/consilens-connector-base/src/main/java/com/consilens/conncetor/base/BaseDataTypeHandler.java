@@ -82,6 +82,14 @@ public class BaseDataTypeHandler implements DataTypeHandler {
         return rounding != null ? rounding : defaultRounding;
     }
 
+    /**
+     * 归一化规则里的比较模式（如 DATE_ONLY / TRUNCATE_TO_DAY / DATETIME）。
+     * 供方言 handler 决定同一物理类型在比较时按哪种形态渲染。
+     */
+    protected String getComparisonMode(String dataTypeName) {
+        return getRuleValue(dataTypeName, "getComparisonMode", String.class);
+    }
+
     protected String getTimezone(String dataTypeName, String defaultTimezone) {
         String timezone = getRuleValue(dataTypeName, "getTimezone", String.class);
         return timezone != null ? timezone : defaultTimezone;
@@ -93,7 +101,7 @@ public class BaseDataTypeHandler implements DataTypeHandler {
                                              String dateOnlyDefaultFormat,
                                              Set<String> allowedTokens) {
         String configuredFormat = getRuleValue(dataTypeName, "getFormat", String.class);
-        String comparisonMode = getRuleValue(dataTypeName, "getComparisonMode", String.class);
+        String comparisonMode = getComparisonMode(dataTypeName);
         boolean dateOnlyComparison = comparisonMode != null
                 && ("DATE_ONLY".equalsIgnoreCase(comparisonMode.trim())
                         || "TRUNCATE_TO_DAY".equalsIgnoreCase(comparisonMode.trim()));

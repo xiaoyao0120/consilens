@@ -99,14 +99,16 @@ public final class MultisetRowPairing {
         return outcome;
     }
 
-    /** 整行签名：规范化后的值按 {@code \u0001} 连接（与键归一化口径一致）。 */
+    /**
+     * 整行签名：每个规范化值用 {@code 长度:内容} 编码后串联。
+     * 不能用固定分隔符直接拼接——值本身含分隔符时不同行会得到相同签名，
+     * 重复键配对会把不相等的行误判为“相等抵消”。
+     */
     public static String signature(List<?> normalizedValues) {
         StringBuilder builder = new StringBuilder();
         for (Object value : normalizedValues) {
-            if (builder.length() > 0) {
-                builder.append('\u0001');
-            }
-            builder.append(value == null ? "" : value);
+            String text = value == null ? "" : String.valueOf(value);
+            builder.append(text.length()).append(':').append(text);
         }
         return builder.toString();
     }

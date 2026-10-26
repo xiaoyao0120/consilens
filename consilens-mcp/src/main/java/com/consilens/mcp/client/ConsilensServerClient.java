@@ -93,10 +93,15 @@ public class ConsilensServerClient {
     }
 
     private Map<String, Object> send(HttpRequest request) {
+        // 只有幂等请求可以安全重试；POST /v1/plan|validate|diagnose 等每次都会创建
+        // artifact，超时/5xx 后重发会产生重复工件。429 表示服务端未受理，可重试。
+        boolean idempotent = isIdempotent(request.method());
         for (int attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt++) {
             try {
                 HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-                if (isRetryableStatus(response.statusCode()) && attempt < MAX_RETRY_ATTEMPTS) {
+                boolean retryableStatus = isRetryableStatus(response.statusCode())
+                        && (idempotent || response.statusCode() == 429);
+                if (retryableStatus && attempt < MAX_RETRY_ATTEMPTS) {
                     waitBeforeRetry(attempt, request);
                     continue;
                 }
@@ -107,7 +112,7 @@ public class ConsilensServerClient {
                 }
                 return data(apiResponse);
             } catch (IOException exception) {
-                if (attempt < MAX_RETRY_ATTEMPTS) {
+                if (idempotent && attempt < MAX_RETRY_ATTEMPTS) {
                     waitBeforeRetry(attempt, request);
                     continue;
                 }
@@ -119,6 +124,10 @@ public class ConsilensServerClient {
             }
         }
         throw new IllegalStateException("Unreachable retry state");
+    }
+
+    private boolean isIdempotent(String method) {
+        return "GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method);
     }
 
     private ApiResponse readApiResponse(HttpResponse<String> response) {
@@ -219,6 +228,13 @@ public class ConsilensServerClient {
     private static URI requireValidBaseUri(URI serverBaseUri) {
         if (serverBaseUri == null || serverBaseUri.getScheme() == null || serverBaseUri.getHost() == null) {
             throw new IllegalArgumentException("Consilens server URL must include scheme and host");
+        }
+        String scheme = serverBaseUri.getScheme();
+        if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+            throw new IllegalArgumentException("Consilens server URL must use http or https");
+        }
+        if (serverBaseUri.getRawUserInfo() != null) {
+            throw new IllegalArgumentException("Consilens server URL must not embed credentials");
         }
         if (serverBaseUri.getRawQuery() != null || serverBaseUri.getRawFragment() != null) {
             throw new IllegalArgumentException("Consilens server URL must not include query or fragment");

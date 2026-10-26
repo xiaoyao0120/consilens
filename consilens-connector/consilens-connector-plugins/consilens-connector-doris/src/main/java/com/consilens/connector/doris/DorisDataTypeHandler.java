@@ -283,19 +283,26 @@ public class DorisDataTypeHandler extends BaseDataTypeHandler {
         // Get rounding config, default to true (round half up)
         boolean rounding = getRounding("float", true);
 
+        // 极端值（|v| > 1e10 或 0 < |v| < 1e-10）由调用方的科学计数分支渲染。
+        // Doris 会对 CASE 的两个分支做类型统一，即使外层选了科学计数，ELSE 里的
+        // DECIMAL(38, scale) 仍可能被求值；1e300 这类值直接溢出（Float64 -> Decimal(38,6)）。
+        // 这里先把极端值折成 NULL，保证 DECIMAL cast 永远不会看到溢出值。
+        String extreme = "(" + quotedCol + " IS NOT NULL AND (ABS(" + quotedCol + ") > 1e10"
+                + " OR (ABS(" + quotedCol + ") < 1e-10 AND " + quotedCol + " <> 0)))";
+        String safeCol = "CASE WHEN " + extreme + " THEN NULL ELSE " + quotedCol + " END";
+
         // If precision is 0, return integer format without decimal point
         if (precision == 0) {
             String roundFunction = rounding ? "ROUND" : "TRUNCATE";
-            return "COALESCE(TRIM(CAST(" + roundFunction + "(CAST(" + quotedCol + " AS DOUBLE), 0) AS CHAR)), '')";
+            return "COALESCE(TRIM(CAST(" + roundFunction + "(CAST(" + safeCol + " AS DOUBLE), 0) AS CHAR)), '')";
         }
-
 
         if (rounding) {
             // Round half up: ROUND first, then format
-            return "COALESCE(TRIM(CAST(CAST(ROUND(CAST(" + quotedCol + " AS DOUBLE), " + precision + ") AS DECIMAL(38, " + precision + ")) AS CHAR)), '')";
+            return "COALESCE(TRIM(CAST(CAST(ROUND(CAST(" + safeCol + " AS DOUBLE), " + precision + ") AS DECIMAL(38, " + precision + ")) AS CHAR)), '')";
         } else {
             // Truncate: TRUNCATE first, then format
-            return "COALESCE(TRIM(CAST(CAST(TRUNCATE(CAST(" + quotedCol + " AS DOUBLE), " + precision + ") AS DECIMAL(38, " + precision + ")) AS CHAR)), '')";
+            return "COALESCE(TRIM(CAST(CAST(TRUNCATE(CAST(" + safeCol + " AS DOUBLE), " + precision + ") AS DECIMAL(38, " + precision + ")) AS CHAR)), '')";
         }
     }
 

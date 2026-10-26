@@ -11,6 +11,8 @@ import com.consilens.core.segment.TableSegment;
 import com.consilens.core.util.ResourceManager;
 import lombok.extern.slf4j.Slf4j;
 
+import java.math.BigDecimal;
+
 import java.sql.*;
 import java.util.*;
 
@@ -355,7 +357,7 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
             return new TableSegment.ChecksumResult(rowCount, null, minKey, maxKey);
 
         } catch (Exception e) {
-            log.error("Error getting count and bounds for segment: {}", segment.getTablePath(), e);
+            log.error("Error getting count and bounds for segment {}: {}", segment.getTablePath(), e.getMessage());
             throw new RuntimeException("Count and bounds calculation failed", e);
         }
     }
@@ -416,9 +418,15 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
             List<Object[]> results = query(sql, Object[].class);
             if (!results.isEmpty()) {
                 Object[] row = results.get(0);
-                List<Object> keyValues = new ArrayList<>();
-                for (Object value : row) {
-                    keyValues.add(value);
+                List<String> keyColumns = segment.getKeyColumns();
+                Optional<TableSchema> schema = segment.getSchema();
+                List<Object> keyValues = new ArrayList<>(row.length);
+                for (int i = 0; i < row.length; i++) {
+                    DataType type = null;
+                    if (schema.isPresent() && i < keyColumns.size()) {
+                        type = schema.get().getColumnType(keyColumns.get(i));
+                    }
+                    keyValues.add(coerceBoundaryValue(row[i], type));
                 }
                 return keyValues;
             }
@@ -431,13 +439,55 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
                     return Collections.singletonList(singleResults.get(0));
                 }
             } catch (Exception e2) {
-                log.warn("Error getting min/max key values even with single column approach", e2);
+                log.warn("Error getting min/max key values even with single column approach: {}", e2.getMessage());
             }
         } catch (Exception e) {
-            log.warn("Error getting min/max key values", e);
+            log.warn("Error getting min/max key values: {}", e.getMessage());
         }
 
         return null;
+    }
+
+    /**
+     * 边界值统一成可比较的类型。
+     *
+     * <p>边界查询通过 {@code Object[]} 映射器读取，所有列都被 {@code rs.getString} 转成字符串
+     * （这是为了 BLOB/HEX 归一化值，见 {@code query(sql, Object[].class)}）。字符串边界的
+     * 字典序与数值序不同：{@code "9999" > "20000"}，会让并集上界变小、整段数据从未被扫描。
+     * 因此这里按键列类型把数值边界转成 {@link BigDecimal}，后续比较/格式化都按数值处理。
+     */
+    private static Object coerceBoundaryValue(Object value, DataType type) {
+        if (value == null || type == null || !isNumericType(type)) {
+            return value;
+        }
+        if (value instanceof BigDecimal) {
+            return value;
+        }
+        if (value instanceof Number) {
+            return new BigDecimal(value.toString());
+        }
+        try {
+            return new BigDecimal(value.toString().trim());
+        } catch (NumberFormatException e) {
+            return value;
+        }
+    }
+
+    private static boolean isNumericType(DataType dataType) {
+        switch (dataType) {
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+            case DECIMAL:
+            case NUMERIC:
+            case FLOAT:
+            case DOUBLE:
+            case REAL:
+                return true;
+            default:
+                return false;
+        }
     }
 
     private String appendNotNullKeys(List<String> keyColumns) {

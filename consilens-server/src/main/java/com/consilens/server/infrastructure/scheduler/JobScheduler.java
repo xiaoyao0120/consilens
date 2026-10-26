@@ -101,7 +101,8 @@ public class JobScheduler extends Thread {
                         runTaskExecuteManager.addExecuteCommand(claimedCommand);
                         commandSubmitted = true;
                         log.info("submit success, run task command : {}", claimedCommand.getCommandKey());
-                        taskCommandRepository.markDone(claimedCommand.getId(), Instant.now());
+                        // 命令由执行线程在任务置为 RUNNING 后标 DONE；这里提前标记
+                        // 会在两步之间进程退出时留下永久 PENDING 的任务。
                     }
                     sleepMillis(properties.getScheduler().getCommandPollIntervalMs());
                 } else {

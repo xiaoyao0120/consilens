@@ -29,4 +29,7 @@ public class ComparisonConfig {
     /** One-to-one source→target primary-key mappings (when key names differ). */
     @Builder.Default
     private List<FieldMapping> keyMappings = new ArrayList<>();
+
+    /** Type-level normalization shared by both sides (CLI-compatible shape). */
+    private NormalizationConfig normalization;
 }

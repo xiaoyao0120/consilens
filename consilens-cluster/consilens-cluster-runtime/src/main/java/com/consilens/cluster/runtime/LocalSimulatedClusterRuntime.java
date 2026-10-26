@@ -15,12 +15,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * In-process implementation of the Coordinator/Worker protocol used by Phase 0.
  *
- * <p>Tasks are intentionally executed in input order. This keeps retry and manifest
- * behavior deterministic while the production YARN and Kubernetes backends do not exist.
+ * <p>任务结果始终按输入顺序合并（与并行度无关），保证 manifest 与差异顺序确定；
+ * 并行度取 {@code ClusterExecutionSpec.parallelism}，默认按段数与本机核数取较小值。
+ * 生产 YARN / Kubernetes 后端尚不存在，这里的并行只覆盖 in-process 模式。
  */
 public class LocalSimulatedClusterRuntime {
 
@@ -40,14 +45,21 @@ public class LocalSimulatedClusterRuntime {
         validateRequest(request);
 
         int maximumAttempts = maximumAttempts(request.getExecutionSpec());
+        List<LocalSplitTask> tasks = request.getSplitTasks();
+        int parallelism = parallelism(request, tasks.size());
         List<SplitAttemptRecord> attemptRecords = new ArrayList<>();
         List<DiffResult> successfulResults = new ArrayList<>();
         LinkedHashSet<String> successfulSplitIds = new LinkedHashSet<>();
 
-        for (LocalSplitTask task : request.getSplitTasks()) {
-            DiffResult successfulResult = executeSplit(task, maximumAttempts, attemptRecords);
-            successfulResults.add(successfulResult);
-            successfulSplitIds.add(task.getSplitId());
+        if (parallelism <= 1 || tasks.size() <= 1) {
+            for (LocalSplitTask task : tasks) {
+                DiffResult successfulResult = executeSplit(task, maximumAttempts, attemptRecords);
+                successfulResults.add(successfulResult);
+                successfulSplitIds.add(task.getSplitId());
+            }
+        } else {
+            executeInParallel(tasks, maximumAttempts, parallelism,
+                    attemptRecords, successfulResults, successfulSplitIds);
         }
 
         DiffResult mergedResult = mergeSuccessfulResults(successfulResults);
@@ -73,6 +85,70 @@ public class LocalSimulatedClusterRuntime {
                 .manifestPath(manifestPath)
                 .attempts(List.copyOf(attemptRecords))
                 .build();
+    }
+
+    /**
+     * 有界并行执行各段：结果与 attempt 记录仍按输入顺序汇总，失败段在轮到它时抛出，
+     * 与串行语义一致（manifest 不会发布）。
+     */
+    private void executeInParallel(List<LocalSplitTask> tasks,
+                                   int maximumAttempts,
+                                   int parallelism,
+                                   List<SplitAttemptRecord> attemptRecords,
+                                   List<DiffResult> successfulResults,
+                                   LinkedHashSet<String> successfulSplitIds) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(Math.min(parallelism, tasks.size()), runnable -> {
+            Thread thread = new Thread(runnable, "local-split-executor");
+            thread.setDaemon(true);
+            return thread;
+        });
+        try {
+            List<Future<SplitOutcome>> futures = new ArrayList<>(tasks.size());
+            for (LocalSplitTask task : tasks) {
+                futures.add(pool.submit(() -> {
+                    List<SplitAttemptRecord> records = new ArrayList<>();
+                    DiffResult result = executeSplit(task, maximumAttempts, records);
+                    return new SplitOutcome(task.getSplitId(), result, records);
+                }));
+            }
+            for (Future<SplitOutcome> future : futures) {
+                SplitOutcome outcome;
+                try {
+                    outcome = future.get();
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof Exception) {
+                        throw (Exception) cause;
+                    }
+                    throw e;
+                }
+                attemptRecords.addAll(outcome.attempts);
+                successfulResults.add(outcome.result);
+                successfulSplitIds.add(outcome.splitId);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private int parallelism(LocalSimulationRequest request, int splitCount) {
+        Integer configured = request.getExecutionSpec().getParallelism();
+        if (configured != null) {
+            return Math.max(1, configured);
+        }
+        return Math.max(1, Math.min(splitCount, Runtime.getRuntime().availableProcessors()));
+    }
+
+    private static final class SplitOutcome {
+        private final String splitId;
+        private final DiffResult result;
+        private final List<SplitAttemptRecord> attempts;
+
+        private SplitOutcome(String splitId, DiffResult result, List<SplitAttemptRecord> attempts) {
+            this.splitId = splitId;
+            this.result = result;
+            this.attempts = attempts;
+        }
     }
 
     private DiffResult executeSplit(LocalSplitTask task,

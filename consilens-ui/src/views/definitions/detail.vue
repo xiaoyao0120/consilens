@@ -20,6 +20,7 @@ const definitionId = route.params.definitionId;
 const loading = ref(true);
 const definition = ref(null);
 const detailTab = ref("config");
+const running = ref(false);
 
 async function loadData() {
   loading.value = true;
@@ -33,12 +34,21 @@ async function loadData() {
 }
 
 async function handleRun() {
+  if (running.value) return;
+  running.value = true;
   try {
-    const accepted = await runTaskDefinition(definitionId);
+    // 定义的超时配置存在 executionOptions.timeoutMs，运行时必须随 options 下发，
+    // 否则保存的“超时时间”对集群执行不生效。
+    const timeoutMs = definition.value?.config?.executionOptions?.timeoutMs;
+    const accepted = await runTaskDefinition(definitionId, {
+      options: timeoutMs ? { timeoutMs } : undefined,
+    });
     message.success(`已提交运行：${accepted.taskId}`);
     router.push(`/instances/${accepted.taskId}`);
   } catch (error) {
     message.error(error?.response?.data?.error || "运行失败");
+  } finally {
+    running.value = false;
   }
 }
 
@@ -153,7 +163,7 @@ onMounted(loadData);
             </div>
           </div>
           <div class="header-actions">
-            <n-button size="small" type="primary" :disabled="!definition.enabled" @click="handleRun">
+            <n-button size="small" type="primary" :disabled="!definition.enabled" :loading="running" @click="handleRun">
               <template #icon>
                 <n-icon><PlayCircleOutline /></n-icon>
               </template>
@@ -309,6 +319,20 @@ onMounted(loadData);
     flex: 1;
     color: var(--text);
     word-break: break-all;
+  }
+}
+
+// 窄屏：标题区与操作区分行，避免 4 个操作按钮把返回键挤出/盖住
+@media (max-width: 768px) {
+  .detail-header {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
   }
 }
 </style>

@@ -106,7 +106,18 @@ public class SubmitLocalCommand implements Callable<Integer> {
             commandSpec.commandLine().getOut().println("Local submission completed: " + result.getManifestPath());
             return 0;
         } catch (Exception e) {
-            commandSpec.commandLine().getErr().println("Local submission failed.");
+            java.io.PrintWriter errorWriter = commandSpec.commandLine().getErr();
+            if (e instanceof IllegalArgumentException
+                    || e instanceof com.consilens.cli.config.ConfigurationException) {
+                // 配置/校验错误的 message 不含凭据，直接展示便于定位
+                errorWriter.println("Local submission failed: " + e.getMessage());
+            } else {
+                // 运行时异常可能内嵌连接 URL/凭据，只输出类型；完整堆栈需显式开启
+                errorWriter.println("Local submission failed: " + e.getClass().getName());
+            }
+            if (System.getenv("CONSILENS_DEBUG") != null) {
+                e.printStackTrace(errorWriter);
+            }
             return 1;
         }
     }

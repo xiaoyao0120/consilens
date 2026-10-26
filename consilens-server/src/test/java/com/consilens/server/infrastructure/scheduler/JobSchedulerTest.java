@@ -70,7 +70,8 @@ class JobSchedulerTest {
 
             verify(runTaskExecuteManager, timeout(1000)).addExecuteCommand(command);
             verify(taskRepository, timeout(1000)).updateClaimed(eq(200L), eq("node-a"), any(Instant.class));
-            verify(taskCommandRepository, timeout(1000)).markDone(eq(100L), any(Instant.class));
+            // 命令 DONE 由执行线程在 updateRunning 之后完成，调度器不再提前标记
+            verify(taskCommandRepository, never()).markDone(eq(100L), any(Instant.class));
             verify(runTaskRecoveryService, timeout(1000)).recoverCurrentNodeStartupTasks(any(Instant.class));
             verify(runTaskRecoveryService, timeout(1000).atLeastOnce()).recoverExpiredClaims(any(Instant.class));
             verify(runTaskRecoveryService, timeout(1000).atLeastOnce()).recoverTasksOnDeadNodes(any(Instant.class));
@@ -220,7 +221,6 @@ class JobSchedulerTest {
             verify(runTaskRecoveryService, timeout(3000).times(2))
                     .recoverCurrentNodeStartupTasks(any(Instant.class));
             verify(runTaskExecuteManager, timeout(4000)).addExecuteCommand(command);
-            verify(taskCommandRepository, timeout(4000)).markDone(eq(101L), any(Instant.class));
         } finally {
             scheduler.stopScheduler();
             scheduler.join(1000);

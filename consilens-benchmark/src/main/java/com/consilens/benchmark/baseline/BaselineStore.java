@@ -25,17 +25,21 @@ public class BaselineStore {
     private BaselineStore() {
     }
 
-    /** 读取基线；文件不存在或解析失败时返回空基线（不抛）。 */
+    /** 读取基线；文件不存在时返回空基线。文件存在但损坏时抛错，避免 CI 静默降级。 */
     public static Baseline load(Path path) {
         if (!Files.exists(path)) {
             log.debug("baseline file not found, return empty: {}", path);
             return emptyBaseline();
         }
         try {
-            return MAPPER.readValue(path.toFile(), Baseline.class);
+            Baseline baseline = MAPPER.readValue(path.toFile(), Baseline.class);
+            // JSON "null" 能反序列化成 null：不能当作“无基线”，否则 CI 会把损坏文件误判为通过
+            if (baseline == null) {
+                throw new RuntimeException("failed to read baseline: " + path + " (null content)");
+            }
+            return baseline;
         } catch (IOException e) {
-            log.warn("failed to read baseline, return empty: {}", path, e);
-            return emptyBaseline();
+            throw new RuntimeException("failed to read baseline: " + path, e);
         }
     }
 

@@ -74,6 +74,8 @@ public class ServerCompareConfigService {
      * <li>{@code ignoreColumns}: column names excluded on both sides</li>
      * <li>{@code keyMappings}: list of {source, target} maps for primary keys
      * whose names differ between the two tables</li>
+     * <li>{@code normalization}: CLI-shaped type rules ({@code global/source/target}),
+     * compiled by the same {@code NormalizationSpecs} used by the CLI</li>
      * </ul>
      */
     private ComparisonConfig comparison(Map<String, Object> hints) {
@@ -82,8 +84,9 @@ public class ServerCompareConfigService {
         return ComparisonConfig.builder()
                 .fields(mappingForm ? List.of() : listFrom(compareColumns))
                 .ignoreColumns(listFrom(hints.get("ignoreColumns")))
-                .fieldMappings(mappingForm ? parseMappings(compareColumns) : List.of())
-                .keyMappings(parseMappings(hints.get("keyMappings")))
+                .fieldMappings(mappingForm ? parseMappings(compareColumns, "compareColumns") : List.of())
+                .keyMappings(parseMappings(hints.get("keyMappings"), "keyMappings"))
+                .normalization(normalizationFrom(hints.get("normalization")))
                 .build();
     }
 
@@ -100,26 +103,32 @@ public class ServerCompareConfigService {
     }
 
     /**
-     * Parses a list of {source, target} maps into mappings (string items are ignored).
+     * Parses a list of {source, target} maps. Malformed entries are rejected instead of
+     * silently dropped: dropping one side would remove that column from the comparison
+     * and produce a false "identical" verdict.
      */
-    private List<FieldMapping> parseMappings(Object raw) {
+    private List<FieldMapping> parseMappings(Object raw, String path) {
         if (raw == null) {
             return List.of();
         }
+        if (!(raw instanceof List)) {
+            throw new InvalidInputException(path + " must be a list of {source, target} objects");
+        }
         List<FieldMapping> mappings = new ArrayList<>();
-        if (raw instanceof List) {
-            for (Object item : (List<?>) raw) {
-                if (item instanceof Map) {
-                    Map<?, ?> map = (Map<?, ?>) item;
-                    Object sourceValue = map.get("source");
-                    Object targetValue = map.get("target");
-                    String source = sourceValue == null ? null : trim(String.valueOf(sourceValue));
-                    String target = targetValue == null ? null : trim(String.valueOf(targetValue));
-                    if (source != null && target != null) {
-                        mappings.add(FieldMapping.builder().source(source).target(target).build());
-                    }
-                }
+        for (Object item : (List<?>) raw) {
+            if (!(item instanceof Map)) {
+                throw new InvalidInputException(
+                        path + " must contain only {source, target} objects");
             }
+            Map<?, ?> map = (Map<?, ?>) item;
+            Object sourceValue = map.get("source");
+            Object targetValue = map.get("target");
+            String source = sourceValue == null ? null : trim(String.valueOf(sourceValue));
+            String target = targetValue == null ? null : trim(String.valueOf(targetValue));
+            if (isBlank(source) || isBlank(target)) {
+                throw new InvalidInputException(path + " contains an incomplete mapping");
+            }
+            mappings.add(FieldMapping.builder().source(source).target(target).build());
         }
         return mappings;
     }
@@ -163,6 +172,7 @@ public class ServerCompareConfigService {
             return parse((String) content);
         }
         ServerCompareConfig config = objectMapper.convertValue(content, ServerCompareConfig.class);
+        applyTopLevelNormalization(config, content instanceof Map ? (Map<String, Object>) content : Map.of());
         validate(config);
         return config;
     }
@@ -178,6 +188,23 @@ public class ServerCompareConfigService {
         requireEndpointResource("target", config.getTarget());
         if (config.getKeys() == null || normalizedStrings(config.getKeys()).isEmpty()) {
             throw new InvalidInputException("config.keys cannot be empty");
+        }
+        if (config.getComparison() != null) {
+            requireCompleteMappings("keyMappings", config.getComparison().getKeyMappings());
+            requireCompleteMappings("fieldMappings", config.getComparison().getFieldMappings());
+        }
+    }
+
+    /** 映射两端都必须有列名；空字符串会生成 `""` 形式的非法 SQL 标识符。 */
+    private void requireCompleteMappings(String name, List<FieldMapping> mappings) {
+        if (mappings == null) {
+            return;
+        }
+        for (FieldMapping mapping : mappings) {
+            if (mapping == null || isBlank(mapping.getSource()) || isBlank(mapping.getTarget())) {
+                throw new InvalidInputException(
+                        "config.comparison." + name + " contains an incomplete mapping");
+            }
         }
     }
 
@@ -230,9 +257,51 @@ public class ServerCompareConfigService {
                 .targetComparisons(targetComparisons)
                 .sourceFilter(filter(config.getSource()))
                 .targetFilter(filter(config.getTarget()))
+                .normalizationSpec(normalizationSpec(comparison))
                 .strategyPreference(strategyPreference(config.getHints()))
                 .executionOptions(executionOptions(config, options))
                 .build();
+    }
+
+    /**
+     * 服务端定义里的 normalization 与 CLI 走同一个编译入口，
+     * 避免"同一份配置、两个入口、不同归一化结论"。
+     */
+    private com.consilens.connector.api.normalization.NormalizationSpec normalizationSpec(ComparisonConfig comparison) {
+        if (comparison == null || comparison.getNormalization() == null) {
+            return null;
+        }
+        NormalizationConfig normalization = comparison.getNormalization();
+        return com.consilens.connector.api.normalization.NormalizationSpecs.fromTypeRules(
+                ruleMaps(normalization.getGlobal()),
+                ruleMaps(normalization.getSource()),
+                ruleMaps(normalization.getTarget()));
+    }
+
+    private Map<String, Map<String, Object>> ruleMaps(Map<String, TypeNormalizationRule> rules) {
+        if (rules == null || rules.isEmpty()) {
+            return null;
+        }
+        Map<String, Map<String, Object>> result = new LinkedHashMap<>();
+        for (Map.Entry<String, TypeNormalizationRule> entry : rules.entrySet()) {
+            TypeNormalizationRule rule = entry.getValue();
+            if (rule == null) {
+                continue;
+            }
+            Map<String, Object> fields = new LinkedHashMap<>();
+            putIfPresent(fields, "precision", rule.getPrecision());
+            putIfPresent(fields, "rounding", rule.getRounding());
+            putIfPresent(fields, "format", rule.getFormat());
+            putIfPresent(fields, "timezone", rule.getTimezone());
+            putIfPresent(fields, "comparisonMode", rule.getComparisonMode());
+            putIfPresent(fields, "encoding", rule.getEncoding());
+            putIfPresent(fields, "uppercase", rule.getUppercase());
+            putIfPresent(fields, "trueValue", rule.getTrueValue());
+            putIfPresent(fields, "falseValue", rule.getFalseValue());
+            putIfPresent(fields, "nullValue", rule.getNullValue());
+            result.put(entry.getKey(), fields);
+        }
+        return result;
     }
 
     private List<String> comparisonFields(ComparisonConfig comparison) {
@@ -288,6 +357,7 @@ public class ServerCompareConfigService {
         ServerCompareConfig config;
         try {
             config = objectMapper.convertValue(raw, ServerCompareConfig.class);
+            applyTopLevelNormalization(config, raw);
             validate(config);
             return config;
         } catch (IllegalArgumentException exception) {
@@ -308,6 +378,51 @@ public class ServerCompareConfigService {
                 || comparison.get("fields") instanceof Map;
     }
 
+    /**
+     * UI 定义（CLI 形配置）把 normalization 放在顶层；直接绑定到 ServerCompareConfig 会丢字段，
+     * 这里补一次到 comparison.normalization（hints 里的同名字段作为兜底）。
+     */
+    private void applyTopLevelNormalization(ServerCompareConfig config, Map<String, Object> raw) {
+        if (config == null) {
+            return;
+        }
+        if (config.getComparison() == null) {
+            config.setComparison(ComparisonConfig.builder().build());
+        }
+        if (config.getComparison().getNormalization() != null) {
+            return;
+        }
+        NormalizationConfig normalization = config.getNormalization();
+        if (normalization == null && raw != null) {
+            normalization = normalizationFrom(raw.get("normalization"));
+        }
+        if (normalization == null && raw != null) {
+            normalization = normalizationFrom(mapFrom(raw.get("hints")).get("normalization"));
+        }
+        if (normalization != null) {
+            config.getComparison().setNormalization(normalization);
+        }
+    }
+
+    private NormalizationConfig cliNormalization(Map<String, Object> raw) {
+        NormalizationConfig normalization = normalizationFrom(raw.get("normalization"));
+        if (normalization == null) {
+            normalization = normalizationFrom(mapFrom(raw.get("hints")).get("normalization"));
+        }
+        return normalization;
+    }
+
+    private NormalizationConfig normalizationFrom(Object raw) {
+        if (!(raw instanceof Map) || ((Map<?, ?>) raw).isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.convertValue(raw, NormalizationConfig.class);
+        } catch (IllegalArgumentException exception) {
+            throw new InvalidInputException("normalization is not valid: " + exception.getMessage());
+        }
+    }
+
     private ServerCompareConfig fromCliConfig(Map<String, Object> raw) {
         Map<String, Object> sourceMap = mapFrom(raw.get("source"));
         Map<String, Object> targetMap = mapFrom(raw.get("target"));
@@ -316,23 +431,88 @@ public class ServerCompareConfigService {
         }
         Map<String, Object> comparison = mapFrom(raw.get("comparison"));
         Map<String, Object> strategy = mapFrom(raw.get("strategy"));
-        Map<String, Object> executionOptions = new LinkedHashMap<>();
+
+        // 保留 CLI 的完整执行参数：mode/localCompare/maxDifferences 等此前被丢弃，
+        // 服务端任务会悄悄回落到默认 checksum+full，与 CLI 本地运行结论/性能不一致。
+        Map<String, Object> executionOptions = new LinkedHashMap<>(mapFrom(raw.get("executionOptions")));
         putIfPresent(executionOptions, "bisectionFactor", strategy.get("bisectionFactor"));
         putIfPresent(executionOptions, "bisectionThreshold", strategy.get("bisectionThreshold"));
         putIfPresent(executionOptions, "checksumAlgorithm", strategy.get("algorithm"));
+        putIfPresent(executionOptions, "validateUniqueKeys", strategy.get("validateUniqueKeys"));
+        putIfPresent(executionOptions, "allowNullableKeys", strategy.get("allowNullableKeys"));
+        putIfPresent(executionOptions, "maxDifferences", strategy.get("maxDifferences"));
+        putIfPresent(executionOptions, "localCompareMode", mapFrom(strategy.get("localCompare")).get("mode"));
+
+        Map<String, Object> keysMap = mapFrom(comparison.get("keys"));
+        List<String> sourceKeys = listFrom(keysMap.get("source"));
+        List<String> targetKeys = listFrom(keysMap.get("target"));
+        List<String> keys = !sourceKeys.isEmpty() ? sourceKeys : targetKeys;
+
+        Map<String, Object> fieldsMap = mapFrom(comparison.get("fields"));
+        List<String> sourceFields = listFrom(fieldsMap.get("source"));
+        List<String> targetFields = listFrom(fieldsMap.get("target"));
+
+        // 两侧列名/键名不同时必须转成显式映射：拼成一个并集列表会按位置错配，
+        // 把 source 的 A 列与 target 的 B 列放在一起比较。
+        List<FieldMapping> fieldMappings = new ArrayList<>(pairMappings("comparison.fields", sourceFields, targetFields));
+        fieldMappings.addAll(parseMappings(comparison.get("mappings"), "comparison.mappings"));
+        List<FieldMapping> keyMappings = pairMappings("comparison.keys", sourceKeys, targetKeys);
+
+        List<String> fields = new ArrayList<>(sourceFields);
+        if (fields.isEmpty() && !targetFields.isEmpty() && fieldMappings.isEmpty()) {
+            fields.addAll(targetFields);
+        } else if (!sourceFields.isEmpty() && !targetFields.isEmpty()
+                && !sourceFields.equals(targetFields)) {
+            // 差异由 fieldMappings 表达
+            fields.clear();
+        }
+
+        Map<String, Object> hints = new LinkedHashMap<>();
+        String mode = string(strategy.get("mode"));
+        if (!isBlank(mode)) {
+            hints.put("strategyPreference", Map.of(
+                    "preferredPlans", List.of(mode.trim().toLowerCase()),
+                    "allowFallback", true));
+        }
+
         ServerCompareConfig config = ServerCompareConfig.builder()
                 .source(endpointFromCli("source", sourceMap, comparison))
                 .target(endpointFromCli("target", targetMap, comparison))
-                .keys(cliKeys(comparison))
+                .keys(keys)
                 .comparison(ComparisonConfig.builder()
-                        .fields(cliFields(comparison))
+                        .fields(fields)
                         .ignoreColumns(cliIgnoreColumns(comparison))
+                        .fieldMappings(fieldMappings)
+                        .keyMappings(keyMappings)
+                        .normalization(cliNormalization(raw))
                         .build())
+                .hints(hints)
                 .executionOptions(executionOptions)
                 .result(resultConfig(raw.get("result")))
                 .build();
         validate(config);
         return config;
+    }
+
+    /**
+     * 把 CLI 的 source/target 两个列名列表配对成映射；列表相同则返回空（按同名比较）。
+     */
+    private List<FieldMapping> pairMappings(String path, List<String> sourceNames, List<String> targetNames) {
+        if (sourceNames.isEmpty() && targetNames.isEmpty()) {
+            return List.of();
+        }
+        if (sourceNames.size() != targetNames.size()) {
+            throw new InvalidInputException(path + " 两侧数量必须一致: source=" + sourceNames
+                    + ", target=" + targetNames);
+        }
+        if (sourceNames.equals(targetNames)) {
+            return List.of();
+        }
+        List<FieldMapping> mappings = new ArrayList<>(sourceNames.size());
+        for (int i = 0; i < sourceNames.size(); i++) {
+            mappings.add(FieldMapping.builder().source(sourceNames.get(i)).target(targetNames.get(i)).build());
+        }
+        return mappings;
     }
 
     private EndpointConfig endpointFromCli(String side, Map<String, Object> endpoint, Map<String, Object> comparison) {
@@ -353,26 +533,6 @@ public class ServerCompareConfigService {
                 .connection(mapFrom(endpoint.get("connection")))
                 .readOptions(mapFrom(endpoint.get("readOptions")))
                 .build();
-    }
-
-    private List<String> cliKeys(Map<String, Object> comparison) {
-        Map<String, Object> keys = mapFrom(comparison.get("keys"));
-        List<String> result = listFrom(keys.get("source"));
-        if (result.isEmpty()) {
-            result = listFrom(keys.get("target"));
-        }
-        return result;
-    }
-
-    private List<String> cliFields(Map<String, Object> comparison) {
-        Map<String, Object> fields = mapFrom(comparison.get("fields"));
-        List<String> result = new ArrayList<>(listFrom(fields.get("source")));
-        for (String field : listFrom(fields.get("target"))) {
-            if (!result.contains(field)) {
-                result.add(field);
-            }
-        }
-        return result;
     }
 
     private List<String> cliIgnoreColumns(Map<String, Object> comparison) {
@@ -509,6 +669,7 @@ public class ServerCompareConfigService {
                 .checksumAlgorithm(string(merged.get("checksumAlgorithm")))
                 .localCompareMode(string(merged.get("localCompareMode")))
                 .validateUniqueKeys(booleanValue(merged.get("validateUniqueKeys")))
+                .allowNullableKeys(booleanValue(merged.get("allowNullableKeys")))
                 .maxDifferences(longValue(merged.get("maxDifferences")))
                 .attributes(merged.isEmpty() ? null : merged)
                 .build();
@@ -648,7 +809,11 @@ public class ServerCompareConfigService {
 
     private Integer integer(Object value) {
         if (value instanceof Number) {
-            return ((Number) value).intValue();
+            long parsed = integralNumber(value, "numeric option must be an integer");
+            if (parsed < Integer.MIN_VALUE || parsed > Integer.MAX_VALUE) {
+                throw new InvalidInputException("numeric option must be an integer: " + value);
+            }
+            return (int) parsed;
         }
         if (value instanceof String && !((String) value).isBlank()) {
             try {
@@ -662,7 +827,7 @@ public class ServerCompareConfigService {
 
     private Long longValue(Object value) {
         if (value instanceof Number) {
-            return ((Number) value).longValue();
+            return integralNumber(value, "numeric option must be a long");
         }
         if (value instanceof String && !((String) value).isBlank()) {
             try {
@@ -674,12 +839,32 @@ public class ServerCompareConfigService {
         return null;
     }
 
+    /** 4.5 / NaN / Infinity 不能截断成整数配置值。 */
+    private long integralNumber(Object value, String message) {
+        try {
+            long parsed = value instanceof Byte || value instanceof Short
+                    || value instanceof Integer || value instanceof Long
+                    ? ((Number) value).longValue()
+                    : new java.math.BigDecimal(value.toString()).longValueExact();
+            return parsed;
+        } catch (ArithmeticException | NumberFormatException exception) {
+            throw new InvalidInputException(message + ": " + value);
+        }
+    }
+
     private Boolean booleanValue(Object value) {
         if (value instanceof Boolean) {
             return (Boolean) value;
         }
         if (value instanceof String && !((String) value).isBlank()) {
-            return Boolean.parseBoolean((String) value);
+            String normalized = ((String) value).trim();
+            if ("true".equalsIgnoreCase(normalized)) {
+                return Boolean.TRUE;
+            }
+            if ("false".equalsIgnoreCase(normalized)) {
+                return Boolean.FALSE;
+            }
+            throw new InvalidInputException("boolean option must be true or false: " + value);
         }
         return null;
     }

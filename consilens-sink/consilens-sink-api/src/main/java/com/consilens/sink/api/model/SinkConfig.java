@@ -38,6 +38,7 @@ public class SinkConfig {
     private String type;
 
     /** Whether this sink is enabled. */
+    @Builder.Default
     private boolean enabled = true;
 
     /**

@@ -97,9 +97,12 @@ public class ConsilensToolExecutor {
     }
 
     private boolean isTerminalTaskStatus(String status) {
+        // RETRYABLE 表示任务已失败、等待人工重试，不会再自行推进；
+        // 不把它视为终态会让每次调用白等满 RUN_POLL_TIMEOUT 并误报超时。
         return "SUCCEEDED".equalsIgnoreCase(status)
                 || "FAILED".equalsIgnoreCase(status)
-                || "CANCELLED".equalsIgnoreCase(status);
+                || "CANCELLED".equalsIgnoreCase(status)
+                || "RETRYABLE".equalsIgnoreCase(status);
     }
 
     private void waitForTaskPoll() {

@@ -34,7 +34,7 @@ export const NODE_STATUS_MAP = {
   REGISTERED: { label: "已注册", type: "warning" },
 };
 
-// AI 会话状态 → badge 类型与中文文案（AI 助手页 / 侧边抽屉共用）
+// AI 会话状态 → badge 类型与中文文案（业务页 AI 助手抽屉使用）
 export const AI_SESSION_STATUS_MAP = {
   READY: { label: "就绪", type: "default" },
   RUNNING: { label: "运行中", type: "success" },

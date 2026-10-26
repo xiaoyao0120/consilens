@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { computed, ref, onMounted } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { NButton, NIcon, NDescriptions, NDescriptionsItem } from "naive-ui";
 import { ArrowBackOutline } from "@vicons/ionicons5";
@@ -15,11 +15,14 @@ const artifactId = route.params.artifactId;
 
 const loading = ref(true);
 const detail = ref(null); // ArtifactContentDto { artifactId, artifactType, artifactFormat, content }
+const PREVIEW_LIMIT = 200_000;
 
 async function loadDetail() {
   loading.value = true;
   try {
     detail.value = await getArtifactContent(artifactId);
+  } catch {
+    detail.value = null;
   } finally {
     loading.value = false;
   }
@@ -27,18 +30,29 @@ async function loadDetail() {
 
 onMounted(loadDetail);
 
-function prettyContent() {
+const prettyContent = computed(() => {
   const raw = detail.value?.content;
   if (!raw) return "";
+  // 单次运行结果最大 50MB：先按原始长度截断，不能先 JSON.parse 整个大文件，
+  // 否则预览阶段仍会解析/序列化 50MB 并卡死页面。
+  if (typeof raw === "string" && raw.length > PREVIEW_LIMIT) {
+    return `${raw.slice(0, PREVIEW_LIMIT)}\n\n…（内容过大，仅展示前 ${PREVIEW_LIMIT} 个字符）`;
+  }
+  let pretty;
   if (typeof raw === "string") {
     try {
-      return JSON.stringify(JSON.parse(raw), null, 2);
+      pretty = JSON.stringify(JSON.parse(raw), null, 2);
     } catch {
-      return raw;
+      pretty = raw;
     }
+  } else {
+    pretty = JSON.stringify(raw, null, 2);
   }
-  return JSON.stringify(raw, null, 2);
-}
+  if (pretty && pretty.length > PREVIEW_LIMIT) {
+    return `${pretty.slice(0, PREVIEW_LIMIT)}\n\n…（内容过大，仅展示前 ${PREVIEW_LIMIT} 个字符）`;
+  }
+  return pretty;
+});
 </script>
 
 <template>
@@ -68,7 +82,7 @@ function prettyContent() {
         </n-descriptions>
 
         <CodeBlock
-          :content="prettyContent()"
+          :content="prettyContent"
           :label="`内容 · ${detail.artifactFormat || 'JSON'}`"
           :max-height="520"
         />

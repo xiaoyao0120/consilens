@@ -41,6 +41,28 @@ class OracleDataTypeHandlerTest {
     }
 
     @Test
+    void testOracleDateKeepsTimeWhenComparisonModeIsDatetime() {
+        com.consilens.conncetor.base.jdbc.JdbcDatasetHandle.JdbcTypeNormalizationRule rule =
+                new com.consilens.conncetor.base.jdbc.JdbcDatasetHandle.JdbcTypeNormalizationRule();
+        rule.setComparisonMode("DATETIME");
+        OracleDataTypeHandler datetimeHandler = new OracleDataTypeHandler(
+                capabilityProvider, java.util.Map.of("date", rule));
+
+        // 映射为 TIMESTAMP，Java 侧才会按 yyyy-MM-dd HH:mm:ss 归一化（与 SQL 侧同形）
+        assertEquals(DataType.TIMESTAMP, datetimeHandler.convertToDataType("DATE"));
+        String sql = datetimeHandler.normalizeColumn("created_at", DataType.DATE);
+        assertTrue(sql.contains("HH24:MI:SS"), sql);
+        assertTrue(sql.contains("YYYY-MM-DD"), sql);
+    }
+
+    @Test
+    void testOracleDateStaysDateOnlyByDefault() {
+        OracleDataTypeHandler defaultHandler = new OracleDataTypeHandler(capabilityProvider);
+        String sql = defaultHandler.normalizeColumn("created_at", DataType.DATE);
+        assertFalse(sql.contains("HH24:MI:SS"), sql);
+    }
+
+    @Test
     void testGetDataTypeMappingVarchar() {
         String result = handler.getDataTypeMapping("varchar", 255, 0, 0);
         assertEquals("VARCHAR2(255)", result);

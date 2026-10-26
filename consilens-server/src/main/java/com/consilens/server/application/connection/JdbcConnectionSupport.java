@@ -8,6 +8,7 @@ import java.sql.DriverManager;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
+import java.util.regex.Pattern;
 
 /**
  * Shared JDBC wiring for connection tests and metadata exploration.
@@ -150,6 +151,17 @@ public final class JdbcConnectionSupport {
         }
         Class.forName(driverClass);
         String url = buildJdbcUrl(dialect, hostLiteral, port, database, extraParams);
+        Properties properties = connectionProperties(username, password, extraParams);
+        DriverManager.setLoginTimeout(timeoutSeconds);
+        return DriverManager.getConnection(url, properties);
+    }
+
+    /**
+     * 连接属性只包含身份与用户显式配置；connectTimeout/loginTimeout 由
+     * DriverManager.setLoginTimeout 统一处理，避免严格驱动拒绝未知键。
+     */
+    static Properties connectionProperties(String username, String password,
+                                           Map<String, Object> extraParams) {
         Properties properties = new Properties();
         if (username != null) {
             properties.setProperty("user", username);
@@ -157,13 +169,10 @@ public final class JdbcConnectionSupport {
         if (password != null) {
             properties.setProperty("password", password);
         }
-        properties.setProperty("connectTimeout", String.valueOf(timeoutSeconds * 1000));
-        properties.setProperty("loginTimeout", String.valueOf(timeoutSeconds));
         if (extraParams != null) {
             applyJdbcProperties(properties, extraParams.get("properties"));
         }
-        DriverManager.setLoginTimeout(timeoutSeconds);
-        return DriverManager.getConnection(url, properties);
+        return properties;
     }
 
     /** 解析 key=value&key2=value2 形式的连接属性并注入 Properties(不进 URL)。
@@ -186,7 +195,7 @@ public final class JdbcConnectionSupport {
             if (key.isEmpty()) {
                 continue;
             }
-            if (DatasourceConnectionPolicy.SENSITIVE_PROPERTY_KEYS.contains(key.toLowerCase())) {
+            if (DatasourceConnectionPolicy.isSensitivePropertyKey(key)) {
                 continue;
             }
             properties.setProperty(key, value);
@@ -198,13 +207,28 @@ public final class JdbcConnectionSupport {
      * strips user:pass@ fragments from URLs and user names echoed back by
      * JDBC drivers (single or double quoted).
      */
+    private static final Pattern JDBC_USER_INFO = Pattern.compile("(?<=://)[^/@\\s]+@");
+    private static final Pattern ORACLE_THIN_CREDENTIALS =
+            Pattern.compile("(?i)(jdbc:oracle:thin:)[^/@\\s]+/[^@\\s]+@");
+    private static final Pattern SENSITIVE_QUERY_PARAM = Pattern.compile(
+            "(?i)([?&;][^=&#;\\s]*(?:password|passwd|pwd|secret|token|credential|apikey|api_key|user)[^=&#;\\s]*=)[^&;\\s]*");
+
     public static String safeMessage(Exception exception) {
         String message = exception.getMessage();
         if (message == null || message.isBlank()) {
             return exception.getClass().getSimpleName();
         }
-        return message
-                .replaceAll("(?<=://)[^/@\\s]+@", "***@")
-                .replaceAll("(?i)for user ['\"][^'\"]*['\"]", "for user '***'");
+        return maskMessage(message);
+    }
+
+    /** Visible for tests: mask credentials embedded in JDBC URLs / driver messages. */
+    public static String maskMessage(String message) {
+        if (message == null || message.isBlank()) {
+            return message;
+        }
+        String masked = ORACLE_THIN_CREDENTIALS.matcher(message).replaceAll("$1***/***@");
+        masked = JDBC_USER_INFO.matcher(masked).replaceAll("***@");
+        masked = SENSITIVE_QUERY_PARAM.matcher(masked).replaceAll("$1***");
+        return masked.replaceAll("(?i)for user ['\"][^'\"]*['\"]", "for user '***'");
     }
 }

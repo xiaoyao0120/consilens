@@ -51,6 +51,8 @@ strategy:
   bisectionThreshold: 10000
   batchSize: 500
   maxDifferences: 5000
+  # 可空键开关：默认 false（键列可空即拒绝）；true 时允许 NULL 键参与比较。
+  allowNullableKeys: true
 
 normalization:
   global:

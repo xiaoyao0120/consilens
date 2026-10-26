@@ -65,7 +65,7 @@ public final class DatasourceConnectionPolicy {
         for (String pair : propertiesText.split("&")) {
             int separator = pair.indexOf('=');
             String key = separator > 0 ? pair.substring(0, separator).trim() : pair.trim();
-            if (SENSITIVE_PROPERTY_KEYS.contains(key.toLowerCase())) {
+            if (isSensitivePropertyKey(key)) {
                 throw new IllegalArgumentException("param.properties contains sensitive key: " + key);
             }
         }
@@ -102,7 +102,24 @@ public final class DatasourceConnectionPolicy {
     }
 
     public static boolean isSensitivePropertyKey(String key) {
-        return key != null && SENSITIVE_PROPERTY_KEYS.contains(key.toLowerCase());
+        if (key == null) {
+            return false;
+        }
+        String normalized = key.trim().toLowerCase(java.util.Locale.ROOT);
+        if (normalized.isEmpty()) {
+            return false;
+        }
+        // 驱动属性里大量凭据并不叫 password：sslpassword / trustStorePassword /
+        // clientSecret / accessToken 等，同样不能明文落库或回显。
+        return SENSITIVE_PROPERTY_KEYS.contains(normalized)
+                || normalized.contains("password")
+                || normalized.contains("secret")
+                || normalized.equals("credential")
+                || normalized.endsWith("credentials")
+                || normalized.equals("token")
+                || normalized.endsWith("token")
+                || normalized.equals("apikey")
+                || normalized.equals("api_key");
     }
 
     private static void validateNameField(Map<String, Object> param, String field) {

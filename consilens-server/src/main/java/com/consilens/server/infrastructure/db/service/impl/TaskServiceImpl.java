@@ -223,11 +223,16 @@ public class TaskServiceImpl extends ServiceImpl<TaskInstanceMapper, TaskInstanc
 
     @Override
     public List<TaskInstanceEntity> listStaleRunning(LocalDateTime before, int limit) {
-        if (limit <= 0) {
+        return listStaleByStatus(TaskStatus.RUNNING, before, limit);
+    }
+
+    @Override
+    public List<TaskInstanceEntity> listStaleByStatus(TaskStatus status, LocalDateTime before, int limit) {
+        if (limit <= 0 || status == null) {
             return List.of();
         }
         return list(new QueryWrapper<TaskInstanceEntity>().lambda()
-                .eq(TaskInstanceEntity::getStatus, TaskStatus.RUNNING)
+                .eq(TaskInstanceEntity::getStatus, status)
                 .lt(TaskInstanceEntity::getUpdatedAt, before)
                 .orderByAsc(TaskInstanceEntity::getUpdatedAt)
                 .last("LIMIT " + limit));

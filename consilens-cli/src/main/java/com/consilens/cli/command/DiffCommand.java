@@ -11,6 +11,8 @@ import lombok.extern.slf4j.Slf4j;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
+import java.util.concurrent.Callable;
+
 import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryPoolMXBean;
 import java.lang.management.MemoryType;
@@ -25,7 +27,7 @@ import java.util.Comparator;
     description = "Perform data comparison between source and target databases",
     mixinStandardHelpOptions = true
 )
-public class DiffCommand implements Runnable {
+public class DiffCommand implements Callable<Integer> {
 
     @Option(names = {"-c", "--config"}, required = true, description = "Configuration file path")
     private String configFile;
@@ -40,8 +42,12 @@ public class DiffCommand implements Runnable {
             description = "Emit machine-readable benchmark metrics")
     private boolean benchmarkMetrics;
 
+    @Option(names = {"--fail-on-diff"},
+            description = "Exit with status 2 when any difference is found (for CI gates)")
+    private boolean failOnDiff;
+
     @Override
-    public void run() {
+    public Integer call() {
         try {
             ConfigurationManager configurationManager = new ConfigurationManager();
             DiffService diffService = new DiffService();
@@ -91,12 +97,24 @@ public class DiffCommand implements Runnable {
             if (benchmarkMetrics && !dryRun) {
                 displayBenchmarkMetrics(result);
             }
-
+            int exitCode = resolveExitCode(failOnDiff, dryRun, result.getTotalDifferences());
+            if (exitCode == 2) {
+                log.info("Differences found and --fail-on-diff is set; exiting with status 2");
+            }
+            return exitCode;
         } catch (Exception e) {
             log.error("Diff operation failed", e);
             System.err.println("Error: " + e.getMessage());
-            System.exit(1);
+            return 1;
         }
+    }
+
+    /**
+     * P2-13：CI 依赖的退出码契约，单独抽出以便单测（无需真实数据库即可验证）。
+     * 差异存在且显式开启 --fail-on-diff 时返回 2；dry-run 永远返回 0（没有真正比对）。
+     */
+    static int resolveExitCode(boolean failOnDiff, boolean dryRun, long totalDifferences) {
+        return failOnDiff && !dryRun && totalDifferences > 0 ? 2 : 0;
     }
 
     private void displayBenchmarkMetrics(CliDiffResult result) {

@@ -52,8 +52,11 @@ public final class PluginManager<K, P, T> {
         if (config == null || config.isEmpty()) {
             return get(key);
         }
+        // 先取出 provider：未知 key 应保持 ProviderNotFoundException（与 get() 一致），
+        // 不能被下面的配置创建异常包装成 IllegalStateException。
+        P provider = registry.get(key);
         try {
-            return configuredCreator.apply(registry.get(key), config);
+            return configuredCreator.apply(provider, config);
         } catch (RuntimeException e) {
             throw new IllegalStateException("Failed to create configured plugin for key " + key, e);
         }

@@ -59,7 +59,8 @@ class DefaultTaskDefinitionServiceTest {
                 new ServerCompareConfigService(mock(com.consilens.server.application.artifact.ArtifactService.class),
                         new ObjectMapper()),
                 mock(TaskDefinitionConfigValidator.class),
-                new ObjectMapper());
+                new ObjectMapper(),
+                com.consilens.server.support.crypto.SecretProtectorTestKeys.protector());
     }
 
     @Test
@@ -91,11 +92,141 @@ class DefaultTaskDefinitionServiceTest {
     }
 
     @Test
+    void shouldMapConcurrentDuplicateNameToInputError() {
+        when(definitionRepository.save(any()))
+                .thenThrow(new org.springframework.dao.DuplicateKeyException("uk_cs_task_definition_name"));
+
+        assertThrows(IllegalArgumentException.class, () -> service.create(validRequest()));
+    }
+
+    @Test
+    void shouldMaskLegacyInlinePasswordOnGet() {
+        TaskDefinitionRecord record = TaskDefinitionRecord.builder()
+                .id(DEF_ID).name("legacy").taskType("RUN").enabled(true)
+                .config("{\"source\":{\"type\":\"mysql\",\"table\":\"orders\","
+                        + "\"connection\":{\"url\":\"jdbc:mysql://x\",\"password\":\"secret\"}},"
+                        + "\"target\":{\"type\":\"mysql\",\"table\":\"orders\"},\"keys\":[\"id\"]}")
+                .build();
+        when(definitionRepository.findById(DEF_ID)).thenReturn(Optional.of(record));
+        when(taskRepository.listByDefinitionId(eq(DEF_ID), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(List.of());
+
+        TaskDefinitionDetailDto detail = service.get(DEF_ID);
+
+        Map<?, ?> source = (Map<?, ?>) detail.getConfig().get("source");
+        Map<?, ?> connection = (Map<?, ?>) source.get("connection");
+        assertEquals("******", connection.get("password"));
+    }
+
+    @Test
+    void shouldMaskLegacySensitivePropertiesOnGet() {
+        TaskDefinitionRecord record = TaskDefinitionRecord.builder()
+                .id(DEF_ID).name("legacy-props").taskType("RUN").enabled(true)
+                .config("{\"source\":{\"type\":\"mysql\",\"table\":\"orders\","
+                        + "\"connection\":{\"url\":\"jdbc:mysql://x\","
+                        + "\"properties\":\"useSSL=false&password=secret&token=abc\"}},"
+                        + "\"target\":{\"type\":\"mysql\",\"table\":\"orders\"},\"keys\":[\"id\"]}")
+                .build();
+        when(definitionRepository.findById(DEF_ID)).thenReturn(Optional.of(record));
+        when(taskRepository.listByDefinitionId(eq(DEF_ID), org.mockito.ArgumentMatchers.anyInt()))
+                .thenReturn(List.of());
+
+        TaskDefinitionDetailDto detail = service.get(DEF_ID);
+
+        Map<?, ?> source = (Map<?, ?>) detail.getConfig().get("source");
+        Map<?, ?> connection = (Map<?, ?>) source.get("connection");
+        String properties = String.valueOf(connection.get("properties"));
+        assertTrue(properties.contains("password=******"), properties);
+        assertTrue(properties.contains("token=******"), properties);
+        assertTrue(!properties.contains("secret"), properties);
+    }
+
+    @Test
+    void shouldStripMaskedSensitivePropertiesOnUpdate() {
+        when(definitionRepository.findById(DEF_ID)).thenReturn(Optional.of(record()));
+        when(definitionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Map<String, Object> connection = new java.util.LinkedHashMap<>();
+        connection.put("url", "jdbc:mysql://x");
+        connection.put("properties", "useSSL=false&password=******&ApplicationName=consilens");
+        Map<String, Object> source = new java.util.LinkedHashMap<>();
+        source.put("type", "mysql");
+        source.put("table", "orders");
+        source.put("connection", connection);
+        TaskDefinitionCreateRequest request = validRequest();
+        request.setConfig(Map.of(
+                "source", source,
+                "target", Map.of("type", "mysql", "table", "orders"),
+                "keys", List.of("id")));
+
+        service.update(DEF_ID, request);
+
+        ArgumentCaptor<TaskDefinitionRecord> captor = ArgumentCaptor.forClass(TaskDefinitionRecord.class);
+        verify(definitionRepository).save(captor.capture());
+        String saved = captor.getValue().getConfig();
+        assertTrue(saved.contains("useSSL=false"), saved);
+        assertTrue(saved.contains("ApplicationName=consilens"), saved);
+        assertTrue(!saved.contains("******"), saved);
+    }
+
+    @Test
+    void shouldStripMaskedInlinePasswordOnUpdate() {
+        TaskDefinitionRecord existing = TaskDefinitionRecord.builder()
+                .id(DEF_ID).name("legacy").taskType("RUN").enabled(true)
+                .config("{\"source\":{\"type\":\"mysql\",\"table\":\"orders\","
+                        + "\"connection\":{\"url\":\"jdbc:mysql://x\",\"password\":\"secret\"}},"
+                        + "\"target\":{\"type\":\"mysql\",\"table\":\"orders\"},\"keys\":[\"id\"]}")
+                .build();
+        when(definitionRepository.findById(DEF_ID)).thenReturn(Optional.of(existing));
+        when(definitionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        Map<String, Object> connection = new java.util.LinkedHashMap<>();
+        connection.put("url", "jdbc:mysql://x");
+        connection.put("password", "******");
+        Map<String, Object> source = new java.util.LinkedHashMap<>();
+        source.put("type", "mysql");
+        source.put("table", "orders");
+        source.put("connection", connection);
+        Map<String, Object> target = new java.util.LinkedHashMap<>();
+        target.put("type", "mysql");
+        target.put("table", "orders");
+        Map<String, Object> config = new java.util.LinkedHashMap<>();
+        config.put("source", source);
+        config.put("target", target);
+        config.put("keys", List.of("id"));
+
+        TaskDefinitionCreateRequest request = new TaskDefinitionCreateRequest();
+        request.setName("legacy");
+        request.setConfig(config);
+
+        service.update(DEF_ID, request);
+
+        ArgumentCaptor<TaskDefinitionRecord> captor = ArgumentCaptor.forClass(TaskDefinitionRecord.class);
+        verify(definitionRepository).save(captor.capture());
+        assertTrue(!captor.getValue().getConfig().contains("password"),
+                captor.getValue().getConfig());
+    }
+
+    @Test
     void shouldRejectInlineConnectionPassword() {
         TaskDefinitionCreateRequest request = validRequest();
         request.setConfig(Map.of(
                 "source", Map.of("type", "mysql", "table", "orders",
                         "connection", Map.of("url", "jdbc:mysql://x", "password", "secret")),
+                "target", Map.of("type", "mysql", "table", "orders"),
+                "keys", List.of("id")));
+
+        assertThrows(IllegalArgumentException.class, () -> service.create(request));
+    }
+
+    @Test
+    void shouldRejectSensitiveConnectionProperties() {
+        TaskDefinitionCreateRequest request = validRequest();
+        request.setConfig(Map.of(
+                "source", Map.of("type", "mysql", "table", "orders",
+                        "connection", Map.of(
+                                "url", "jdbc:mysql://x",
+                                "properties", "useSSL=false&password=secret")),
                 "target", Map.of("type", "mysql", "table", "orders"),
                 "keys", List.of("id")));
 
@@ -124,6 +255,59 @@ class DefaultTaskDefinitionServiceTest {
         assertEquals(1, detail.getRecentInstances().size());
         assertEquals("inst_1", detail.getRecentInstances().get(0).getInstanceId());
         assertEquals("SUCCEEDED", detail.getRecentInstances().get(0).getStatus());
+    }
+
+    @Test
+    void shouldRejectNonPositiveExecutionTimeout() {
+        TaskDefinitionCreateRequest request = validRequest();
+        Map<String, Object> config = new java.util.LinkedHashMap<>(request.getConfig());
+        config.put("executionOptions", Map.of("timeoutMs", 0));
+        request.setConfig(config);
+
+        assertThrows(IllegalArgumentException.class, () -> service.create(request));
+    }
+
+    @Test
+    void shouldRejectUnknownExecutionPlatform() {
+        TaskDefinitionCreateRequest request = validRequest();
+        Map<String, Object> config = new java.util.LinkedHashMap<>(request.getConfig());
+        config.put("platform", "spark");
+        request.setConfig(config);
+
+        assertThrows(IllegalArgumentException.class, () -> service.create(request));
+    }
+
+    @Test
+    void shouldRejectFractionalExecutionTimeout() {
+        TaskDefinitionCreateRequest request = validRequest();
+        Map<String, Object> config = new java.util.LinkedHashMap<>(request.getConfig());
+        config.put("executionOptions", Map.of("timeoutMs", 1.5));
+        request.setConfig(config);
+
+        assertThrows(IllegalArgumentException.class, () -> service.create(request));
+    }
+
+    @Test
+    void shouldApplyNumericStringExecutionTimeoutOnRun() {
+        TaskDefinitionRecord definition = TaskDefinitionRecord.builder()
+                .id(DEF_ID)
+                .definitionKey("taskdef_1")
+                .name("orders-check")
+                .taskType("RUN")
+                .config("{\"source\":{\"type\":\"mysql\",\"table\":\"orders\"},"
+                        + "\"target\":{\"type\":\"mysql\",\"table\":\"orders\"},"
+                        + "\"keys\":[\"id\"],\"executionOptions\":{\"timeoutMs\":\"1500\"}}")
+                .enabled(true)
+                .build();
+        when(definitionRepository.findById(DEF_ID)).thenReturn(Optional.of(definition));
+        when(submissionService.submit(any(), any())).thenReturn(
+                TaskAcceptedResponse.builder().taskId("inst_1").status("PENDING").build());
+
+        service.run(DEF_ID, new TaskDefinitionRunRequest(), "trace-x");
+
+        ArgumentCaptor<RunRequest> captor = ArgumentCaptor.forClass(RunRequest.class);
+        verify(submissionService).submit(captor.capture(), any());
+        assertEquals(1500, captor.getValue().getOptions().getTimeoutMs());
     }
 
     @Test
@@ -238,6 +422,89 @@ class DefaultTaskDefinitionServiceTest {
         ArgumentCaptor<RunRequest> captor = ArgumentCaptor.forClass(RunRequest.class);
         verify(submissionService).submit(captor.capture(), any());
         assertTrue(captor.getValue().getSerialNo().length() <= 128);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldEncryptSinkPasswordAtRestAndMaskItOnRead() throws Exception {
+        when(definitionRepository.save(any())).thenAnswer(invocation -> {
+            TaskDefinitionRecord record = invocation.getArgument(0);
+            record.setId(DEF_ID);
+            record.setCreatedAt(Instant.parse("2026-01-01T00:00:00Z"));
+            record.setUpdatedAt(Instant.parse("2026-01-01T00:00:00Z"));
+            return record;
+        });
+        TaskDefinitionCreateRequest request = validRequest();
+        Map<String, Object> config = new java.util.LinkedHashMap<>(request.getConfig());
+        config.put("result", Map.of("sinks", List.of(Map.of(
+                "format", "table",
+                "type", "result",
+                "properties", new java.util.LinkedHashMap<>(Map.of(
+                        "url", "jdbc:mysql://127.0.0.1:3306/dq",
+                        "username", "sink-user",
+                        "password", "sink-secret"))))));
+        request.setConfig(config);
+
+        service.create(request);
+
+        ArgumentCaptor<TaskDefinitionRecord> captor = ArgumentCaptor.forClass(TaskDefinitionRecord.class);
+        verify(definitionRepository).save(captor.capture());
+        String stored = captor.getValue().getConfig();
+        assertTrue(stored.contains("v2:"), stored);
+        assertTrue(!stored.contains("sink-secret"), stored);
+
+        TaskDefinitionRecord record = captor.getValue();
+        when(definitionRepository.findById(DEF_ID)).thenReturn(Optional.of(record));
+        Map<String, Object> returned = service.get(DEF_ID).getConfig();
+        Map<String, Object> result = (Map<String, Object>) returned.get("result");
+        List<Map<String, Object>> sinks = (List<Map<String, Object>>) result.get("sinks");
+        Map<String, Object> properties = (Map<String, Object>) sinks.get(0).get("properties");
+        assertEquals("******", properties.get("password"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void shouldRestoreMaskedSinkPasswordOnUpdate() throws Exception {
+        com.consilens.server.support.crypto.AesGcmSecretProtector protector =
+                com.consilens.server.support.crypto.SecretProtectorTestKeys.protector();
+        String encrypted = protector.protect("sink-secret");
+        ObjectMapper mapper = new ObjectMapper();
+        Map<String, Object> storedConfig = new java.util.LinkedHashMap<>(validRequest().getConfig());
+        storedConfig.put("result", Map.of("sinks", List.of(Map.of(
+                "format", "table",
+                "type", "result",
+                "properties", Map.of("url", "jdbc:mysql://127.0.0.1:3306/dq",
+                        "username", "sink-user", "password", encrypted)))));
+        TaskDefinitionRecord record = TaskDefinitionRecord.builder()
+                .id(DEF_ID)
+                .definitionKey("taskdef_1")
+                .name("orders-check")
+                .taskType("RUN")
+                .config(mapper.writeValueAsString(storedConfig))
+                .enabled(true)
+                .build();
+        when(definitionRepository.findById(DEF_ID)).thenReturn(Optional.of(record));
+        when(definitionRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        TaskDefinitionCreateRequest request = validRequest();
+        Map<String, Object> requestConfig = new java.util.LinkedHashMap<>(request.getConfig());
+        requestConfig.put("result", Map.of("sinks", List.of(Map.of(
+                "format", "table",
+                "type", "result",
+                "properties", new java.util.LinkedHashMap<>(Map.of(
+                        "url", "jdbc:mysql://127.0.0.1:3306/dq",
+                        "username", "sink-user", "password", "******"))))));
+        request.setConfig(requestConfig);
+
+        service.update(DEF_ID, request);
+
+        ArgumentCaptor<TaskDefinitionRecord> captor = ArgumentCaptor.forClass(TaskDefinitionRecord.class);
+        verify(definitionRepository).save(captor.capture());
+        Map<String, Object> saved = mapper.readValue(captor.getValue().getConfig(), Map.class);
+        Map<String, Object> result = (Map<String, Object>) saved.get("result");
+        List<Map<String, Object>> sinks = (List<Map<String, Object>>) result.get("sinks");
+        Map<String, Object> properties = (Map<String, Object>) sinks.get(0).get("properties");
+        assertEquals(encrypted, properties.get("password"));
     }
 
     private TaskDefinitionCreateRequest validRequest() {

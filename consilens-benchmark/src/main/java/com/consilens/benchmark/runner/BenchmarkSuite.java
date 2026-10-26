@@ -123,11 +123,14 @@ public final class BenchmarkSuite {
     int aggregateAndReport(List<BenchmarkResult> results) {
         Path baselinePath = options.baselinePath();
         Baseline baseline = null;
+        boolean auxiliaryFailure = false;
         if (Files.exists(baselinePath)) {
             try {
                 baseline = BaselineStore.load(baselinePath);
             } catch (RuntimeException e) {
+                // 基线存在但损坏时不能静默降级成“无基线”：CI 会误判为通过。
                 System.err.println("benchmark: failed to load baseline: " + e.getMessage());
+                auxiliaryFailure = true;
             }
         }
 
@@ -139,20 +142,21 @@ public final class BenchmarkSuite {
            new BenchmarkReportGenerator().generate(results, drift, outputDir);
         } catch (RuntimeException | IOException e) {
             System.err.println("benchmark: report generation failed: " + e.getMessage());
+            auxiliaryFailure = true;
         }
 
         if (options.updateBaseline() && results.stream().anyMatch(result -> "RUN".equals(result.getStatus()))) {
-            writeBaseline(results, baseline, baselinePath);
+            auxiliaryFailure |= !writeBaseline(results, baseline, baselinePath);
         }
 
         boolean hasRegression = drift.hasRegression();
         boolean hasExecutionFailure = results.stream().anyMatch(result -> "FAILED".equals(result.getStatus()));
         System.out.println("benchmark: regression=" + hasRegression + ", executionFailure="
                 + hasExecutionFailure + ", results=" + results.size());
-        return hasRegression || hasExecutionFailure ? 1 : 0;
+        return hasRegression || hasExecutionFailure || auxiliaryFailure ? 1 : 0;
     }
 
-    private void writeBaseline(List<BenchmarkResult> results, Baseline existingBaseline, Path baselinePath) {
+    private boolean writeBaseline(List<BenchmarkResult> results, Baseline existingBaseline, Path baselinePath) {
         Map<String, BaselineEntry> entries = new TreeMap<>();
         if (existingBaseline != null && existingBaseline.getEntries() != null) {
             entries.putAll(existingBaseline.getEntries());
@@ -178,8 +182,10 @@ public final class BenchmarkSuite {
            }
            BaselineStore.store(baseline, baselinePath);
            System.out.println("benchmark: baseline written to " + baselinePath);
+           return true;
         } catch (RuntimeException | IOException e) {
             System.err.println("benchmark: baseline write failed: " + e.getMessage());
+            return false;
         }
     }
 

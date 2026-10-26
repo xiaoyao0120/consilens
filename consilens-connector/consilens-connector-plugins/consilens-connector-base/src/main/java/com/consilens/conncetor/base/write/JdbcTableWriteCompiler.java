@@ -37,20 +37,39 @@ import java.util.UUID;
 
 public class JdbcTableWriteCompiler implements TableWriteCompiler {
 
+    /** 表名直接拼入 DDL/INSERT，必须是普通标识符（允许 schema.table 形式）。 */
+    private static final java.util.regex.Pattern SAFE_IDENTIFIER =
+            java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_$#]*");
+
     private final DatabaseDialect dialect;
 
     public JdbcTableWriteCompiler(DatabaseDialect dialect) {
         this.dialect = dialect;
     }
 
+    private String validatedTableName(String tableName) {
+        String value = tableName == null ? "" : tableName.trim();
+        if (value.isEmpty()) {
+            throw new IllegalArgumentException("tableName is required");
+        }
+        for (String part : value.split("\\.", -1)) {
+            if (!SAFE_IDENTIFIER.matcher(part).matches()) {
+                throw new IllegalArgumentException(
+                        "tableName contains invalid characters: " + tableName);
+            }
+        }
+        return value;
+    }
+
     @Override
     public TableWritePlan compile(TableWriteCompileRequest request) {
         List<WriteColumnSpec> columns = new ArrayList<>();
+        String tableName = validatedTableName(request.getTableName());
         StringBuilder ddl = new StringBuilder("CREATE TABLE IF NOT EXISTS ")
-                .append(request.getTableName())
+                .append(tableName)
                 .append(" (");
         StringBuilder insert = new StringBuilder("INSERT INTO ")
-                .append(request.getTableName())
+                .append(tableName)
                 .append(" (");
         StringBuilder values = new StringBuilder(" VALUES (");
 
@@ -95,7 +114,7 @@ public class JdbcTableWriteCompiler implements TableWriteCompiler {
         values.append(")");
         return new TableWritePlan(
                 dialect.getConnectorType(),
-                "DROP TABLE IF EXISTS " + request.getTableName(),
+                "DROP TABLE IF EXISTS " + tableName,
                 ddl.toString(),
                 insert.append(values).toString(),
                 columns
@@ -278,11 +297,29 @@ public class JdbcTableWriteCompiler implements TableWriteCompiler {
             case GEOMETRY_TYPE:
             case INTERVAL_TYPE:
             case BINARY_TYPE:
+                // byte[] 的 toString() 是 "[B@xxxx"，会把二进制写成无意义文本
+                return convertBinary(rawValue);
             case NULL_TYPE:
             case UNKNOWN_TYPE:
             default:
                 return rawValue.toString();
         }
+    }
+
+    private Object convertBinary(Object rawValue) {
+        if (rawValue instanceof byte[]) {
+            return rawValue;
+        }
+        if (rawValue instanceof java.nio.ByteBuffer) {
+            java.nio.ByteBuffer buffer = ((java.nio.ByteBuffer) rawValue).duplicate();
+            byte[] bytes = new byte[buffer.remaining()];
+            buffer.get(bytes);
+            return bytes;
+        }
+        if (rawValue instanceof String) {
+            return ((String) rawValue).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        }
+        return rawValue.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private Object convertInteger(Object rawValue, TypeDescriptor targetType) {

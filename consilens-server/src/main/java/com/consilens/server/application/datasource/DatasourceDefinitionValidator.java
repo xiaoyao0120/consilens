@@ -1,7 +1,7 @@
 package com.consilens.server.application.datasource;
 
-import com.consilens.agent.core.security.SensitiveValueGuard;
 import com.consilens.connector.api.DataSourceField;
+import com.consilens.server.support.security.SensitiveValueGuard;
 import org.springframework.stereotype.Component;
 
 import java.util.List;

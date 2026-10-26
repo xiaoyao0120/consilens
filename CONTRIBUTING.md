@@ -12,7 +12,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/NoeticLens/consilens.git
+git clone https://github.com/datavane/consilens.git
 cd consilens
 
 # 构建项目

@@ -24,6 +24,11 @@ import java.util.Map;
 @Slf4j
 public class TiDBSqlQueryGenerator extends BaseSqlQueryGenerator {
 
+    @Override
+    public boolean backslashEscapesStringLiterals() {
+        return true;
+    }
+
     private final CapabilityProvider capabilityProvider;
     private final DataTypeHandler dataTypeHandler;
 
@@ -96,7 +101,7 @@ public class TiDBSqlQueryGenerator extends BaseSqlQueryGenerator {
                 }
                 String col = keyColumns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append(") as pk_key, ");
 
@@ -108,7 +113,7 @@ public class TiDBSqlQueryGenerator extends BaseSqlQueryGenerator {
                 }
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append(")) as row_checksum ");
 
@@ -157,7 +162,7 @@ public class TiDBSqlQueryGenerator extends BaseSqlQueryGenerator {
         for (String col : columns) {
             sql.append(", ");
             DataType dataType = columnDataTypes.get(col);
-            sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+            sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
         }
 
         sql.append(")) AS row_hash");

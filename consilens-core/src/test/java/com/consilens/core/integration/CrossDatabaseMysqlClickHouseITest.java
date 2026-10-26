@@ -44,7 +44,9 @@ class CrossDatabaseMysqlClickHouseITest {
 
     @Container
     private static final GenericContainer<?> CLICKHOUSE = new GenericContainer<>(
-            DockerImageName.parse("clickhouse/clickhouse-server:23.3"))
+            // 科学计数归一化使用 printf('%.6e', ...)，ClickHouse 从 23.7 起提供；
+            // 23.3 会直接报 Unknown function printf，导致集成测试误判。
+            DockerImageName.parse("clickhouse/clickhouse-server:24.8"))
             .withExposedPorts(8123, 9000)
             .withEnv("CLICKHOUSE_USER", "test")
             .withEnv("CLICKHOUSE_PASSWORD", "test123")

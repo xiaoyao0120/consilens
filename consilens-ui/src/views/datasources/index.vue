@@ -2,7 +2,7 @@
 import { ref, reactive, computed, h, onMounted, watch, nextTick } from "vue";
 import { useMessage, useDialog } from "naive-ui";
 import { NIcon, NTag } from "naive-ui";
-import { AddOutline, LinkOutline, CubeOutline, GridOutline, ListOutline, ServerOutline, SparklesOutline, RefreshOutline } from "@vicons/ionicons5";
+import { AddOutline, LinkOutline, CubeOutline, GridOutline, ListOutline, ServerOutline, RefreshOutline } from "@vicons/ionicons5";
 import {
   listDatasourceTypes,
   getDatasourceTypeConfig,
@@ -17,7 +17,6 @@ import {
   listDatasourceColumns,
 } from "@/api/modules";
 import DataSourceForm from "@/components/DataSourceForm.vue";
-import AiAssistantDrawer from "@/components/ai/AiAssistantDrawer.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import SkeletonTable from "@/components/common/SkeletonTable.vue";
 import CopyableId from "@/components/common/CopyableId.vue";
@@ -34,7 +33,6 @@ const dialog = useDialog();
 // （数量增长后需改回分页接口 + 服务端筛选；与运行实例列表同样的筛选交互）
 const loading = ref(false);
 const loadError = ref(false);
-const aiDrawerShow = ref(false);
 const items = ref([]);
 const types = ref([]);
 const pagination = reactive({
@@ -52,8 +50,8 @@ const filters = reactive({ keyword: "", type: null, startTime: null, endTime: nu
 const { filtersActive, syncToUrl } = useListQuerySync(filters, pagination, {
   keyword: {},
   type: {},
-  startTime: { serialize: (v) => String(timeOf(v)) },
-  endTime: { serialize: (v) => String(timeOf(v)) },
+  startTime: { parse: (v) => Number(v) || null, serialize: String },
+  endTime: { parse: (v) => Number(v) || null, serialize: String },
 });
 
 function timeOf(value) {
@@ -211,14 +209,16 @@ function openEdit(row) {
 }
 
 async function handleSave() {
+  if (modal.saving) return;
   if (!modal.form.name.trim()) {
     message.warning("请填写名称");
     return;
   }
-  const { valid, values } = (await dsFormRef.value?.validateAndGetValues()) || { valid: false, values: null };
-  if (!valid) return;
+  // 从校验开始就置为 in-flight，双击不会各自通过校验后发起两次创建/更新
   modal.saving = true;
   try {
+    const { valid, values } = (await dsFormRef.value?.validateAndGetValues()) || { valid: false, values: null };
+    if (!valid) return;
     const payload = {
       name: modal.form.name.trim(),
       type: modal.form.type,
@@ -255,19 +255,16 @@ async function handleModalTest() {
 }
 
 async function testConnectionLocal() {
-  // 弹窗内测试：优先走已保存的数据源（编辑态），新建态走 /v1/connections/test
-  if (modal.editing && modal.id) {
-    return testDatasource(modal.id);
-  }
   const { valid, values } = (await dsFormRef.value?.validateAndGetValues()) || { valid: false, values: null };
   if (!valid) return null;
-  // 仅当字段有值才放入；sid / schema / properties 放入 options
+  // 始终测试表单里的当前值；编辑态密码不回显，留空时由服务端回填已保存密码。
   const param = collectDsParam(values, modal.fields);
   const options = splitTestOptions(param);
   return testConnection({
     type: modal.form.type,
     ...param,
     options,
+    ...(modal.editing && modal.id ? { datasourceId: modal.id } : {}),
   });
 }
 
@@ -312,14 +309,21 @@ const browse = reactive({
   selectedTable: "",
 });
 
+let browseSeq = 0;
+
 async function openBrowse(row) {
+  const seq = ++browseSeq;
+  // 切换数据源时让在途的列查询失效，避免旧表的列信息写进新抽屉。
+  columnsSeq++;
   browse.current = row;
   browse.data = [];
   browse.columns = [];
+  browse.selectedTable = "";
   browse.show = true;
   browse.loading = true;
   try {
     const databases = await listDatasourceDatabases(row.id);
+    if (seq !== browseSeq) return;
     browse.data = databases.map((name) => ({
       key: `db::${name}`,
       label: name,
@@ -328,10 +332,13 @@ async function openBrowse(row) {
       // 不提供 children：懒加载（展开时触发 on-load 获取表）
     }));
   } catch (error) {
+    if (seq !== browseSeq) return;
     message.error(error?.response?.data?.error || "获取数据库列表失败");
     browse.data = [];
   } finally {
-    browse.loading = false;
+    if (seq === browseSeq) {
+      browse.loading = false;
+    }
   }
 }
 
@@ -357,6 +364,8 @@ async function loadTreeNode(node) {
   }
 }
 
+let columnsSeq = 0;
+
 // 点击（选中）表节点时，在右侧加载列信息
 async function handleTreeSelect(keys) {
   const key = Array.isArray(keys) ? keys[0] : null;
@@ -365,11 +374,15 @@ async function handleTreeSelect(keys) {
   }
   const [, database, table] = key.split("::");
   if (!database || !table || !browse.current) return;
+  const seq = ++columnsSeq;
   browse.selectedTable = table;
   browse.columns = [];
   try {
-    browse.columns = await listDatasourceColumns(browse.current.id, database, table);
+    const columns = await listDatasourceColumns(browse.current.id, database, table);
+    if (seq !== columnsSeq) return;
+    browse.columns = columns;
   } catch (error) {
+    if (seq !== columnsSeq) return;
     message.error(error?.response?.data?.error || "获取列信息失败");
   }
 }
@@ -409,6 +422,8 @@ const columns = [
     title: "名称",
     key: "name",
     minWidth: 200,
+    // 窄屏下名称会被截断：补 tooltip，避免用户看不到完整数据源名
+    ellipsis: { tooltip: true },
     render: (row) =>
       h(
         "a",
@@ -474,11 +489,6 @@ onMounted(() => {
         <div class="page-desc">管理数据连接，供任务创建时直接选用，支持实时浏览库 / 表 / 列</div>
       </div>
       <div class="head-actions">
-        <n-button size="small" quaternary circle title="AI 辅助" @click="aiDrawerShow = true">
-          <template #icon>
-            <n-icon><SparklesOutline /></n-icon>
-          </template>
-        </n-button>
         <n-button type="primary" size="small" @click="openCreate">
           <template #icon>
             <n-icon><AddOutline /></n-icon>
@@ -487,8 +497,6 @@ onMounted(() => {
         </n-button>
       </div>
     </div>
-
-    <ai-assistant-drawer v-model:show="aiDrawerShow" />
 
     <n-card size="small" :bordered="true" class="mt-12 mb-12">
       <div class="filter-bar">
@@ -557,7 +565,6 @@ onMounted(() => {
         :bordered="false"
         size="small"
         :pagination="pagination"
-        remote
         @update:page="(page) => { pagination.page = page; }"
         @update:page-size="(size) => { pagination.pageSize = size; pagination.page = 1; }"
       />
@@ -710,7 +717,7 @@ onMounted(() => {
   word-break: break-all;
 
   &.ok {
-    color: var(--success);
+    color: var(--success-text);
 
     .conn-dot {
       background: var(--success);
@@ -778,7 +785,7 @@ onMounted(() => {
   padding: 1px 10px;
   font-size: 11px;
   font-weight: 500;
-  color: var(--primary);
+  color: var(--primary-text);
   background: var(--primary-bg);
   border-radius: 5px;
   overflow: hidden;

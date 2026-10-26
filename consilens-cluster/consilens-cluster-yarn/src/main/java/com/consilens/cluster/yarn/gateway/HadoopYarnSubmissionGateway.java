@@ -78,6 +78,19 @@ public class HadoopYarnSubmissionGateway implements YarnSubmissionGateway {
         }
     }
 
+    @Override
+    public void deleteStagingDirectory(URI stagingUri) {
+        if (stagingUri == null) {
+            return;
+        }
+        try {
+            Path path = new Path(stagingUri);
+            path.getFileSystem(configuration).delete(path, true);
+        } catch (IOException e) {
+            throw new IllegalStateException("Unable to delete YARN staging directory " + stagingUri, e);
+        }
+    }
+
     private URI directoryUri(URI stagingBase) {
         String value = stagingBase.toString();
         return value.endsWith("/") ? stagingBase : URI.create(value + "/");
@@ -114,6 +127,11 @@ public class HadoopYarnSubmissionGateway implements YarnSubmissionGateway {
     @Override
     public java.util.Optional<String> trackingUrl(String applicationId) {
         return report(applicationId, ApplicationReport::getTrackingUrl);
+    }
+
+    @Override
+    public java.util.Optional<String> applicationDiagnostics(String applicationId) {
+        return report(applicationId, ApplicationReport::getDiagnostics);
     }
 
     private java.util.Optional<String> report(String applicationId,

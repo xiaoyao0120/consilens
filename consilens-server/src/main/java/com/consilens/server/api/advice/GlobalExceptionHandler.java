@@ -4,6 +4,7 @@ import com.consilens.server.api.dto.ApiResponse;
 import com.consilens.server.domain.exception.ArtifactIntegrityException;
 import com.consilens.server.domain.exception.ConflictException;
 import com.consilens.server.domain.exception.InvalidInputException;
+import com.consilens.server.domain.exception.RequestBodyTooLargeException;
 import com.consilens.server.domain.exception.ResourceNotFoundException;
 import com.consilens.server.support.trace.TraceIdSupport;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +12,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
@@ -77,9 +80,24 @@ public class GlobalExceptionHandler {
             IllegalArgumentException.class
     })
     public ResponseEntity<ApiResponse<Void>> handleBadRequest(Exception exception, HttpServletRequest request) {
+        RequestBodyTooLargeException tooLarge = findCause(exception, RequestBodyTooLargeException.class);
+        if (tooLarge != null) {
+            return handleBodyTooLarge(tooLarge, request);
+        }
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.error("Invalid request", "INVALID_REQUEST",
                         TraceIdSupport.getOrCreateTraceId(request)));
+    }
+
+    private static <T extends Throwable> T findCause(Throwable throwable, Class<T> type) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (type.isInstance(current)) {
+                return type.cast(current);
+            }
+            current = current.getCause();
+        }
+        return null;
     }
 
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
@@ -87,6 +105,34 @@ public class GlobalExceptionHandler {
                                                                     HttpServletRequest request) {
         return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
                 .body(ApiResponse.error("Method not allowed", "METHOD_NOT_ALLOWED",
+                        TraceIdSupport.getOrCreateTraceId(request)));
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException exception,
+                                                                        HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(ApiResponse.error("Unsupported media type", "UNSUPPORTED_MEDIA_TYPE",
+                        TraceIdSupport.getOrCreateTraceId(request)));
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNotAcceptable(HttpMediaTypeNotAcceptableException exception,
+                                                                 HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE)
+                .body(ApiResponse.error("Not acceptable", "NOT_ACCEPTABLE",
+                        TraceIdSupport.getOrCreateTraceId(request)));
+    }
+
+    /**
+     * 流式请求体超限时异常在 Jackson 读取阶段抛出，MVC 已接管响应，
+     * filter 的 catch 看不到，必须在这里映射成 413。
+     */
+    @ExceptionHandler(RequestBodyTooLargeException.class)
+    public ResponseEntity<ApiResponse<Void>> handleBodyTooLarge(RequestBodyTooLargeException exception,
+                                                                HttpServletRequest request) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(ApiResponse.error(exception.getMessage(), "REQUEST_BODY_TOO_LARGE",
                         TraceIdSupport.getOrCreateTraceId(request)));
     }
 

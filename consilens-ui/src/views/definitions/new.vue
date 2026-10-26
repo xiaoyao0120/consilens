@@ -70,7 +70,10 @@ function defaultAdvForm() {
     batchSize: 1000,           // strategy.batchSize（透传 attributes）
     localCompareMode: "full",  // strategy.localCompare.mode: full | auto
     validateUniqueKeys: true,  // 校验唯一键
+    allowNullableKeys: false,  // 允许可空键列（默认拒绝）
     maxDifferences: null,      // 最大差异数（可选）
+    decimalPrecision: null,    // normalization.global.decimal.precision
+    timezone: "",              // normalization.global.{timestamp,datetime}.timezone
   };
 }
 
@@ -200,8 +203,13 @@ async function loadForEdit() {
       restoreSideSelects("source"),
       restoreSideSelects("target"),
     ]);
-    compareForm.keyMappings = (config.keys || []).map((key) => ({ source: key, target: key }));
     const comparison = config.comparison || {};
+    // 主键映射优先取 comparison.keyMappings / hints.keyMappings：两端列名不同时
+    // config.keys 只保存源列，直接用它回填会把目标列也覆盖成源列，保存后映射被改坏。
+    const savedKeyMappings = comparison.keyMappings || config.hints?.keyMappings;
+    compareForm.keyMappings = Array.isArray(savedKeyMappings) && savedKeyMappings.length
+      ? savedKeyMappings.map((m) => ({ source: m.source, target: m.target }))
+      : (config.keys || []).map((key) => ({ source: key, target: key }));
     if (comparison.fieldMappings?.length) {
       compareForm.fieldMappings = comparison.fieldMappings.map((m) => ({ source: m.source, target: m.target }));
     } else if (comparison.fields?.length) {
@@ -220,7 +228,13 @@ async function loadForEdit() {
     advForm.batchSize = exec.batchSize ?? 1000;
     advForm.localCompareMode = exec.localCompareMode || "full";
     advForm.validateUniqueKeys = exec.validateUniqueKeys ?? true;
+    advForm.allowNullableKeys = exec.allowNullableKeys ?? false;
     advForm.maxDifferences = exec.maxDifferences ?? null;
+    runForm.timeoutMs = exec.timeoutMs ?? 300000;
+    const normalization = config.normalization || config.hints?.normalization || {};
+    advForm.decimalPrecision = normalization.global?.decimal?.precision ?? null;
+    advForm.timezone = normalization.global?.timestamp?.timezone
+      || normalization.global?.datetime?.timezone || "";
     platformForm.platform = config.platform || "local";
     const savedProperties = config.properties || config.cluster?.[platformForm.platform] || {};
     restorePlatformProperties(savedProperties);
@@ -237,40 +251,55 @@ async function loadForEdit() {
 }
 
 async function handleSaveDefinition() {
+  // 保存 + 可选运行：重复点击会创建重复定义/实例，入口直接去重
+  if (submitting.value) return;
   if (!defForm.name.trim()) {
     message.warning("请填写定义名称");
     return;
   }
-  if (!compareForm.keyMappings.length) {
-    message.warning("请至少配置一个主键列");
+  if (!hasCompleteKeyMapping()) {
+    message.warning("请至少配置一个完整的主键列（源端与目标端都要填写）");
     return;
   }
   submitting.value = true;
+  let definition;
   try {
-    const config = buildConfig();
     const payload = {
       name: defForm.name.trim(),
       description: defForm.description.trim() || undefined,
-      config,
+      config: buildConfig(),
     };
-    const definition = editId.value
+    definition = editId.value
       ? await updateTaskDefinition(editId.value, payload)
       : await createTaskDefinition(payload);
-    if (defForm.runNow) {
-      const accepted = await runTaskDefinition(definition.id, { dryRun: runForm.dryRun });
-      removeStoredDraft();
+  } catch (error) {
+    message.error(error?.response?.data?.error || error?.message || "保存失败");
+    submitting.value = false;
+    return;
+  }
+  // 定义已经保存成功：先清草稿，后续运行失败不能让用户以为“没保存”而重复创建
+  removeStoredDraft();
+  if (defForm.runNow) {
+    try {
+      const accepted = await runTaskDefinition(definition.id, {
+        serialNo: runForm.serialNo,
+        options: {
+          dryRun: runForm.dryRun,
+          timeoutMs: runForm.timeoutMs || undefined,
+        },
+      });
       message.success(`${editId.value ? "已更新定义" : "已保存定义"}并提交运行：${accepted.taskId}`);
       router.push(`/instances/${accepted.taskId}`);
-    } else {
-      removeStoredDraft();
-      message.success(`定义「${definition.name}」已${editId.value ? "更新" : "保存"}`);
+    } catch (error) {
+      message.warning(`定义已${editId.value ? "更新" : "保存"}，但运行提交失败：`
+        + (error?.response?.data?.error || error?.message || "未知错误"));
       router.push(`/definitions/${definition.id}`);
     }
-  } catch (error) {
-    message.error(error?.response?.data?.error || "保存失败");
-  } finally {
-    submitting.value = false;
+  } else {
+    message.success(`定义「${definition.name}」已${editId.value ? "更新" : "保存"}`);
+    router.push(`/definitions/${definition.id}`);
   }
+  submitting.value = false;
 }
 
 async function goNext() {
@@ -284,8 +313,8 @@ async function goNext() {
       return;
     }
   } else if (currentStep.value === 2) {
-    if (!compareForm.keyMappings.length) {
-      message.warning("请至少配置一个主键列");
+    if (!hasCompleteKeyMapping()) {
+      message.warning("请至少配置一个完整的主键列（源端与目标端都要填写）");
       return;
     }
   }
@@ -295,6 +324,10 @@ async function goNext() {
     loadSideColumns("source");
     loadSideColumns("target");
   }
+}
+
+function hasCompleteKeyMapping() {
+  return compareForm.keyMappings.some((mapping) => mapping.source && mapping.target);
 }
 
 function goPrev() {
@@ -309,15 +342,23 @@ function clickStep(index) {
 }
 
 // 进入页面时预加载数据源列表；编辑模式加载定义；新建模式恢复草稿
-if (editId.value) {
-  loadForEdit();
-} else {
-  draftRestored.value = restoreDraft();
-  if (draftRestored.value) {
-    message.success("已恢复上次未提交的草稿");
+async function initializePage() {
+  if (editId.value) {
+    // 编辑回填依赖 datasources 列表（restoreSideSelects 会按 id 查找并加载库表），
+    // 必须先等列表就绪，否则下拉框只有回显值没有可选项。
+    await loadDatasources();
+    await loadForEdit();
+  } else {
+    loadDatasources();
+    draftRestored.value = restoreDraft();
+    if (draftRestored.value) {
+      message.success("已恢复上次未提交的草稿");
+    }
   }
 }
-loadDatasources();
+// 不用 top-level await：<script setup> 顶层 await 会让组件变成异步组件，
+// 未包 <Suspense> 时整页不渲染。
+initializePage();
 </script>
 
 <template>
@@ -482,4 +523,19 @@ loadDatasources();
     color: var(--text-muted);
   }
 }
+
+// ===== 底部操作栏（固定） =====
+.step-bar {
+  flex-shrink: 0;
+  padding: 14px 0 0;
+  border-top: 1px solid var(--border);
+}
+
+.step-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px 4px;
+}
+
 </style>

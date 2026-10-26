@@ -37,4 +37,17 @@ class BenchmarkOptionsTest {
                 "--e2e-measurement-runs", "0"
         })).isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    void rejectsNonPositiveRowsAndOutOfRangeDiffRatios() {
+        assertThatThrownBy(() -> BenchmarkOptions.parse(new String[]{"--rows", "abc"}))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("--rows");
+        assertThatThrownBy(() -> BenchmarkOptions.parse(new String[]{"--diff-ratio", "1.5"}))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("--diff-ratio");
+        assertThatThrownBy(() -> BenchmarkOptions.parse(new String[]{"--diff-ratio", "NaN"}))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("--diff-ratio");
+    }
 }

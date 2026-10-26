@@ -32,6 +32,39 @@ class BenchmarkSuiteTest {
     }
 
     @Test
+    void corruptBaselineReturnsNonZero() throws Exception {
+        Path baseline = Files.createTempFile("benchmark-baseline", ".json");
+        Files.writeString(baseline, "not-json");
+        Path output = Files.createTempDirectory("benchmark-report");
+        BenchmarkOptions options = BenchmarkOptions.parse(new String[]{
+                "--baseline-path", baseline.toString(),
+                "--output-dir", output.toString()
+        });
+        BenchmarkResult skipped = new BenchmarkResult();
+        skipped.setScenarioId("G01");
+        skipped.setStatus("SKIPPED");
+
+        int exitCode = new BenchmarkSuite(options).aggregateAndReport(List.of(skipped));
+
+        assertThat(exitCode).isEqualTo(1);
+    }
+
+    @Test
+    void reportGenerationFailureReturnsNonZero() throws Exception {
+        Path outputAsFile = Files.createTempFile("benchmark-output", ".tmp");
+        BenchmarkOptions options = BenchmarkOptions.parse(new String[]{
+                "--output-dir", outputAsFile.toString()
+        });
+        BenchmarkResult skipped = new BenchmarkResult();
+        skipped.setScenarioId("G01");
+        skipped.setStatus("SKIPPED");
+
+        int exitCode = new BenchmarkSuite(options).aggregateAndReport(List.of(skipped));
+
+        assertThat(exitCode).isEqualTo(1);
+    }
+
+    @Test
     void partialUpdatePreservesBaselinesForScenariosNotRun() throws Exception {
         Path baseline = Files.createTempFile("benchmark-baseline", ".json");
         Files.writeString(baseline, "{\"version\":1,\"entries\":{"

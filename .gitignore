@@ -154,3 +154,7 @@ consilens-ui/.vite
 .chrome-headless
 .orchelon
 .consilens-test
+.consilens-regression
+.vite
+test-results
+consilens-ui/e2e

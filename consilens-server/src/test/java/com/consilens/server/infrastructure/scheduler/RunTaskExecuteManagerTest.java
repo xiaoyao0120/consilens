@@ -9,12 +9,16 @@ import com.consilens.server.application.topology.ServerTopologyService;
 import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.model.TaskCommandRecord;
 import com.consilens.server.domain.model.TaskInstanceRecord;
+import com.consilens.server.domain.repository.TaskCommandRepository;
 import com.consilens.server.domain.repository.TaskRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -30,6 +34,7 @@ class RunTaskExecuteManagerTest {
     @Test
     void shouldExecuteRunTaskAndUpdateSuccess() throws Exception {
         TaskRepository taskRepository = mock(TaskRepository.class);
+        TaskCommandRepository taskCommandRepository = mock(TaskCommandRepository.class);
         ServerCapabilityFacade serverCapabilityFacade = mock(ServerCapabilityFacade.class);
         ServerTopologyService serverTopologyService = mock(ServerTopologyService.class);
         RunTaskRecoveryService runTaskRecoveryService = mock(RunTaskRecoveryService.class);
@@ -59,7 +64,10 @@ class RunTaskExecuteManagerTest {
                 serverTopologyService,
                 runTaskRecoveryService,
                 properties,
-                objectMapper);
+                objectMapper,
+                new com.consilens.server.infrastructure.log.RunLogStore(
+                        java.nio.file.Paths.get("target/test-run-logs"), false),
+                taskCommandRepository);
         try {
             manager.addExecuteCommand(TaskCommandRecord.builder()
                     .id(20L)
@@ -69,6 +77,8 @@ class RunTaskExecuteManagerTest {
 
             verify(taskRepository, timeout(1000)).updateRunning(eq(10L), eq("node-a"), any(Instant.class));
             verify(taskRepository, timeout(1000)).updateSuccess(eq(10L), eq("artifact-result"), any(Instant.class));
+            // 任务进入 RUNNING 后命令才可标 DONE
+            verify(taskCommandRepository, timeout(1000)).markDone(eq(20L), any(Instant.class));
         } finally {
             manager.stop();
         }
@@ -109,7 +119,9 @@ class RunTaskExecuteManagerTest {
                 serverTopologyService,
                 runTaskRecoveryService,
                 properties,
-                objectMapper);
+                objectMapper,
+                new com.consilens.server.infrastructure.log.RunLogStore(
+                        java.nio.file.Paths.get("target/test-run-logs"), false));
         try {
             manager.addExecuteCommand(TaskCommandRecord.builder()
                     .id(21L)
@@ -147,7 +159,9 @@ class RunTaskExecuteManagerTest {
                 serverTopologyService,
                 runTaskRecoveryService,
                 properties,
-                new ObjectMapper());
+                new ObjectMapper(),
+                new com.consilens.server.infrastructure.log.RunLogStore(
+                        java.nio.file.Paths.get("target/test-run-logs"), false));
         try {
             manager.addExecuteCommand(TaskCommandRecord.builder()
                     .id(22L)
@@ -190,7 +204,9 @@ class RunTaskExecuteManagerTest {
                 serverTopologyService,
                 runTaskRecoveryService,
                 new ConsilensServerProperties(),
-                objectMapper);
+                objectMapper,
+                new com.consilens.server.infrastructure.log.RunLogStore(
+                        java.nio.file.Paths.get("target/test-run-logs"), false));
         try {
             manager.addExecuteCommand(TaskCommandRecord.builder()
                     .id(23L)
@@ -234,7 +250,9 @@ class RunTaskExecuteManagerTest {
                 serverTopologyService,
                 runTaskRecoveryService,
                 new ConsilensServerProperties(),
-                objectMapper);
+                objectMapper,
+                new com.consilens.server.infrastructure.log.RunLogStore(
+                        java.nio.file.Paths.get("target/test-run-logs"), false));
         try {
             manager.addExecuteCommand(TaskCommandRecord.builder()
                     .id(24L)
@@ -246,6 +264,71 @@ class RunTaskExecuteManagerTest {
                     .retryOrFail(eq(task), eq("TEMPORARY_ERROR"), eq("temporary failure"), any(Instant.class));
             verify(taskRepository, timeout(1000).times(2)).confirmCancellation(eq(14L), any(Instant.class));
         } finally {
+            manager.stop();
+        }
+    }
+
+    @Test
+    void shouldKeepHeartbeatAliveAfterTransientRenewFailure() throws Exception {
+        TaskRepository taskRepository = mock(TaskRepository.class);
+        ServerCapabilityFacade serverCapabilityFacade = mock(ServerCapabilityFacade.class);
+        ServerTopologyService serverTopologyService = mock(ServerTopologyService.class);
+        RunTaskRecoveryService runTaskRecoveryService = mock(RunTaskRecoveryService.class);
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        properties.getScheduler().setClaimLeaseSeconds(3);
+        ObjectMapper objectMapper = new ObjectMapper();
+
+        RunRequest request = new RunRequest();
+        request.setSerialNo("serial-heartbeat");
+        request.setConfigArtifactId("artifact-config");
+        TaskInstanceRecord task = TaskInstanceRecord.builder()
+                .id(15L)
+                .instanceKey("task-heartbeat")
+                .traceId("trace-heartbeat")
+                .requestPayload(objectMapper.writeValueAsString(request))
+                .build();
+        when(taskRepository.findById(15L)).thenReturn(Optional.of(task));
+        when(serverTopologyService.currentNodeKey()).thenReturn("node-a");
+        when(taskRepository.updateRunning(eq(15L), eq("node-a"), any(Instant.class))).thenReturn(true);
+        when(taskRepository.updateSuccess(eq(15L), any(), any(Instant.class))).thenReturn(true);
+
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger renewCalls = new AtomicInteger();
+        when(taskRepository.renewRunning(eq(15L), any(Instant.class))).thenAnswer(invocation -> {
+            // 第一次心跳模拟 DB 抖动，之后恢复；固定间隔任务不能因此被取消。
+            if (renewCalls.incrementAndGet() == 1) {
+                throw new RuntimeException("transient db error");
+            }
+            return true;
+        });
+        when(serverCapabilityFacade.run(any(RunRequest.class), any())).thenAnswer(invocation -> {
+            release.await(8, TimeUnit.SECONDS);
+            return ArtifactRefDto.builder()
+                    .id("artifact-heartbeat")
+                    .type("RUN_RESULT")
+                    .format("json")
+                    .build();
+        });
+
+        RunTaskExecuteManager manager = new RunTaskExecuteManager(taskRepository,
+                serverCapabilityFacade,
+                serverTopologyService,
+                runTaskRecoveryService,
+                properties,
+                objectMapper,
+                new com.consilens.server.infrastructure.log.RunLogStore(
+                        java.nio.file.Paths.get("target/test-run-logs"), false));
+        try {
+            manager.addExecuteCommand(TaskCommandRecord.builder()
+                    .id(25L)
+                    .taskId(15L)
+                    .commandKey("cmd-heartbeat")
+                    .build());
+
+            verify(taskRepository, timeout(6000).atLeast(2))
+                    .renewRunning(eq(15L), any(Instant.class));
+        } finally {
+            release.countDown();
             manager.stop();
         }
     }

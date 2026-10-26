@@ -54,8 +54,9 @@ public class SubmitKubernetesCommand implements Callable<Integer> {
     private final Supplier<ClusterSubmitter> submitterFactory;
     private final Supplier<String> submissionIdFactory;
 
-    @Option(names = "--image", required = true,
-            description = "Container image containing the consilens coordinator runtime at /opt/consilens/runtime")
+    @Option(names = "--image",
+            description = "Container image containing the consilens coordinator runtime at /opt/consilens/runtime "
+                    + "(or consilens.kubernetes.image in --properties-file)")
     private String image;
 
     @Option(names = "--descriptor-uri",
@@ -110,6 +111,9 @@ public class SubmitKubernetesCommand implements Callable<Integer> {
             description = "Descriptor file or HTTP(S) URI, the consilens equivalent of the spark application resource")
     private String descriptorParameter;
 
+    /** resolveDescriptor() 的结果：位置参数可能是本地文件，--descriptor-uri 始终按远端处理。 */
+    private boolean descriptorIsRemote;
+
     @Spec
     private CommandSpec commandSpec;
 
@@ -130,31 +134,38 @@ public class SubmitKubernetesCommand implements Callable<Integer> {
             Map<String, String> settings = loadSettings();
             String descriptor = resolveDescriptor();
             requireValue(descriptor != null, "descriptor is required, like the spark application resource");
+            // --image 与 properties-file 的 consilens.kubernetes.image 等价，CLI 优先
+            String resolvedImage = firstNonBlank(image, settings.get("image"));
+            requireValue(resolvedImage != null,
+                    "image is required: pass --image or consilens.kubernetes.image in --properties-file");
             String submissionId = submissionIdFactory.get();
             int maxAttempts = integerSetting(maximumAttempts, settings.get("max-attempts"), 1);
+            String resolvedJobName = firstNonBlank(jobName, settings.get("name"), "consilens-" + submissionId);
+            String resolvedConfigMapName = descriptorConfigMapNameOrDefault(resolvedJobName);
             ClusterSubmitRequest submissionRequest = ClusterSubmitRequest.builder()
                     .submissionId(submissionId)
                     .comparison(ClusterComparisonDescription.builder()
-                            .sourceConfigRef(descriptorReference(descriptor, submissionId))
-                            .targetConfigRef(descriptorReference(descriptor, submissionId))
+                            .sourceConfigRef(descriptorReference(descriptor, resolvedConfigMapName))
+                            .targetConfigRef(descriptorReference(descriptor, resolvedConfigMapName))
                             .build())
                     .execution(ClusterExecutionDescription.builder()
                             .executionMode(ExecutionMode.KUBERNETES)
                             .maxAttempts(maxAttempts)
                             .kubernetesNamespace(stringSetting(namespace, settings.get("namespace"),
                                     KubernetesSubmissionSpec.DEFAULT_NAMESPACE))
-                            .kubernetesImage(image)
+                            .kubernetesImage(resolvedImage)
                             .build())
                     .build();
-            String resolvedJobName = firstNonBlank(jobName, settings.get("name"), "consilens-" + submissionId);
             submissionRequest.setKubernetesSubmission(KubernetesSubmissionSpec.builder()
                     .namespace(stringSetting(namespace, settings.get("namespace"),
                             KubernetesSubmissionSpec.DEFAULT_NAMESPACE))
                     .jobName(resolvedJobName)
-                    .image(image)
-                    .descriptorUri(descriptorUri)
+                    .image(resolvedImage)
+                    // 位置参数为 HTTP(S) URI 时 descriptorData 为空，必须把它作为 descriptorUri，
+                    // 否则校验报 "descriptor is required"（--descriptor-uri 才是显式远端引用）
+                    .descriptorUri(descriptorIsRemote ? descriptor : descriptorUri)
                     .descriptorData(descriptorData(descriptor))
-                    .descriptorConfigMapName(descriptorConfigMapNameOrDefault(resolvedJobName))
+                    .descriptorConfigMapName(resolvedConfigMapName)
                     .descriptorMountPath("/opt/consilens/descriptor")
                     .memoryMiB(memorySetting(settings))
                     .cpuMilli(cpuSetting(settings))
@@ -246,25 +257,32 @@ public class SubmitKubernetesCommand implements Callable<Integer> {
         if (descriptorParameter != null && descriptorUri != null) {
             throw new IllegalArgumentException("descriptor supplied both positionally and via --descriptor-uri");
         }
-        String descriptor = descriptorParameter != null ? descriptorParameter : descriptorUri;
-        return descriptor;
+        if (descriptorParameter != null) {
+            descriptorIsRemote = isUri(descriptorParameter);
+            return descriptorParameter;
+        }
+        // --descriptor-uri 显式声明远端引用，交给 K8s spec 校验 scheme 是否合法。
+        descriptorIsRemote = descriptorUri != null;
+        return descriptorUri;
     }
 
-    private String descriptorReference(String descriptor, String submissionId) {
-        if (isUri(descriptor)) {
+    private String descriptorReference(String descriptor, String configMapName) {
+        if (descriptorIsRemote) {
             return "descriptor:" + descriptor;
         }
         String fileName = Paths.get(descriptor).getFileName().toString();
-        return "configmap:" + descriptorConfigMapNameOrDefault(
-                firstNonBlank(jobName, "consilens-" + submissionId)) + ":" + fileName;
+        return "configmap:" + configMapName + ":" + fileName;
     }
 
+    /** Kubernetes descriptor 只支持 HTTP(S) 远端；Windows 盘符等本地路径不能被误判成 URI。 */
     private boolean isUri(String value) {
-        return value != null && value.matches("[a-zA-Z][a-zA-Z0-9+.-]*:.*");
+        return value != null
+                && (value.regionMatches(true, 0, "http://", 0, 7)
+                || value.regionMatches(true, 0, "https://", 0, 8));
     }
 
     private Map<String, String> descriptorData(String descriptor) {
-        if (descriptor == null || isUri(descriptor)) {
+        if (descriptor == null || descriptorIsRemote) {
             return new LinkedHashMap<>();
         }
         Path path = Paths.get(descriptor).toAbsolutePath().normalize();

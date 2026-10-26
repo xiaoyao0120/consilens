@@ -22,6 +22,10 @@ public class TaskSummaryDto {
     private String traceId;
     private String executeNodeKey;
     private Integer retryCount;
+    /** 失败时的结构化错误码；成功任务为空。 */
+    private String errorCode;
+    /** 失败原因（已脱敏）；成功任务为空。 */
+    private String errorMessage;
     private Instant submitTime;
     private Instant startTime;
     private Instant endTime;

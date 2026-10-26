@@ -3,11 +3,13 @@ package com.consilens.benchmark.baseline;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class BaselineStoreTest {
 
@@ -16,6 +18,26 @@ class BaselineStoreTest {
         Baseline baseline = BaselineStore.load(tmp.resolve("missing.json"));
         assertThat(baseline.getEntries()).isEmpty();
         assertThat(baseline.getVersion()).isEqualTo(1);
+    }
+
+    @Test
+    void corruptFileFailsLoudly(@TempDir Path tmp) throws Exception {
+        Path file = tmp.resolve("baseline.json");
+        Files.writeString(file, "not-json");
+
+        assertThatThrownBy(() -> BaselineStore.load(file))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("failed to read baseline");
+    }
+
+    @Test
+    void nullJsonBaselineFailsLoudly(@TempDir Path tmp) throws Exception {
+        Path file = tmp.resolve("baseline-null.json");
+        Files.writeString(file, "null");
+
+        assertThatThrownBy(() -> BaselineStore.load(file))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("failed to read baseline");
     }
 
     @Test

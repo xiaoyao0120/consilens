@@ -1,10 +1,10 @@
 <script setup>
-import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from "vue";
+import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useMessage } from "naive-ui";
-import { NButton, NIcon, NPopconfirm, NSpin, NSwitch } from "naive-ui";
+import { NButton, NIcon, NPopconfirm, NSpin, NSwitch, NAlert } from "naive-ui";
 import { ArrowBackOutline, RefreshOutline, TimeOutline, ServerOutline, PlayCircleOutline, PulseOutline } from "@vicons/ionicons5";
-import { getTaskInstance, retryTask, cancelTask, getDiffReport, listArtifactDifferences } from "@/api/modules";
+import { getTaskInstance, retryTask, cancelTask, getDiffReport, listArtifactDifferences, getTaskLogs, downloadTaskLog, getArtifactContent } from "@/api/modules";
 import { formatTime, formatDuration, formatNumber, formatRatio } from "@/utils/format";
 import { DIFF_OPERATION_LABELS } from "@/common/statusMapping";
 import StateTag from "@/components/common/StateTag.vue";
@@ -22,13 +22,15 @@ const message = useMessage();
 const taskId = route.params.taskId;
 const loading = ref(true);
 const task = ref(null);
+// 区分"加载失败"与"任务确实不存在"：一次网络抖动不能把页面永久显示成不存在
+const loadError = ref(false);
 let pollTimer = null;
 
 // 运行中横幅的「已运行」计时：跟随轮询节拍刷新
 const nowTick = ref(Date.now());
 
 const FINAL_STATUSES = ["SUCCEEDED", "FAILED", "CANCELLED", "RETRYABLE"];
-const TABS = ["overview", "diff", "columns"];
+const TABS = ["overview", "diff", "columns", "logs"];
 
 function ensureValidTab(tab) {
   return TABS.includes(tab) ? tab : "overview";
@@ -40,12 +42,48 @@ async function loadTask(showLoading = false) {
   if (showLoading) loading.value = true;
   try {
     task.value = await getTaskInstance(taskId);
+    loadError.value = false;
     const status = task.value?.status;
     if (FINAL_STATUSES.includes(status)) stopPolling();
-  } catch {
-    stopPolling();
+    loadClusterInfo();
+  } catch (error) {
+    // 只有 404 才是"任务不存在"；其它错误保持轮询，避免一次抖动后页面永久冻结
+    if (error?.status === 404 || error?.response?.status === 404) {
+      stopPolling();
+      task.value = null;
+      loadError.value = false;
+    } else {
+      loadError.value = true;
+    }
   } finally {
     loading.value = false;
+  }
+}
+
+// ===== 集群执行信息（YARN/K8s）=====
+// 集群应用 ID / tracking URL 存在 RUN_RESULT artifact 内容里；按 artifactId 去重，
+// 轮询期间不重复拉取，拉取失败不影响主流程。
+const clusterInfo = ref(null);
+let loadedClusterArtifactId = null;
+
+async function loadClusterInfo() {
+  const artifact = (task.value?.artifacts || []).find((a) => a.artifactType === "RUN_RESULT");
+  if (!artifact || loadedClusterArtifactId === artifact.artifactId) return;
+  loadedClusterArtifactId = artifact.artifactId;
+  try {
+    const content = await getArtifactContent(artifact.artifactId, { silent: true });
+    const parsed = typeof content?.content === "string" ? JSON.parse(content.content) : content?.content;
+    if (parsed?.clusterApplicationId || parsed?.finalStatus) {
+      clusterInfo.value = {
+        clusterApplicationId: parsed.clusterApplicationId,
+        finalStatus: parsed.finalStatus,
+        trackingUrl: parsed.trackingUrl,
+      };
+    }
+  } catch {
+    // 集群信息仅用于展示：失败后清空去重标记，下一轮轮询可以重试，
+    // 否则一次网络抖动会让集群卡片永久消失。
+    loadedClusterArtifactId = null;
   }
 }
 
@@ -67,7 +105,9 @@ function stopPolling() {
 async function handleRetry() {
   await retryTask(taskId);
   message.success("已发起重试");
-  loadTask();
+  await loadTask();
+  // 重试后任务重新进入运行态：恢复轮询，否则页面会一直停在旧终态
+  startPolling();
 }
 
 async function handleCancel() {
@@ -78,6 +118,14 @@ async function handleCancel() {
 
 const status = computed(() => task.value?.status || "");
 const nextActions = computed(() => task.value?.availableNextActions || []);
+// 失败原因由任务查询接口透出；CANCELLED 也会写 errorCode，不能当作执行失败展示
+const failureCode = computed(() => task.value?.errorCode || "");
+const failureMessage = computed(() => task.value?.errorMessage || "");
+const hasFailure = computed(() =>
+  Boolean((failureCode.value || failureMessage.value)
+    && ["FAILED", "RETRYABLE"].includes(status.value))
+);
+const failureTitle = computed(() => (status.value === "RETRYABLE" ? "执行失败（可重试）" : "执行失败"));
 
 // 运行中任务的已运行时长（从开始时间起算，缺省用提交时间）
 const runningElapsed = computed(() => {
@@ -91,6 +139,12 @@ function handleTabChange(tab) {
   activeTab.value = tab;
   router.replace({ query: { ...route.query, tab } });
   if (tab === "diff" || tab === "columns") loadDiffReport();
+  if (tab === "logs") {
+    loadLogs(true);
+    startLogPolling();
+  } else {
+    stopLogPolling();
+  }
 }
 
 watch(
@@ -123,6 +177,11 @@ watch(
   () => task.value?.status,
   (s) => {
     if (s === "SUCCEEDED") loadDiffReport();
+    // 任务结束后补拉一次日志，确保最后几行（结束标记）不丢；同时停掉日志轮询
+    if (FINAL_STATUSES.includes(s)) {
+      stopLogPolling();
+      if (activeTab.value === "logs") loadLogs(false);
+    }
   }
 );
 
@@ -147,7 +206,11 @@ const diffOps = ref(Object.keys(DIFF_OPERATION_LABELS));
 // 差异明细列显示开关：默认只看差异列
 const showAllColumns = ref(false);
 
+// 差异明细分页请求序号：快速切换筛选/翻页时只应用最后一次响应
+let diffRequestSeq = 0;
+
 async function loadDiffPage(page = 1) {
+  const requestSeq = ++diffRequestSeq;
   const runResult = (task.value?.artifacts || []).find((item) => item.artifactType === "RUN_RESULT");
   if (!runResult) return;
   // 全部类型都未勾选时不返回数据
@@ -169,15 +232,19 @@ async function loadDiffPage(page = 1) {
       // （被截断在 1000 上限外会挤掉真实差异行），不能依赖无过滤请求。
       operation: diffOps.value.join(","),
     });
+    if (requestSeq !== diffRequestSeq) return;
     diffPage.items = result.items || [];
     diffPage.total = result.total ?? diffPage.items.length;
     diffPage.truncated = !!result.truncated;
     diffPage.page = page;
     diffPage.loaded = true;
   } catch (error) {
+    if (requestSeq !== diffRequestSeq) return;
     message.error(error?.response?.data?.error || "获取差异明细失败");
   } finally {
-    diffPage.loading = false;
+    if (requestSeq === diffRequestSeq) {
+      diffPage.loading = false;
+    }
   }
 }
 
@@ -258,6 +325,17 @@ const overviewItems = computed(() => [
   { label: "耗时", value: formatDuration(task.value?.startTime, task.value?.endTime) },
 ]);
 
+const clusterItems = computed(() => [
+  { label: "集群应用 ID", value: clusterInfo.value?.clusterApplicationId || "-", copyable: true, mono: true },
+  { label: "应用终态", value: clusterInfo.value?.finalStatus || "-" },
+]);
+
+// tracking URL 来自集群侧返回值：只允许 http(s)，避免 javascript: 之类的协议被渲染成可点击链接
+const trackingUrl = computed(() => {
+  const url = clusterInfo.value?.trackingUrl;
+  return typeof url === "string" && /^https?:\/\//i.test(url) ? url : "";
+});
+
 const diffNotReady = computed(() => status.value !== "SUCCEEDED");
 
 function copyText(text) {
@@ -265,13 +343,129 @@ function copyText(text) {
   message.success("已复制");
 }
 
+// ===== 运行日志 =====
+// 首次进入读文件末尾（长任务不必从第 1 行拉），之后按 nextOffset 增量追加。
+const LOG_TAIL_LINES = 2000;
+const LOG_PAGE_LINES = 2000;
+// 前端保留的最大字符数：超出后丢弃最早内容，避免长时间运行把页面内存撑爆
+const LOG_MAX_CHARS = 400_000;
+
+const logState = reactive({
+  content: "",
+  offset: 0,
+  available: false,
+  fileSize: 0,
+  lastModified: null,
+  loading: false,
+  loaded: false,
+  error: "",
+  autoRefresh: true,
+});
+const logViewer = ref(null);
+let logTimer = null;
+// 轮询请求在途时用户点“刷新”：不能直接丢弃，等当前请求结束后补一次完整重载
+let pendingLogReset = false;
+
+async function loadLogs(reset = false) {
+  if (logState.loading) {
+    if (reset) pendingLogReset = true;
+    return;
+  }
+  logState.loading = true;
+  try {
+    const initial = reset || !logState.loaded;
+    const stickToBottom = initial || isLogNearBottom();
+    const page = initial
+      ? await getTaskLogs(taskId, { tailLines: LOG_TAIL_LINES })
+      : await getTaskLogs(taskId, { offset: logState.offset, limit: LOG_PAGE_LINES });
+    logState.available = page?.available === true;
+    logState.fileSize = page?.fileSize ?? 0;
+    logState.lastModified = page?.lastModified ?? null;
+    if (page?.content) {
+      logState.content = initial ? page.content : logState.content + page.content;
+    }
+    logState.offset = page?.nextOffset ?? logState.offset;
+    logState.loaded = true;
+    logState.error = "";
+    if (logState.content.length > LOG_MAX_CHARS) {
+      logState.content = logState.content.slice(-LOG_MAX_CHARS);
+    }
+    await nextTick();
+    // 用户向上翻看历史日志时不要被轮询强行拉回底部
+    if (stickToBottom) scrollLogToBottom();
+  } catch {
+    // 读取失败不能永远停在"加载中"：给出可重试的提示（自动刷新仍可恢复）
+    logState.loaded = true;
+    logState.error = logState.content ? "" : "日志加载失败，请点击刷新重试";
+  } finally {
+    logState.loading = false;
+    if (pendingLogReset) {
+      pendingLogReset = false;
+      loadLogs(true);
+    }
+  }
+}
+
+function isLogNearBottom() {
+  const el = logViewer.value;
+  if (!el) return true;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+}
+
+function scrollLogToBottom() {
+  const el = logViewer.value;
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
+function startLogPolling() {
+  stopLogPolling();
+  if (!logState.autoRefresh || FINAL_STATUSES.includes(status.value)) return;
+  logTimer = setInterval(() => loadLogs(false), 2000);
+}
+
+function stopLogPolling() {
+  if (logTimer) {
+    clearInterval(logTimer);
+    logTimer = null;
+  }
+}
+
+function handleLogAutoRefresh(value) {
+  if (value) {
+    startLogPolling();
+  } else {
+    stopLogPolling();
+  }
+}
+
+async function handleDownloadLog() {
+  try {
+    const blob = await downloadTaskLog(taskId);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${taskId}.log`;
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch {
+    message.error("日志下载失败");
+  }
+}
+
 onMounted(async () => {
   await loadTask(true);
   if (!FINAL_STATUSES.includes(status.value)) startPolling();
   if (status.value === "SUCCEEDED") loadDiffReport();
+  if (activeTab.value === "logs") {
+    loadLogs(true);
+    startLogPolling();
+  }
 });
 
-onBeforeUnmount(stopPolling);
+onBeforeUnmount(() => {
+  stopPolling();
+  stopLogPolling();
+});
 </script>
 
 <template>
@@ -348,6 +542,21 @@ onBeforeUnmount(stopPolling);
           </div>
         </div>
 
+        <!-- 失败原因：集群/本地执行失败时直接展示，避免用户只能去翻日志 -->
+        <n-alert
+          v-if="hasFailure"
+          class="failure-alert"
+          :type="status === 'RETRYABLE' ? 'warning' : 'error'"
+          :show-icon="true"
+          :bordered="false"
+        >
+          <template #header>
+            <span>{{ failureTitle }}</span>
+            <code v-if="failureCode" class="failure-code">{{ failureCode }}</code>
+          </template>
+          <div v-if="failureMessage" class="failure-message">{{ failureMessage }}</div>
+        </n-alert>
+
         <!-- 运行中横幅 -->
         <div v-if="status === 'RUNNING' || status === 'PENDING' || status === 'CLAIMED'" class="running-banner">
           <n-icon size="16" color="var(--primary)"><RefreshOutline /></n-icon>
@@ -403,6 +612,18 @@ onBeforeUnmount(stopPolling);
             <n-card :bordered="true" title="基本信息" class="panel-card">
               <KeyValueList :items="overviewItems" :columns="3" />
             </n-card>
+            <n-card v-if="clusterInfo" :bordered="true" title="集群执行" class="panel-card mt-12">
+              <KeyValueList :items="clusterItems" :columns="3" />
+              <a
+                v-if="trackingUrl"
+                class="tracking-link"
+                :href="trackingUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                打开集群应用页 →
+              </a>
+            </n-card>
           </n-tab-pane>
 
           <n-tab-pane name="diff" tab="差异明细" class="diff-pane">
@@ -433,8 +654,8 @@ onBeforeUnmount(stopPolling);
                     <ValueDiffTable v-if="diffPage.items.length" :samples="diffPage.items" :show-all-columns="showAllColumns" />
                     <EmptyState
                       v-if="diffPage.loaded && !diffPage.items.length"
-                      title="未发现差异记录"
-                      description="本次比对两表数据完全一致"
+                      :title="diffOps.length === 0 ? '未选择差异类型' : '未发现差异记录'"
+                      :description="diffOps.length === 0 ? '请在左侧勾选至少一种差异类型' : '本次比对两表数据完全一致'"
                     />
                   </div>
                   <div v-if="diffPage.loaded && diffPage.items.length" class="diff-pager">
@@ -478,8 +699,37 @@ onBeforeUnmount(stopPolling);
               <EmptyState v-else title="暂无列分析数据" description="该任务没有可用的列级统计" />
             </n-spin>
           </n-tab-pane>
+
+          <n-tab-pane name="logs" tab="运行日志">
+            <div class="run-log-panel">
+              <div class="run-log-toolbar">
+                <span class="text-muted">
+                  {{ logState.available ? `共 ${formatNumber(logState.fileSize)} 字节` : "暂无日志文件" }}
+                </span>
+                <span v-if="logState.lastModified" class="text-muted">
+                  更新于 {{ formatTime(logState.lastModified) }}
+                </span>
+                <span class="flex-1" />
+                <span class="log-switch">
+                  <n-switch
+                    v-model:value="logState.autoRefresh"
+                    size="small"
+                    @update:value="handleLogAutoRefresh"
+                  />
+                  <span class="switch-label">自动刷新</span>
+                </span>
+                <n-button size="small" :loading="logState.loading" @click="loadLogs(true)">刷新</n-button>
+                <n-button size="small" :disabled="!logState.available" @click="handleDownloadLog">下载</n-button>
+              </div>
+              <pre ref="logViewer" class="run-log">{{ logState.content || logState.error || (logState.loaded ? "暂无日志输出" : "加载中…") }}</pre>
+            </div>
+          </n-tab-pane>
         </n-tabs>
       </template>
+
+      <n-card v-else-if="!loading && loadError" :bordered="true">
+        <EmptyState title="加载失败" description="网络或服务异常，请稍后重试" action="重试" @action="loadTask(true)" />
+      </n-card>
 
       <n-card v-else-if="!loading" :bordered="true">
         <EmptyState title="任务不存在" description="任务可能已被清理" action="返回任务列表" @action="router.push('/instances')" />
@@ -508,6 +758,34 @@ onBeforeUnmount(stopPolling);
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
+}
+
+// ===== 失败原因 =====
+.failure-alert {
+  margin-bottom: 16px;
+
+  .failure-code {
+    margin-left: 8px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--bg-subtle);
+    color: var(--text-secondary);
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .failure-message {
+    margin-top: 4px;
+    max-height: 220px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
 }
 
 .header-left {
@@ -555,7 +833,7 @@ onBeforeUnmount(stopPolling);
 }
 
 .meta-link {
-  color: var(--primary);
+  color: var(--primary-text);
   cursor: pointer;
 
   &:hover {
@@ -570,6 +848,20 @@ onBeforeUnmount(stopPolling);
   flex-shrink: 0;
 }
 
+// 窄屏：标题区与操作区分行，避免操作按钮把返回键挤出/盖住
+@media (max-width: 768px) {
+  .detail-header {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .header-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
 // ===== 运行中横幅 =====
 .running-banner {
   display: flex;
@@ -578,7 +870,7 @@ onBeforeUnmount(stopPolling);
   padding: 10px 16px;
   margin-top: 12px;
   font-size: 13px;
-  color: var(--primary);
+  color: var(--primary-text);
   background: var(--primary-bg);
   border-radius: 8px;
 }
@@ -686,9 +978,67 @@ onBeforeUnmount(stopPolling);
   }
 }
 
+// 集群应用跟踪入口：与正文同色系，悬停下划线
+.tracking-link {
+  display: inline-block;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--primary-text);
+  text-decoration: none;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
 .diff-pane {
   height: calc(100vh - 320px);
   min-height: 380px;
+}
+
+// ===== 运行日志 =====
+.run-log-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: calc(100vh - 320px);
+  min-height: 380px;
+}
+
+.run-log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  font-size: 12px;
+
+  .log-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .switch-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+}
+
+.run-log {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: var(--radius-ctl);
+  color: var(--code-text);
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .diff-spin,

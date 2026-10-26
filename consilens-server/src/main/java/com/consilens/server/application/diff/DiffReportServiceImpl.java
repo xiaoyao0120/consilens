@@ -66,22 +66,48 @@ public class DiffReportServiceImpl implements DiffReportService {
         }
         // 统计优先读 DB（statistics_json）；旧格式回退读 content
         JsonNode statistics = statisticsNode(runResult);
+
+        boolean statisticsAvailable = statistics != null && statistics.isObject() && statistics.size() > 0;
+        // 只有没有 statistics 时才需要读 content 旧格式（避免每份报告都多读一次大文件）
+        JsonNode contentRoot = statisticsAvailable ? null : contentRootNode(runResult);
+        // 必须是数值才算有效计数：null/字符串同样表示“未知”，不能用 asLong(0) 兜成 0
+        boolean legacyCountAvailable = contentRoot != null && contentRoot.path("differenceCount").isNumber();
+        if (!statisticsAvailable && !legacyCountAvailable) {
+            // dryRun / 集群未回传统计：没有可比对的计数，不能推断成 100 分
+            return emptyReport(taskId);
+        }
         JsonNode differences = differencesNode(runResult);
 
-        long totalDifferenceCount = longValue(statistics, "totalDifferences", -1L);
-        if (totalDifferenceCount < 0 && runResult.getDifferenceCount() != null) {
-            totalDifferenceCount = runResult.getDifferenceCount();
-        }
-        if (totalDifferenceCount < 0) {
-            // 旧格式/无统计时兜底 content 顶层 differenceCount
-            totalDifferenceCount = longValue(contentRootNode(runResult), "differenceCount", 0L);
-        }
-        Double differencePercentage = doubleValue(statistics, "differencePercentage");
-        if (differencePercentage == null && statistics != null && statistics.isObject()) {
-            differencePercentage = DiffReportSupport.percentageFromCounts(
-                    totalDifferenceCount,
-                    statistics.path("sourceRowCount").asLong(0),
-                    statistics.path("targetRowCount").asLong(0));
+        long totalDifferenceCount;
+        Double differencePercentage;
+        if (statisticsAvailable) {
+            totalDifferenceCount = longValue(statistics, "totalDifferences", -1L);
+            if (totalDifferenceCount < 0 && runResult.getDifferenceCount() != null) {
+                totalDifferenceCount = runResult.getDifferenceCount();
+            }
+            if (totalDifferenceCount < 0) {
+                // 统计对象存在但缺少 totalDifferences（部分旧格式/集群回传）：
+                // 不能把“未知”当成 0，否则报告会错误显示 100 分。
+                JsonNode fallbackContent = contentRootNode(runResult);
+                if (fallbackContent != null && fallbackContent.path("differenceCount").isNumber()) {
+                    totalDifferenceCount = fallbackContent.path("differenceCount").asLong();
+                }
+            }
+            if (totalDifferenceCount < 0) {
+                return emptyReport(taskId);
+            }
+            differencePercentage = doubleValue(statistics, "differencePercentage");
+            if (differencePercentage == null) {
+                differencePercentage = DiffReportSupport.percentageFromCounts(
+                        totalDifferenceCount,
+                        statistics.path("sourceRowCount").asLong(0),
+                        statistics.path("targetRowCount").asLong(0));
+            }
+        } else {
+            // 旧格式/无 statistics_json：回退 content 顶层计数
+            totalDifferenceCount = contentRoot.path("differenceCount").asLong(0L);
+            differencePercentage = contentRoot.path("differencePercentage").isNumber()
+                    ? contentRoot.path("differencePercentage").asDouble() : null;
         }
         Double matchScore = DiffReportSupport.matchScoreOf(differencePercentage, totalDifferenceCount);
 

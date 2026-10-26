@@ -10,6 +10,7 @@ import java.text.SimpleDateFormat;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
 import java.time.ZonedDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -33,6 +34,9 @@ public class ValueNormalizer {
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    /** 与 SQL 侧 normalizeDecimal 默认精度一致（normalization.decimal.precision 默认 4）。 */
+    public static final int DEFAULT_DECIMAL_SCALE = 4;
+
     // ThreadLocal SimpleDateFormat instances for thread safety
     private static final ThreadLocal<SimpleDateFormat> LEGACY_DATE_FORMAT = 
         ThreadLocal.withInitial(() -> new SimpleDateFormat("yyyy-MM-dd"));
@@ -49,6 +53,25 @@ public class ValueNormalizer {
      * @return Normalized string representation
      */
     public static String normalizeValue(Object value, DataType dataType) {
+        return normalizeValue(value, dataType, DEFAULT_DECIMAL_SCALE);
+    }
+
+    /**
+     * 同 {@link #normalizeValue(Object, DataType)}，但定点精度由调用方给出：流式/本地路径
+     * 从 normalization spec 读到 precision 后传进来，避免 SQL 侧按配置精度、Java 侧固定 4 位。
+     */
+    public static String normalizeValue(Object value, DataType dataType, int decimalScale) {
+        return normalizeValue(value, dataType, decimalScale, null);
+    }
+
+    /**
+     * 同 3 参版本，额外给出 JDBC 会话时区：无时区的 {@link java.sql.Timestamp} /
+     * {@link LocalDateTime} 需要按会话时区解释墙钟再换算到 UTC，才能与 SQL 侧
+     * （`CONVERT_TZ(@@session.time_zone,'+00:00')` / `AT TIME ZONE`）同形。
+     * {@code sessionZone == null} 时保持旧行为（按墙钟渲染，不做换算）。
+     */
+    public static String normalizeValue(Object value, DataType dataType, int decimalScale,
+                                        java.time.ZoneId sessionZone) {
         if (value == null) {
             return "";
         }
@@ -71,7 +94,7 @@ public class ValueNormalizer {
 
                 case DECIMAL:
                 case NUMERIC:
-                    return normalizeDecimal(value);
+                    return normalizeDecimal(value, decimalScale);
 
                 case FLOAT:
                 case DOUBLE:
@@ -87,7 +110,7 @@ public class ValueNormalizer {
                 case DATETIME:
                 case TIMESTAMP:
                 case TIMESTAMP_WITH_TIMEZONE:
-                    return normalizeDateTime(value);
+                    return normalizeDateTime(value, sessionZone);
 
                 case BOOLEAN:
                 case BIT:
@@ -138,11 +161,18 @@ public class ValueNormalizer {
      * Normalize integer values: no decimal point.
      */
     private static String normalizeInteger(Object value) {
-        if (value instanceof Number) {
+        // 不能用 longValue() 兜底：MySQL unsigned BIGINT / NUMBER(38) 会超过 Long.MAX_VALUE，
+        // longValue() 会回绕，把两个不同的整数归一化成同一个值（静默判等）。
+        if (value instanceof java.math.BigInteger) {
+            return value.toString();
+        }
+        if (value instanceof Long || value instanceof Integer
+                || value instanceof Short || value instanceof Byte) {
             return String.valueOf(((Number) value).longValue());
         }
         try {
-            return String.valueOf(Long.parseLong(value.toString().trim()));
+            // BigDecimal.toBigInteger() 截断小数，与 longValue() 对浮点的处理一致
+            return new BigDecimal(value.toString().trim()).toBigInteger().toString();
         } catch (NumberFormatException e) {
             log.warn("Failed to parse integer value: {}, error: {}",
                     value.toString(),
@@ -154,18 +184,58 @@ public class ValueNormalizer {
     /**
      * Normalize decimal values: 4 decimal places (0.0000).
      */
-    private static String normalizeDecimal(Object value) {
-        if (value instanceof Number) {
-            double d = ((Number) value).doubleValue();
-            return String.format("%.4f", d);
+    /**
+     * 主键分量归一化：定点数必须精确，不能用 {@link #normalizeDecimal} 的
+     * double + 4 位小数形态（1.00001 与 1.00002 会碰撞，超大 DECIMAL 还会丢精度）。
+     * 其余类型沿用 {@link #normalizeValue} 的既有口径。
+     */
+    public static String normalizeKey(Object value, DataType dataType) {
+        if (value == null) {
+            return "";
+        }
+        if (dataType == DataType.DECIMAL || dataType == DataType.NUMERIC) {
+            BigDecimal decimal = toBigDecimal(value);
+            if (decimal != null) {
+                BigDecimal stripped = decimal.stripTrailingZeros();
+                return stripped.signum() == 0 ? "0" : stripped.toPlainString();
+            }
+        }
+        return normalizeValue(value, dataType);
+    }
+
+    private static BigDecimal toBigDecimal(Object value) {
+        try {
+            if (value instanceof BigDecimal) {
+                return (BigDecimal) value;
+            }
+            if (value instanceof java.math.BigInteger) {
+                return new BigDecimal((java.math.BigInteger) value);
+            }
+            if (value instanceof Number) {
+                return new BigDecimal(value.toString());
+            }
+            if (value instanceof String) {
+                return new BigDecimal(((String) value).trim());
+            }
+        } catch (NumberFormatException exception) {
+            log.warn("Failed to parse decimal key value: {}, error: {}", value, exception.getMessage());
+        }
+        return null;
+    }
+
+    private static String normalizeDecimal(Object value, int decimalScale) {
+        // 走 BigDecimal 而不是 double：超大 DECIMAL（> 2^53）经 double 会丢精度，
+        // 本地比较就会把两个不同的定点数判成相等/不等（与 SQL 侧 ROUND(x,4) 口径不符）。
+        BigDecimal decimal = toBigDecimal(value);
+        if (decimal == null) {
+            log.warn("Failed to parse decimal value: {}", value);
+            return "0.0000";
         }
         try {
-            double d = Double.parseDouble(value.toString().trim());
-            return String.format("%.4f", d);
-        } catch (NumberFormatException e) {
-            log.warn("Failed to parse decimal value: {}, error: {}",
-                    value.toString(),
-                e.getMessage());
+            int scale = decimalScale < 0 ? DEFAULT_DECIMAL_SCALE : decimalScale;
+            return decimal.setScale(scale, java.math.RoundingMode.HALF_UP).toPlainString();
+        } catch (ArithmeticException e) {
+            log.warn("Failed to scale decimal value: {}, error: {}", value, e.getMessage());
             return "0.0000";
         }
     }
@@ -264,19 +334,47 @@ public class ValueNormalizer {
         }
     }
 
+    /** 把“会话时区下的墙钟”换算成 UTC 字符串；无会话时区时原样渲染。 */
+    private static String formatWallClock(LocalDateTime wallClock, java.time.ZoneId sessionZone) {
+        if (sessionZone == null) {
+            return wallClock.format(DATETIME_FORMATTER);
+        }
+        return wallClock.atZone(sessionZone)
+                .withZoneSameInstant(java.time.ZoneOffset.UTC)
+                .toLocalDateTime()
+                .format(DATETIME_FORMATTER);
+    }
+
     /**
      * Normalize datetime/timestamp values: YYYY-MM-DD HH:MM:SS.
      * Handles various formats including ISO 8601 with timezone.
      */
     private static String normalizeDateTime(Object value) {
+        return normalizeDateTime(value, null);
+    }
+
+    private static String normalizeDateTime(Object value, java.time.ZoneId sessionZone) {
         try {
             if (value instanceof LocalDateTime) {
-                return ((LocalDateTime) value).format(DATETIME_FORMATTER);
+                return formatWallClock((LocalDateTime) value, sessionZone);
+            } else if (value instanceof java.time.OffsetDateTime
+                    || value instanceof java.time.ZonedDateTime
+                    || value instanceof java.time.Instant) {
+                // 带偏移的值必须换算到 UTC 再渲染：Java 的 toString 只保留墙钟，
+                // 直接格式化会把 12:00+08:00 渲染成 12:00（SQL 侧渲染的是 04:00 UTC）。
+                java.time.Instant instant = value instanceof java.time.Instant
+                        ? (java.time.Instant) value
+                        : (value instanceof java.time.OffsetDateTime
+                                ? ((java.time.OffsetDateTime) value).toInstant()
+                                : ((java.time.ZonedDateTime) value).toInstant());
+                return LocalDateTime.ofInstant(instant, java.time.ZoneOffset.UTC)
+                        .format(DATETIME_FORMATTER);
             } else if (value instanceof Timestamp) {
-                // Use SimpleDateFormat to format the timestamp
-                // This preserves the time value as-is without timezone conversion
-                // MySQL TIMESTAMP: JDBC returns the value in connection timezone
-                // PostgreSQL TIMESTAMP: JDBC returns the literal value
+                // 无会话时区时按驱动给出的墙钟渲染（旧行为）；给了会话时区才换算到 UTC，
+                // 因为 JDBC 的 Timestamp 本身不带时区信息。
+                if (sessionZone != null) {
+                    return formatWallClock(((Timestamp) value).toLocalDateTime(), sessionZone);
+                }
                 return LEGACY_DATETIME_FORMAT.get().format((Timestamp) value);
             } else if (value instanceof Date) {
                 // Use SimpleDateFormat for Date as well
@@ -324,20 +422,40 @@ public class ValueNormalizer {
                 
                 // Handle ISO 8601 format with timezone
                 if (str.contains("T")) {
-                    // Remove milliseconds first
-                    str = str.replaceAll("\\.\\d+", "");
-                    
-                    // Remove timezone info
-                    str = str.replaceAll("[+-]\\d{4}$", "")       // Remove +HHMM or -HHMM
-                             .replaceAll("[+-]\\d{2}:\\d{2}$", "") // Remove +HH:MM or -HH:MM
-                             .replaceAll("Z$", "");               // Remove Z
-                    
-                    // Replace 'T' with space
-                    str = str.replace('T', ' ');
-                    
-                    // If now in correct format, return
-                    if (str.matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}")) {
-                        return str;
+                    String iso = str.replaceAll("\\.\\d+", "");
+                    // 带偏移的 ISO 时间必须先换算到 UTC，不能直接删掉偏移：
+                    // "2024-01-01T12:00:00+08:00" 与 "2024-01-01 04:00:00Z" 是同一时刻。
+                    java.util.regex.Matcher offset = java.util.regex.Pattern
+                            .compile("^(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2})(Z|[+-]\\d{2}:?\\d{2})$")
+                            .matcher(iso);
+                    if (offset.matches()) {
+                        try {
+                            String zone = offset.group(2).replaceAll("^([+-]\\d{2})(\\d{2})$", "$1:$2");
+                            return OffsetDateTime.parse(offset.group(1) + zone)
+                                    .withOffsetSameInstant(ZoneOffset.UTC)
+                                    .toLocalDateTime().format(DATETIME_FORMATTER);
+                        } catch (java.time.DateTimeException ignore) {
+                            // fall through: treat as local wall clock
+                        }
+                    }
+                    // 带时区名的 ISO 形式（如 "...T16:37:34 UTC"）按同一规则换算
+                    String spaced = iso.replace('T', ' ');
+                    java.util.regex.Matcher zonedIso = java.util.regex.Pattern
+                            .compile("^(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}) ([A-Za-z/_0-9+\\-:]+)$")
+                            .matcher(spaced);
+                    if (zonedIso.matches()) {
+                        try {
+                            String zone = zonedIso.group(2).replaceAll("^([+-])(\\d):", "$10$2:");
+                            return LocalDateTime.parse(zonedIso.group(1), DATETIME_FORMATTER)
+                                    .atZone(java.time.ZoneId.of(zone))
+                                    .withZoneSameInstant(ZoneOffset.UTC)
+                                    .toLocalDateTime().format(DATETIME_FORMATTER);
+                        } catch (java.time.DateTimeException ignore) {
+                            // fall through to zone-less handling
+                        }
+                    }
+                    if (spaced.matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}")) {
+                        return spaced;
                     }
                 }
                 
@@ -367,6 +485,17 @@ public class ValueNormalizer {
         }
         String str = value.toString().trim().toLowerCase();
         return (str.equals("true") || str.equals("1") || str.equals("yes")) ? "1" : "0";
+    }
+
+    /**
+     * 对外暴露的 JSON 规范形：键排序 + 紧凑分隔符。SQL 侧 normalize_json、本地比较
+     * （{@code LocalDiffEngine}）与流式比较共用同一实现，避免"一处排序、一处不排序"。
+     */
+    public static String canonicalJson(String text) {
+        if (text == null) {
+            return "";
+        }
+        return normalizeJson(text);
     }
 
     /**

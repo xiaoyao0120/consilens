@@ -40,6 +40,29 @@ class OceanBaseSqlQueryGeneratorTest {
         assertEquals("LIMIT 100, 50", generator.getLimitClause(100, 50));
     }
 
+    /**
+     * NULL 键的三值逻辑：键为 NULL 时归一化等值可能是 UNKNOWN，不能用 NOT(equal)
+     * 判断“对侧缺行”，否则 FULL OUTER JOIN 会漏掉 source_missing/target_missing。
+     * 用 CASE 把 UNKNOWN 归入 false。
+     */
+    @Test
+    void testJoinDiffClassifiesMissingRowsWithNullableCompositeKeys() {
+        Map<String, DataType> types = new HashMap<>();
+        types.put("k1", DataType.VARCHAR);
+        types.put("k2", DataType.VARCHAR);
+        types.put("value", DataType.VARCHAR);
+
+        String sql = generator.getJoinDiffDetailSQL(
+                "s1", "source_table", "s",
+                List.of("k1", "k2"), List.of("value"), List.of("k1", "k2", "value"), null, types,
+                "s2", "target_table", "t",
+                List.of("k1", "k2"), List.of("value"), List.of("k1", "k2", "value"), null, types);
+
+        assertTrue(sql.contains("CASE WHEN"), sql);
+        assertTrue(sql.contains("THEN 1 ELSE 0 END = 0"), sql);
+        assertTrue(sql.contains("THEN 1 ELSE 0 END = 1"), sql);
+    }
+
     @Test
     void testGetCountSQL() {
         String sql = generator.getCountSQL("test_db", "test_table", null);

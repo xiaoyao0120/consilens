@@ -3,7 +3,12 @@ package com.consilens.server.application.connection;
 import com.consilens.server.api.dto.ConnectionTestRequest;
 import com.consilens.server.api.dto.ConnectionTestResponse;
 import com.consilens.server.application.datasource.DialectSupport;
+import com.consilens.server.domain.model.DataSourceRecord;
+import com.consilens.server.domain.repository.DataSourceRepository;
+import com.consilens.server.support.crypto.AesGcmSecretProtector;
+import com.consilens.server.support.crypto.SecretProtectorTestKeys;
 import com.consilens.connector.api.DatabaseDialect;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -45,6 +50,61 @@ class DefaultConnectionTestServiceTest {
     }
 
     @Test
+    void shouldFallBackToStoredPasswordForEditFormTests() throws Exception {
+        Connection connection = mock(Connection.class);
+        when(connection.isClosed()).thenReturn(false);
+        ArgumentCaptor<Properties> properties = ArgumentCaptor.forClass(Properties.class);
+        when(opener.open(any(), properties.capture())).thenReturn(connection);
+
+        AesGcmSecretProtector protector = SecretProtectorTestKeys.protector();
+        DataSourceRepository repository = mock(DataSourceRepository.class);
+        when(repository.findById(7L)).thenReturn(Optional.of(DataSourceRecord.builder()
+                .id(7L)
+                .name("orders")
+                .type("mysql")
+                .paramJson("{\"password\":\"" + protector.protect("stored-secret") + "\"}")
+                .build()));
+        ConnectionTestServiceImpl editService = new ConnectionTestServiceImpl(opener, dialectSupport,
+                repository, protector, new ObjectMapper());
+
+        ConnectionTestResponse response = editService.test(ConnectionTestRequest.builder()
+                .type("mysql").host("8.8.8.8").database("db").username("u")
+                .datasourceId(7L)
+                .build());
+
+        assertTrue(response.isSuccess());
+        assertEquals("stored-secret", properties.getValue().getProperty("password"));
+    }
+
+    @Test
+    void shouldFallBackToStoredPasswordWhenEditFormReturnsMask() throws Exception {
+        Connection connection = mock(Connection.class);
+        when(connection.isClosed()).thenReturn(false);
+        ArgumentCaptor<Properties> properties = ArgumentCaptor.forClass(Properties.class);
+        when(opener.open(any(), properties.capture())).thenReturn(connection);
+
+        AesGcmSecretProtector protector = SecretProtectorTestKeys.protector();
+        DataSourceRepository repository = mock(DataSourceRepository.class);
+        when(repository.findById(7L)).thenReturn(Optional.of(DataSourceRecord.builder()
+                .id(7L)
+                .name("orders")
+                .type("mysql")
+                .paramJson("{\"password\":\"" + protector.protect("stored-secret") + "\"}")
+                .build()));
+        ConnectionTestServiceImpl editService = new ConnectionTestServiceImpl(opener, dialectSupport,
+                repository, protector, new ObjectMapper());
+
+        ConnectionTestResponse response = editService.test(ConnectionTestRequest.builder()
+                .type("mysql").host("8.8.8.8").database("db").username("u")
+                .password("******")
+                .datasourceId(7L)
+                .build());
+
+        assertTrue(response.isSuccess());
+        assertEquals("stored-secret", properties.getValue().getProperty("password"));
+    }
+
+    @Test
     void shouldSucceedWhenDialectProvidesUrlAndConnectionWorks() throws Exception {
         Connection connection = mock(Connection.class);
         when(connection.isClosed()).thenReturn(false);
@@ -55,6 +115,24 @@ class DefaultConnectionTestServiceTest {
         assertTrue(response.isSuccess());
         assertNull(response.getError());
         verify(dialect).buildJdbcUrl(any());
+    }
+
+    @Test
+    void shouldApplyConfiguredJdbcPropertiesToConnectionTest() throws Exception {
+        Connection connection = mock(Connection.class);
+        when(connection.isClosed()).thenReturn(false);
+        ArgumentCaptor<Properties> properties = ArgumentCaptor.forClass(Properties.class);
+        when(opener.open(any(), properties.capture())).thenReturn(connection);
+
+        ConnectionTestResponse response = service.test(ConnectionTestRequest.builder()
+                .type("mysql").host("8.8.8.8").database("db")
+                .options(Map.of("properties", "useSSL=false&socketTimeout=1000"))
+                .build());
+
+        assertTrue(response.isSuccess());
+        assertEquals("false", properties.getValue().getProperty("useSSL"));
+        assertEquals("1000", properties.getValue().getProperty("socketTimeout"));
+        assertFalse(properties.getValue().containsKey("connectTimeout"));
     }
 
     @Test
@@ -83,6 +161,16 @@ class DefaultConnectionTestServiceTest {
         ArgumentCaptor<Map<String, Object>> paramsCaptor = ArgumentCaptor.forClass(Map.class);
         verify(dialect).buildJdbcUrl(paramsCaptor.capture());
         assertEquals(3307, paramsCaptor.getValue().get("port"));
+    }
+
+    @Test
+    void shouldRejectDatabaseUrlInjectionForDirectServiceCallers() throws Exception {
+        ConnectionTestResponse response = service.test(
+                request("mysql", "8.8.8.8", null, "db?allowLoadLocalInfile=true", null, null));
+
+        assertFalse(response.isSuccess());
+        assertTrue(response.getError().contains("database"), response.getError());
+        verify(opener, never()).open(any(), any());
     }
 
     @Test

@@ -146,6 +146,49 @@ class CompareRequestFactoryTest {
     }
 
     @Test
+    void shouldHonorAllowNullableKeysFromStrategyConfig() {
+        CliConfiguration config = baseConfig();
+        config.setStrategy(StrategyConfig.builder()
+                .mode("checksum")
+                .algorithm("concat")
+                .bisectionFactor(4)
+                .bisectionThreshold(1000L)
+                .batchSize(100)
+                .maxDifferences(10L)
+                .localCompare(LocalCompareConfig.builder().mode("full").build())
+                .allowNullableKeys(true)
+                .build());
+        config.setComparison(ComparisonConfig.builder()
+                .keys(ListPairConfig.builder().source(List.of("id")).target(List.of("id")).build())
+                .build());
+
+        CompareRequest request = factory.create(config);
+
+        assertEquals(Boolean.TRUE, request.getExecutionOptions().getAllowNullableKeys());
+    }
+
+    @Test
+    void shouldDefaultToStrictNullableKeyPolicyWhenStrategyOmitsIt() {
+        CliConfiguration config = baseConfig();
+        config.setStrategy(StrategyConfig.builder()
+                .mode("checksum")
+                .algorithm("concat")
+                .bisectionFactor(4)
+                .bisectionThreshold(1000L)
+                .batchSize(100)
+                .maxDifferences(10L)
+                .localCompare(LocalCompareConfig.builder().mode("full").build())
+                .build());
+        config.setComparison(ComparisonConfig.builder()
+                .keys(ListPairConfig.builder().source(List.of("id")).target(List.of("id")).build())
+                .build());
+
+        CompareRequest request = factory.create(config);
+
+        assertEquals(Boolean.FALSE, request.getExecutionOptions().getAllowNullableKeys());
+    }
+
+    @Test
     void shouldMapChecksumStrategyToPreferredPlansAndExecutionOptions() {
         CliConfiguration config = baseConfig();
         config.setStrategy(StrategyConfig.builder()
@@ -259,6 +302,35 @@ class CompareRequestFactoryTest {
         assertEquals("SELECT order_id AS logical_id, name AS source_name, debug_source AS debug_only FROM source_table",
                 request.getSource().getResource().getPath());
         assertEquals("SELECT id AS logical_id, full_name AS source_name, debug_target AS debug_only FROM target_table",
+                request.getTarget().getResource().getPath());
+    }
+
+    @Test
+    void shouldUseKeyMappingExpressionAndAllowOmittedKeysSection() {
+        CliConfiguration config = baseConfig();
+        config.setComparison(ComparisonConfig.builder()
+                .mappings(List.of(
+                        CompareMappingConfig.builder()
+                                .name("logical_id")
+                                .key(true)
+                                .source(FieldExpressionConfig.builder()
+                                        .expression("UPPER(order_id)").build())
+                                .target(FieldExpressionConfig.builder().column("id").build())
+                                .build(),
+                        CompareMappingConfig.builder()
+                                .name("amount")
+                                .source(FieldExpressionConfig.builder().column("amount").build())
+                                .target(FieldExpressionConfig.builder().column("amount").build())
+                                .build()))
+                .build());
+
+        CompareRequest request = factory.create(config);
+
+        assertEquals(List.of("logical_id"), request.getSourceKeySpec().getFields());
+        assertEquals(List.of("logical_id"), request.getTargetKeySpec().getFields());
+        assertEquals("SELECT UPPER(order_id) AS logical_id, amount FROM source_table",
+                request.getSource().getResource().getPath());
+        assertEquals("SELECT id AS logical_id, amount FROM target_table",
                 request.getTarget().getResource().getPath());
     }
 

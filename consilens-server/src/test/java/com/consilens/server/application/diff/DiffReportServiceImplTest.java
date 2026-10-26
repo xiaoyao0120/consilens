@@ -152,8 +152,62 @@ class DiffReportServiceImplTest {
 
         DiffReportDto report = service.getDiffReport(TASK_KEY);
 
-        // 10 / max(100, 200) = 0.05 -> score 95.0 -> GOOD
-        assertEquals(95.0, report.getMatchScore());
+        // 分母取两侧行数之和：10 / (100 + 200) = 0.033 -> score 96.7 -> GOOD
+        assertEquals(96.7, report.getMatchScore());
+        assertEquals("GOOD", report.getStatus());
+    }
+
+    @Test
+    void shouldNotInferPerfectScoreWhenStatisticsLackTotalDifferences() {
+        when(taskRepository.resolveByRef(TASK_KEY)).thenReturn(Optional.of(task(TaskStatus.SUCCEEDED)));
+        ArtifactRecord runResult = ArtifactRecord.builder()
+                .id("result-partial")
+                .taskId(TASK_ID)
+                .artifactType(ArtifactKind.RUN_RESULT)
+                .artifactFormat("json")
+                .storageUri("storage://partial")
+                .statisticsJson("{\"sourceRowCount\":100,\"targetRowCount\":100}")
+                .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
+                .metadataJson("{}")
+                .build();
+        when(artifactRepository.listByTaskId(TASK_ID)).thenReturn(List.of(runResult));
+        when(contentStore.read("storage://partial")).thenReturn(content("{\n"
+                + "  \"success\": true,\n"
+                + "  \"statistics\": {\"sourceRowCount\": 100, \"targetRowCount\": 100}\n"
+                + "}"));
+
+        DiffReportDto report = service.getDiffReport(TASK_KEY);
+
+        assertEquals("NONE", report.getStatus());
+        assertNull(report.getMatchScore());
+        assertNull(report.getTotalDifferenceCount());
+    }
+
+    @Test
+    void shouldUsePersistedDifferenceCountWhenStatisticsLackTotalDifferences() {
+        when(taskRepository.resolveByRef(TASK_KEY)).thenReturn(Optional.of(task(TaskStatus.SUCCEEDED)));
+        ArtifactRecord runResult = ArtifactRecord.builder()
+                .id("result-persisted-count")
+                .taskId(TASK_ID)
+                .artifactType(ArtifactKind.RUN_RESULT)
+                .artifactFormat("json")
+                .storageUri("storage://persisted-count")
+                .statisticsJson("{\"sourceRowCount\":100,\"targetRowCount\":100,"
+                        + "\"differencePercentage\":3.0}")
+                .differenceCount(3L)
+                .createdAt(Instant.parse("2026-01-01T00:00:00Z"))
+                .metadataJson("{}")
+                .build();
+        when(artifactRepository.listByTaskId(TASK_ID)).thenReturn(List.of(runResult));
+        when(contentStore.read("storage://persisted-count")).thenReturn(content("{\n"
+                + "  \"success\": true,\n"
+                + "  \"statistics\": {\"sourceRowCount\": 100, \"targetRowCount\": 100}\n"
+                + "}"));
+
+        DiffReportDto report = service.getDiffReport(TASK_KEY);
+
+        assertEquals(3L, report.getTotalDifferenceCount());
+        assertEquals(97.0, report.getMatchScore());
         assertEquals("GOOD", report.getStatus());
     }
 
@@ -202,6 +256,24 @@ class DiffReportServiceImplTest {
         // columns can still be aggregated from samples
         assertEquals(1, report.getColumns().size());
         assertEquals(1, report.getSamples().size());
+    }
+
+    @Test
+    void shouldReturnNoneWhenLegacyDifferenceCountIsNotNumeric() {
+        when(taskRepository.resolveByRef(TASK_KEY)).thenReturn(Optional.of(task(TaskStatus.SUCCEEDED)));
+        when(artifactRepository.listByTaskId(TASK_ID))
+                .thenReturn(List.of(runResult("storage://null-count")));
+        when(contentStore.read("storage://null-count")).thenReturn(content("{\n"
+                + "  \"success\": true,\n"
+                + "  \"differenceCount\": null,\n"
+                + "  \"differences\": []\n"
+                + "}"));
+
+        DiffReportDto report = service.getDiffReport(TASK_KEY);
+
+        assertEquals("NONE", report.getStatus());
+        assertNull(report.getMatchScore());
+        assertNull(report.getTotalDifferenceCount());
     }
 
     @Test

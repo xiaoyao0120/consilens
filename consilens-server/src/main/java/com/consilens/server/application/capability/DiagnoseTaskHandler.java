@@ -52,12 +52,21 @@ public class DiagnoseTaskHandler implements CapabilityHandler<DiagnoseRequest> {
     private Map<String, Object> diagnose(DiagnoseRequest request, Map<String, Object> runResult) {
         Map<String, Object> result = new LinkedHashMap<>();
         boolean success = Boolean.TRUE.equals(runResult.get("success"));
+        boolean dryRun = Boolean.TRUE.equals(runResult.get("dryRun"));
+        boolean statisticsUnavailable = Boolean.TRUE.equals(runResult.get("statisticsUnavailable"));
         long differenceCount = longValue(runResult.get("differenceCount"));
         List<String> findings = new ArrayList<>();
         List<String> recommendations = new ArrayList<>();
         if (!success) {
             findings.add("run failed with " + string(runResult.get("errorCode")));
             recommendations.add("repair config inputs and re-run validation before retrying run");
+        } else if (dryRun) {
+            // dryRun 只校验配置和连通性，没有执行比对；0 差异不代表数据一致
+            findings.add("dry run completed; no comparison was performed");
+            recommendations.add("run without dryRun to obtain actual differences");
+        } else if (statisticsUnavailable) {
+            findings.add("run succeeded but comparison statistics are unavailable");
+            recommendations.add("inspect the cluster application logs/diagnostics before drawing conclusions");
         } else if (differenceCount > 0) {
             findings.add("run completed with " + differenceCount + " differences");
             recommendations.add("review comparison keys, ignored columns, filters, and source/target data freshness");
@@ -66,8 +75,9 @@ public class DiagnoseTaskHandler implements CapabilityHandler<DiagnoseRequest> {
         }
         result.put("runArtifactId", request.getRunArtifactId());
         result.put("runSucceeded", success);
-        result.put("dryRun", Boolean.TRUE.equals(runResult.get("dryRun")));
+        result.put("dryRun", dryRun);
         result.put("differenceCount", differenceCount);
+        result.put("statisticsAvailable", !dryRun && !statisticsUnavailable);
         result.put("statistics", runResult.getOrDefault("statistics", Map.of()));
         result.put("errorCode", runResult.get("errorCode"));
         result.put("errorMessage", runResult.get("errorMessage"));

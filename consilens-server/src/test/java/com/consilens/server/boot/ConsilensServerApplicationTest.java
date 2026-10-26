@@ -38,7 +38,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest
+@SpringBootTest(properties = "spring.profiles.active=local")
 @org.springframework.test.context.TestPropertySource(properties = {
         "consilens.server.scheduler.enabled=false",
         "consilens.server.security.enabled=false",

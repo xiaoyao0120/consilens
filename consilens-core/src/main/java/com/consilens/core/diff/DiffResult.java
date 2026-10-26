@@ -175,7 +175,7 @@ public class DiffResult {
 
         statsMap.put("differenceCount", getDifferenceCount());
         statsMap.put("hasDifferences", hasDifferences());
-        statsMap.put("completedAt", completedAt.toString());
+        statsMap.put("completedAt", completedAt == null ? null : completedAt.toString());
 
         return statsMap;
     }
@@ -184,7 +184,7 @@ public class DiffResult {
      * Create a copy with additional metadata.
      */
     public DiffResult withMetadata(String key, Object value) {
-        Map<String, Object> newMetadata = new HashMap<>(metadata);
+        Map<String, Object> newMetadata = new HashMap<>(metadata == null ? Map.of() : metadata);
         newMetadata.put(key, value);
 
         return this.toBuilder()
@@ -299,8 +299,14 @@ public class DiffResult {
          * percentageFromCounts）统一按百分数消费。
          */
         public double getDifferencePercentage() {
-            long totalRows = Math.max(sourceRowCount, targetRowCount);
-            return totalRows > 0 ? (double) getTotalDifferences() / totalRows * 100.0 : 0.0;
+            // 分母取两侧行数之和：仅取 max 时，若一侧有 2N 行、另一侧 0 行，
+            // SM+TM 会达到 200% 以上，matchScore 变负、进度条/阈值全部失真。
+            long totalRows = sourceRowCount + targetRowCount;
+            if (totalRows <= 0) {
+                return 0.0;
+            }
+            double percentage = (double) getTotalDifferences() / totalRows * 100.0;
+            return Math.max(0.0, Math.min(100.0, percentage));
         }
 
         public long getUnchangedCount() {
@@ -319,7 +325,7 @@ public class DiffResult {
                     .targetMissingCount(targetMissingCount + other.targetMissingCount)
                     .mismatchCount(mismatchCount + other.mismatchCount)
                     .processingTimeMs(Math.max(processingTimeMs, other.processingTimeMs))
-                    .unchangedCount(Math.max(unchangedCount, other.unchangedCount))
+                    .unchangedCount(unchangedCount + other.unchangedCount)
                     .build();
         }
     }

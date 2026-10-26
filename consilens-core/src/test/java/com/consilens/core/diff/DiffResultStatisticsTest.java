@@ -4,6 +4,8 @@ import com.consilens.core.diff.DiffResult.DiffStatistics;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * 统计字段的边界保护：unchangedCount 不允许为负数。
@@ -39,5 +41,15 @@ class DiffResultStatisticsTest {
                 .mismatchCount(500)
                 .build();
         assertEquals(7500, s.getUnchangedCount());
+    }
+
+    @Test
+    void statisticsMapToleratesMissingCompletedAtAndMetadata() {
+        DiffResult result = DiffResult.builder()
+                .statistics(DiffStatistics.builder().build())
+                .build();
+
+        assertNull(result.getStatisticsMap().get("completedAt"));
+        assertNotNull(result.withMetadata("k", "v").getMetadata());
     }
 }

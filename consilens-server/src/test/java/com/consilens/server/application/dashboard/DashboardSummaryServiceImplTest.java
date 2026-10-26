@@ -22,6 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class DefaultDashboardSummaryServiceTest {
@@ -114,6 +116,30 @@ class DefaultDashboardSummaryServiceTest {
 
         assertEquals(0L, summary.getRecent7dDifferenceCount());
         assertTrue(summary.getRecent7dTrend().stream().allMatch(point -> point.getDifferenceCount() == 0));
+    }
+
+    @Test
+    void shouldNotReadOversizedLegacyArtifactContent() {
+        TaskRepository taskRepository = mock(TaskRepository.class);
+        ArtifactRepository artifactRepository = mock(ArtifactRepository.class);
+        ArtifactContentStore contentStore = mock(ArtifactContentStore.class);
+        ServerNodeQueryService nodeQueryService = mock(ServerNodeQueryService.class);
+
+        when(taskRepository.listSubmittedSince(any())).thenReturn(List.of());
+        when(artifactRepository.listCreatedSince(any())).thenReturn(List.of(
+                result("artifact-large", "2025-04-10T01:30:00Z", 0L)));
+        when(contentStore.size(any())).thenReturn(3L * 1024 * 1024);
+        when(nodeQueryService.listAliveNodes()).thenReturn(List.of());
+        when(nodeQueryService.listNodes()).thenReturn(List.of());
+
+        DashboardSummaryServiceImpl service = new DashboardSummaryServiceImpl(
+                taskRepository, artifactRepository, contentStore, nodeQueryService,
+                new ObjectMapper(), Clock.fixed(NOW, ZONE));
+
+        DashboardSummaryDto summary = service.getSummary("trace-large");
+
+        assertEquals(0L, summary.getRecent7dDifferenceCount());
+        verify(contentStore, never()).read(any());
     }
 
     private TaskInstanceRecord task(String instanceKey, String submitTime) {

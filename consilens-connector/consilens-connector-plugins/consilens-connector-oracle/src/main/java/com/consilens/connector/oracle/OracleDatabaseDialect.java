@@ -121,4 +121,9 @@ public class OracleDatabaseDialect extends AbstractDatabaseDialect {
     public ConnectionPoolOptimizer getConnectionPoolOptimizer() {
         return connectionPoolOptimizer;
     }
+
+    @Override
+    public String getConnectionInitSql() {
+        return OracleConnectionPoolOptimizer.DEFAULT_CONNECTION_INIT_SQL;
+    }
 }

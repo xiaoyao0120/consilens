@@ -32,6 +32,13 @@ public interface YarnSubmissionGateway extends AutoCloseable {
     }
 
     /**
+     * Deletes the per-application staging directory (best effort). Used when
+     * submission fails after staging so descriptors/credentials do not linger in HDFS.
+     */
+    default void deleteStagingDirectory(URI stagingUri) {
+    }
+
+    /**
      * Current state name of the application, e.g. {@code ACCEPTED},
      * {@code RUNNING}, {@code FINISHED}. Empty when the application is unknown.
      */
@@ -51,6 +58,16 @@ public interface YarnSubmissionGateway extends AutoCloseable {
      * Tracking URL for the running application; empty when unknown.
      */
     default java.util.Optional<String> trackingUrl(String applicationId) {
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * Diagnostics reported by the ApplicationMaster via
+     * {@code unregisterApplicationMaster}. The AM puts the coordinator's summary
+     * JSON here so the submitter (and the server behind it) can recover the
+     * comparison statistics without reading container logs. Empty when unknown.
+     */
+    default java.util.Optional<String> applicationDiagnostics(String applicationId) {
         return java.util.Optional.empty();
     }
 

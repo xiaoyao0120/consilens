@@ -27,6 +27,11 @@ import java.util.Map;
 @Slf4j
 public class MySQLSqlQueryGenerator extends BaseSqlQueryGenerator {
 
+    @Override
+    public boolean backslashEscapesStringLiterals() {
+        return true;
+    }
+
     private final CapabilityProvider capabilityProvider;
     private final DataTypeHandler dataTypeHandler;
 
@@ -122,7 +127,7 @@ public class MySQLSqlQueryGenerator extends BaseSqlQueryGenerator {
                 }
                 String col = keyColumns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append(") as pk_key, ");
 
@@ -134,7 +139,7 @@ public class MySQLSqlQueryGenerator extends BaseSqlQueryGenerator {
                 }
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append(")) as row_checksum ");
 
@@ -185,7 +190,7 @@ public class MySQLSqlQueryGenerator extends BaseSqlQueryGenerator {
                 DataType dataType = columnDataTypes.get(col);
                 String normalizedCol = dataTypeHandler.normalizeColumn(col, dataType);
                 
-                sql.append(normalizedCol);
+                sql.append(escapeHashValue(normalizedCol));
             }
             
             sql.append(")), 1, 16), 16, 10) AS SIGNED)) AS SIGNED)), 16, '0') as checksum ");
@@ -261,7 +266,7 @@ public class MySQLSqlQueryGenerator extends BaseSqlQueryGenerator {
         for (String col : columns) {
             sql.append(", ");
             DataType dataType = columnDataTypes.get(col);
-            sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+            sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
         }
 
         sql.append(")) AS row_hash");

@@ -211,7 +211,9 @@ docker_verify() {
 
   require_docker
   rm -rf "$report_dir"
-  ./mvnw -B -pl consilens-core -am verify
+  # 固定 JVM 默认时区：MySQL 驱动按 LOCAL 解释 TIMESTAMP，宿主时区非 UTC 时
+  # 会与 Presto/ClickHouse 等 UTC 会话产生 8 小时假差异。
+  TZ=UTC ./mvnw -B -pl consilens-core -am verify
   validate_failsafe_reports default
 }
 
@@ -277,14 +279,12 @@ smoke_dist_cli() {
     echo "Unpacked CLI launcher not found" >&2
     exit 1
   fi
-  if ! find "$app/agent-skills" -mindepth 2 -maxdepth 2 -name SKILL.md | grep -q .; then
-    echo "Agent skills not found in release archive" >&2
+  if ! find "$app/mcp-skills" -mindepth 2 -maxdepth 2 -name SKILL.md | grep -q .; then
+    echo "MCP skills not found in release archive" >&2
     exit 1
   fi
 
   "$app/bin/consilens-cli.sh" --version
-  "$app/bin/consilens-cli.sh" ai providers --format json
-  "$app/bin/consilens-cli.sh" ai doctor --format json --backend noop
 }
 
 smoke_server_artifact() {

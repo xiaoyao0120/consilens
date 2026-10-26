@@ -27,6 +27,7 @@ import java.util.stream.Collectors;
 public class RunTaskRecoveryService {
 
     private static final List<TaskStatus> RECOVERABLE_STATUSES = List.of(TaskStatus.CLAIMED, TaskStatus.RUNNING);
+    private static final List<TaskStatus> CANCELLATION_STATUSES = List.of(TaskStatus.CANCEL_REQUESTED);
 
     /** 启动恢复最多连续清空 10 个批次，避免异常数据导致无限循环。 */
     private static final int MAX_STARTUP_RECOVERY_ROUNDS = 10;
@@ -77,6 +78,9 @@ public class RunTaskRecoveryService {
                         "NODE_RESTARTED",
                         "Execution node restarted before task completed",
                         now));
+        // 本节点重启前已收到取消请求：执行线程已不存在，直接确认取消，避免永久卡在 CANCEL_REQUESTED
+        taskRepository.listByExecuteNodeAndStatuses(currentNodeKey, CANCELLATION_STATUSES, limit)
+                .forEach(task -> confirmCancellation(task, now));
     }
 
     @Transactional
@@ -92,6 +96,11 @@ public class RunTaskRecoveryService {
         taskRepository.listStaleRunning(now.minusSeconds(staleAfterSeconds),
                         properties.getScheduler().getRecoveryBatchSize())
                 .forEach(task -> retryOrFail(task, "EXECUTE_HEARTBEAT_LOST", "Execution heartbeat expired", now));
+        // 取消请求发出后执行线程失联：不会再有人调用 confirmCancellation
+        taskRepository.listStaleByStatus(TaskStatus.CANCEL_REQUESTED,
+                        now.minusSeconds(staleAfterSeconds),
+                        properties.getScheduler().getRecoveryBatchSize())
+                .forEach(task -> confirmCancellation(task, now));
     }
 
     @Transactional
@@ -106,6 +115,17 @@ public class RunTaskRecoveryService {
                         "EXECUTE_NODE_LOST",
                         "Execution node heartbeat expired",
                         now));
+        taskRepository.listByStatusesExcludingExecuteNodes(CANCELLATION_STATUSES,
+                        aliveNodeKeys,
+                        properties.getScheduler().getRecoveryBatchSize())
+                .forEach(task -> confirmCancellation(task, now));
+    }
+
+    private void confirmCancellation(TaskInstanceRecord task, Instant now) {
+        if (task != null && taskRepository.confirmCancellation(task.getId(), now)) {
+            log.info("Confirmed cancellation for run task {} after execution node/lease loss",
+                    task.getInstanceKey());
+        }
     }
 
     @Transactional

@@ -246,10 +246,51 @@ public final class BenchmarkOptions {
         if (e2eWarmupRuns < 0 || e2eMeasurementRuns < 1) {
             throw new IllegalArgumentException("benchmark: e2e warmup must be >= 0 and measurement runs must be > 0");
         }
+        if (!MODE_MICRO.equals(mode) && !MODE_E2E.equals(mode) && !MODE_ALL.equals(mode)) {
+            // 拼写错误不能让套件“零结果但退出码 0”，否则 CI 会误判通过
+            throw new IllegalArgumentException(
+                    "benchmark: --mode must be one of micro, e2e, all (got: " + mode + ")");
+        }
+        validateRows(rows);
+        validateDiffRatios(diffRatios);
         return new BenchmarkOptions(mode, scenarios, updateBaseline, outputDir, baselinePath,
                 rows, diffRatios, forks, warmupIterations, measurementIterations,
                 e2eWarmupRuns, e2eMeasurementRuns, expectedDifferences, datasetId,
                 keyDistribution, differenceType, scenarioConfigs);
+    }
+
+    private static void validateRows(List<String> rows) {
+        if (rows == null) {
+            return;
+        }
+        for (String row : rows) {
+            try {
+                if (Long.parseLong(row.trim()) <= 0) {
+                    throw new NumberFormatException();
+                }
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException(
+                        "benchmark: --rows values must be positive integers (got: " + row + ")");
+            }
+        }
+    }
+
+    private static void validateDiffRatios(List<String> ratios) {
+        if (ratios == null) {
+            return;
+        }
+        for (String ratio : ratios) {
+            try {
+                double value = Double.parseDouble(ratio.trim());
+                // NaN 与任何边界比较都为 false，必须在范围判断外单独拒绝
+                if (!Double.isFinite(value) || value < 0.0 || value > 1.0) {
+                    throw new NumberFormatException();
+                }
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException(
+                        "benchmark: --diff-ratio values must be numbers in [0,1] (got: " + ratio + ")");
+            }
+        }
     }
 
     private static String next(String[] args, int index, String flag) {

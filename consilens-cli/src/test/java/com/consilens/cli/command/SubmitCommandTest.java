@@ -26,6 +26,19 @@ class SubmitCommandTest {
     Path temporaryDirectory;
 
     @Test
+    void localSubmissionFailureShowsConfigReason() {
+        ByteArrayOutputStream error = new ByteArrayOutputStream();
+        String missing = temporaryDirectory.resolve("missing.yaml").toString();
+
+        int exitCode = commandLine(error).execute("local", "-c", missing);
+
+        assertEquals(1, exitCode);
+        String text = error.toString(StandardCharsets.UTF_8);
+        assertTrue(text.contains("Local submission failed:"), text);
+        assertTrue(text.contains("not found"), text);
+    }
+
+    @Test
     void shouldRequireYarnSubmissionOptions() {
         ByteArrayOutputStream error = new ByteArrayOutputStream();
         CommandLine commandLine = commandLine(error);
@@ -43,8 +56,9 @@ class SubmitCommandTest {
 
         int exitCode = commandLine.execute("kubernetes");
 
-        assertEquals(2, exitCode);
-        assertTrue(error.toString(StandardCharsets.UTF_8).contains("Missing required option"));
+        // --image 现在可由 properties-file 提供，缺 descriptor 仍应在提交前失败
+        assertEquals(1, exitCode);
+        assertTrue(error.toString(StandardCharsets.UTF_8).contains("descriptor is required"));
     }
 
     @Test

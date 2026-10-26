@@ -171,6 +171,13 @@ public class TaskRepositoryImpl implements TaskRepository {
     }
 
     @Override
+    public List<TaskInstanceRecord> listStaleByStatus(TaskStatus status, Instant before, int limit) {
+        return taskService.listStaleByStatus(status, DbTimeSupport.toLocalDateTime(before), limit).stream()
+                .map(this::toRecord)
+                .collect(Collectors.toList());
+    }
+
+    @Override
     public TaskPage listTaskPage(int page,
                                  int pageSize,
                                  Collection<TaskStatus> statuses,
@@ -186,7 +193,13 @@ public class TaskRepositoryImpl implements TaskRepository {
             wrapper.in(TaskInstanceEntity::getStatus, statuses);
         }
         if (serialNoLike != null && !serialNoLike.isBlank()) {
-            wrapper.like(TaskInstanceEntity::getSerialNo, serialNoLike.trim());
+            // keyword 同时匹配序号与实例 ID：列表展示/复制的是 taskId（instanceKey），
+            // 只查 serial_no 会让用户拿页面上的 ID 搜索永远无结果。
+            String keyword = serialNoLike.trim();
+            wrapper.and(condition -> condition
+                    .like(TaskInstanceEntity::getSerialNo, keyword)
+                    .or()
+                    .like(TaskInstanceEntity::getInstanceKey, keyword));
         }
         if (executeNodeKey != null && !executeNodeKey.isBlank()) {
             wrapper.eq(TaskInstanceEntity::getExecuteNodeKey, executeNodeKey);

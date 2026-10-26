@@ -112,6 +112,13 @@ class PostgreSQLMetadataQueryGeneratorTest {
     }
 
     @Test
+    void testBackslashInNameIsNotDoubled() {
+        String sql = generator.getTablesSQL("odd\\schema");
+
+        assertTrue(sql.contains("'odd\\schema'"), sql);
+    }
+
+    @Test
     void testGetForeignKeysSQL() {
         String sql = generator.getForeignKeysSQL("public", "orders");
 

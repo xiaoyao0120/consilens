@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from "vue";
 import { DIFF_SCORE_STATUS_MAP, statusTypeColor } from "@/common/statusMapping";
+import { clampScore, formatScore } from "@/common/scoreDisplay";
 
 const props = defineProps({
   // 0..100；null 表示无数据
@@ -16,14 +17,11 @@ const meta = computed(() => DIFF_SCORE_STATUS_MAP[props.status] || DIFF_SCORE_ST
 const color = computed(() => statusTypeColor(meta.value.type));
 
 const dashOffset = computed(() => {
-  const value = Math.max(0, Math.min(100, props.score ?? 0));
+  const value = clampScore(props.score) ?? 0;
   return CIRCUMFERENCE * (1 - value / 100);
 });
 
-const display = computed(() => {
-  if (props.score === null || props.score === undefined) return "—";
-  return Number(props.score).toFixed(1);
-});
+const display = computed(() => formatScore(props.score));
 
 // 字号随 size 等比缩放（基准：148 → 30px 分数 / 12px 标签），标签保底 11px 保证可读
 const scoreFontSize = computed(() => `${Math.round(props.size * 0.2)}px`);

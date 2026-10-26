@@ -66,6 +66,15 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
         return "OFFSET " + offset + " ROWS FETCH NEXT " + limit + " ROWS ONLY";
     }
 
+    /**
+     * 单参重载必须显式覆写：基类实现返回 MySQL 风格 {@code LIMIT n}，Oracle 不支持，
+     * 复合键边界查询等只传 limit 的调用会得到 ORA-00933。
+     */
+    @Override
+    public String getLimitClause(long limit) {
+        return getLimitClause(0L, limit);
+    }
+
     @Override
     public String getChecksumSQL(String schemaName, String tableName,
             List<String> keyColumns,
@@ -105,7 +114,7 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
                     sql.append(" || '|' || ");
                 String col = keyColumns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append(" as pk_key, ");
 
@@ -116,7 +125,7 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
                     sql.append(" || '|' || ");
                 String col = columns.get(i);
                 DataType dataType = columnDataTypes.get(col);
-                sql.append(dataTypeHandler.normalizeColumn(col, dataType));
+                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
             }
             sql.append(", 'MD5'))) as row_checksum ");
 
@@ -231,6 +240,15 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
     protected String buildDiffColumnsExpression(String alias1, String alias2,
             List<String> compareColumns1, List<String> compareColumns2,
             Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2) {
+        return buildDiffColumnsExpression(alias1, alias2, compareColumns1, compareColumns2,
+                columnTypes1, columnTypes2, compareColumns1);
+    }
+
+    @Override
+    protected String buildDiffColumnsExpression(String alias1, String alias2,
+            List<String> compareColumns1, List<String> compareColumns2,
+            Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2,
+            List<String> reportedNames) {
         if (compareColumns1 == null || compareColumns1.isEmpty()) {
             return "'[]'";
         }
@@ -245,8 +263,10 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
             if (i > 0) {
                 concat.append(" || ");
             }
+            String reported = reportedNames != null && reportedNames.size() > i
+                    ? reportedNames.get(i) : col1;
             concat.append("CASE WHEN ").append(buildNullSafeNotEquals(c1, c2))
-                    .append(" THEN ', \"").append(col1).append("\"' END");
+                    .append(" THEN ', \"").append(reported).append("\"' END");
         }
         return "'[' || ', ' || COALESCE(LTRIM(" + concat + ", ', '), '') || ', ' || ']'";
     }
@@ -277,22 +297,19 @@ public class OracleSqlQueryGenerator extends BaseSqlQueryGenerator {
             sql.append(capabilityProvider.quote(primaryKeys.get(i)));
         }
 
-        sql.append(", STANDARD_HASH(");
-
-        // Build canonical expression using CHR(31) as separator
+        // 与其它方言同一口径：'|' 作分隔符；Oracle 中 '' 即 NULL，|| 会把它当空串，
+        // 与 MySQL 对 COALESCE(x,'') 的拼接结果一致，因此不再用 CHR(1) 作 NULL 哨兵。
+        sql.append(", LOWER(RAWTOHEX(STANDARD_HASH(");
         for (int i = 0; i < columns.size(); i++) {
             if (i > 0) {
-                sql.append(" || CHR(31) || ");
+                sql.append(" || '|' || ");
             }
             String col = columns.get(i);
             DataType dataType = columnDataTypes.get(col);
-            String normalizedCol = dataTypeHandler.normalizeColumn(col, dataType);
-
-            // Use NVL to convert NULL to CHR(1) (unified across all databases)
-            sql.append("NVL(").append(normalizedCol).append(", CHR(1))");
+            sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
         }
 
-        sql.append(", 'MD5') as row_hash");
+        sql.append(", 'MD5'))) as row_hash");
 
         sql.append(" FROM ");
         sql.append(buildRelationRef(schemaName, tableName));
