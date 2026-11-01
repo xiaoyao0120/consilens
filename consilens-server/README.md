@@ -42,8 +42,8 @@ java -jar consilens-server/target/consilens-server-0.1-SNAPSHOT.jar \
 ```
 
 The API key is required when `consilens.server.security.enabled=true` and must be sent
-as `X-Consilens-Api-Key` on `/v1/*` requests. `GET /actuator/health` stays open for
-health checks.
+as `X-Consilens-Api-Key` on `/v1/*` requests. `GET /actuator/health` and its
+`liveness`/`readiness` groups stay open for health checks.
 
 For local smoke tests:
 
@@ -58,7 +58,7 @@ The task configuration is referenced by `configArtifactId`, or passed inline as 
 `configContent` string (YAML or JSON) when no artifact is available.
 
 ```bash
-curl -X POST http://localhost:18080/v1/tasks/execute \
+curl -X POST http://localhost:16789/v1/tasks/execute \
   -H 'Content-Type: application/json' \
   -d '{
     "serialNo": "orders-compare-20260808",
@@ -75,7 +75,7 @@ The response has HTTP status `202 Accepted` and includes
 Callers holding a configuration file can pass its content directly as a string:
 
 ```bash
-curl -X POST http://localhost:18080/v1/tasks/execute \
+curl -X POST http://localhost:16789/v1/tasks/execute \
   -H 'Content-Type: application/json' \
   -d '{
     "serialNo": "orders-compare-20260808",
@@ -88,12 +88,25 @@ curl -X POST http://localhost:18080/v1/tasks/execute \
 
 Inline config content supports `server-native` JSON, the CLI configuration file
 format (YAML or JSON), and `${env.NAME}` environment placeholders resolved from
-the server process environment.
+the server process environment. File sources are supported too: use `type: file`
+with `resource: {type: file, name: <path>, format: csv}`; no `connection` block
+is required.
 
 ## Operations
 
-- HTTP port defaults to `18080`.
-- Actuator exposes `/actuator/health` and `/actuator/info`.
+- HTTP port defaults to `16789`.
+- Actuator exposes `/actuator/health`, `/actuator/health/liveness`,
+  `/actuator/health/readiness`, and `/actuator/info` (build artifact/version); the readiness group includes
+  the database health indicator, so pods stop receiving traffic while the database is
+  unavailable, while liveness only reflects the application state. Both are suitable
+  for Kubernetes `livenessProbe`/`readinessProbe`.
+- The server shuts down gracefully on `SIGTERM` with a 30-second in-flight request
+  budget (`server.shutdown=graceful`).
+- Every response carries `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: no-referrer`, and a
+  restrictive `Permissions-Policy`.
+- `/v1/*` responses are marked `Cache-Control: no-store` so comparison payloads
+  are not retained by shared proxies or browser caches.
 - `X-Trace-Id` is propagated in API responses and should be passed by gateways, MCP,
   and automation clients.
 - `consilens.server.node.node-key` can pin a stable node identity in containers or

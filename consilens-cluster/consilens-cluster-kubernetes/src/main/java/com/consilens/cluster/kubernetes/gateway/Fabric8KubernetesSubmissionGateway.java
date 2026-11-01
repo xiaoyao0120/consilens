@@ -207,6 +207,15 @@ public class Fabric8KubernetesSubmissionGateway implements KubernetesSubmissionG
     }
 
     @Override
+    public java.util.Optional<java.util.Map<String, String>> jobLabels(String namespace, String jobName) {
+        Job job = client.batch().v1().jobs().inNamespace(namespace).withName(jobName).get();
+        if (job == null || job.getMetadata() == null || job.getMetadata().getLabels() == null) {
+            return java.util.Optional.empty();
+        }
+        return java.util.Optional.of(job.getMetadata().getLabels());
+    }
+
+    @Override
     public void deleteJob(String namespace, String jobName) {
         client.batch().v1().jobs().inNamespace(namespace).withName(jobName).delete();
     }

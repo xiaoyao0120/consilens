@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.sql.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Default implementation of AbstractDatabaseAdapter.
@@ -25,7 +26,8 @@ public class DefaultDatabaseAdapter extends AbstractDatabaseAdapter {
     
     // Cache for COUNT query results to avoid redundant database calls
     // Key: COUNT SQL query, Value: row count
-    private final Map<String, Long> countCache = new HashMap<>();
+    // count() 会被多个段/多个线程同时调用：HashMap 并发 put 在扩容时可能丢数据甚至成环
+    private final Map<String, Long> countCache = new ConcurrentHashMap<>();
 
     public DefaultDatabaseAdapter(String name, ConnectionPool connectionPool, DatabaseDialect dialect, String url, ChecksumAlgorithm checksumAlgorithm) {
         super(name, connectionPool, dialect, checksumAlgorithm);
@@ -159,7 +161,7 @@ public class DefaultDatabaseAdapter extends AbstractDatabaseAdapter {
                 return cachedCount;
             }
 
-            log.info("Executing count query: {}", countSql);
+            log.debug("Executing count query: {}", countSql);
 
             Optional<Long> result = queryForObject(countSql, Long.class);
             long count = result.orElse(0L);

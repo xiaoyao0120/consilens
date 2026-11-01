@@ -87,7 +87,7 @@ class YarnClusterSubmitterTest {
         List<String> commands = context.getAMContainerSpec().getCommands();
         assertEquals(1, commands.size());
         String command = commands.get(0);
-        assertTrue(command.startsWith("$JAVA_HOME/bin/java -server -Xmx2048m"));
+        assertTrue(command.startsWith("$JAVA_HOME/bin/java -server -Xmx1433m"), command);
         assertTrue(command.contains("-cp \"$PWD:hadoop-conf:consilens-runtime/*\""));
         assertTrue(command.contains(YarnClusterSubmitter.AM_MAIN_CLASS));
         assertTrue(command.contains("--coordinator-class com.consilens.cluster.application.ClusterComparisonCoordinator"));

@@ -51,11 +51,10 @@ watch(
       <!-- 内容区：平面矩形，与顶栏/侧栏以 1px 分割线区隔 -->
       <main class="content-panel">
         <router-view v-slot="{ Component }">
-          <!-- 显式 duration：不依赖 transitionend 事件，避免 out-in 模式在极端情况下卡住导航 -->
-          <transition name="fade-slide" mode="out-in" :duration="200">
-            <!-- key 用 path 而非 fullPath：query（如 ?tab=）变化不重建页面 -->
-            <component :is="Component" :key="route.path" />
-          </transition>
+          <!-- 直接用 CSS 入场动画，不用 mode="out-in"：后台/无头环境会暂停 rAF，
+               Vue 过渡可能永远停在 leave 状态，导致新页面不挂载。 -->
+          <!-- key 用 path 而非 fullPath：query（如 ?tab=）变化不重建页面 -->
+          <component :is="Component" :key="route.path" />
         </router-view>
       </main>
     </div>

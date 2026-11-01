@@ -143,7 +143,12 @@ CLASSPATH=$(build_classpath)
 if [ -z "$CONSILENS_EXAMPLES_DIR" ]; then
     CONSILENS_EXAMPLES_DIR="$APP_HOME/examples"
 fi
-java $JAVA_OPTS -Dconsilens.examples.dir="$CONSILENS_EXAMPLES_DIR" -cp "$CLASSPATH" com.consilens.cli.ConsilensCliApplication "$@"
+# BasicContextSelector avoids Log4j2's caller-class lookup, which prints a JVM
+# warning on stdout and would corrupt JSON/Markdown reports written there.
+java $JAVA_OPTS \
+    -Dlog4j2.contextSelector=org.apache.logging.log4j.core.selector.BasicContextSelector \
+    -Dconsilens.examples.dir="$CONSILENS_EXAMPLES_DIR" \
+    -cp "$CLASSPATH" com.consilens.cli.ConsilensCliApplication "$@"
 
 # Capture and return the exit code
 EXIT_CODE=$?

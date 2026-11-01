@@ -158,16 +158,21 @@ async function loadDsConfig(type, prefill) {
   modal.fields = fields;
   // 等 fields 生效（组件已补齐默认值）后再回填，prefill 有值优先
   await nextTick();
-  if (seq === configSeq) {
-    dsFormRef.value?.setValues(prefill || {});
-  }
+  if (seq !== configSeq) return;
+  // prefill 只在"打开弹窗的第一次"用一次：切换类型时若继续拿它覆盖，
+  // 用户已经改过的 host/端口/库名会被静默改回打开时的旧值（切回去就"丢"了编辑）。
+  dsFormRef.value?.setValues(prefill || {});
+  if (prefill) modal.prefill = null;
 }
 
 // 切换类型：重置模板与表单值
 watch(
   () => modal.form.type,
   (type) => {
-    if (modal.show && type) loadDsConfig(type, modal.prefill);
+    if (!modal.show || !type) return;
+    // 换了类型就是另一组连接参数，上一次"连接成功"不再代表当前配置
+    modal.testResult = null;
+    loadDsConfig(type, modal.prefill);
   }
 );
 
@@ -184,6 +189,14 @@ function openCreate() {
   // type 未变化时 watch 不触发，这里显式加载模板
   loadDsConfig(defaultType, null);
   nextTick(() => nameInputRef.value?.focus());
+}
+
+/**
+ * 表单任一字段变化都作废上一次"连接成功"：否则改完 host/密码后绿色结果还在，
+ * 用户会以为当前这组参数已经连通（保存并不校验测试结果）。
+ */
+function handleFormChanged() {
+  if (modal.testResult) modal.testResult = null;
 }
 
 function openEdit(row) {
@@ -345,6 +358,16 @@ async function openBrowse(row) {
 async function loadTreeNode(node) {
   if (node.isLeaf) return;
   const id = browse.current.id;
+  try {
+    await loadTreeNodeChildren(node, id);
+  } catch (error) {
+    // naive-ui 只把这些错误打到 console：节点会停在"展开但空白"，用户看不出发生了什么
+    node.children = [];
+    message.error(error?.response?.data?.error || `加载「${node.label || node.database}」失败`);
+  }
+}
+
+async function loadTreeNodeChildren(node, id) {
   if (node.database && !node.table) {
     const tables = await listDatasourceTables(id, node.database);
     node.children = tables.map((name) => ({
@@ -589,6 +612,7 @@ onMounted(() => {
           v-model:model-value="modal.values"
           :fields="modal.fields"
           :editing="modal.editing"
+          @update:model-value="handleFormChanged"
         />
         <div v-if="modal.fields.length === 0" class="field text-muted" style="font-size: 12px">
           连接参数加载中…

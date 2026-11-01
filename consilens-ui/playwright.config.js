@@ -1,5 +1,5 @@
 // 页面功能 E2E 测试配置。
-// 运行方式：bash scripts/e2e/run.sh（它会先起专用后端与 vite，再执行本配置）。
+// 运行方式：bash devlop/scripts/e2e/run.sh（内部开发环境；会先起专用后端与 vite）。
 // 不直接 `npx playwright test`：后端/vite 由 run.sh 统一编排，避免端口残留。
 import { defineConfig } from "@playwright/test";
 

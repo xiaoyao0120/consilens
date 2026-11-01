@@ -161,8 +161,12 @@ class JobSchedulerTest {
         try {
             scheduler.startScheduler();
 
-            verify(runTaskRecoveryService, timeout(1000).atLeastOnce()).recoverCurrentNodeStartupTasks(any(Instant.class));
-            verify(runTaskRecoveryService, timeout(1000).atLeastOnce()).recoverExpiredClaims(any(Instant.class));
+            // 启动恢复在调度线程的第一轮循环里执行：线程真正被调度起来才算数，
+            // 机器负载高时 1s 会等不到（曾在本机全量构建后偶发失败），放到 5s。
+            verify(runTaskRecoveryService, timeout(5000).atLeastOnce())
+                    .recoverCurrentNodeStartupTasks(any(Instant.class));
+            verify(runTaskRecoveryService, timeout(5000).atLeastOnce())
+                    .recoverExpiredClaims(any(Instant.class));
             Thread.sleep(50);
             verify(runTaskRecoveryService, never()).recoverTasksOnDeadNodes(any(Instant.class));
             verify(runTaskExecuteManager, never()).addExecuteCommand(any());
@@ -218,9 +222,9 @@ class JobSchedulerTest {
         try {
             scheduler.startScheduler();
 
-            verify(runTaskRecoveryService, timeout(3000).times(2))
+            verify(runTaskRecoveryService, timeout(10000).times(2))
                     .recoverCurrentNodeStartupTasks(any(Instant.class));
-            verify(runTaskExecuteManager, timeout(4000)).addExecuteCommand(command);
+            verify(runTaskExecuteManager, timeout(10000)).addExecuteCommand(command);
         } finally {
             scheduler.stopScheduler();
             scheduler.join(1000);

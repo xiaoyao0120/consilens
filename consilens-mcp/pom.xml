@@ -21,6 +21,8 @@
         <maven.compiler.release>17</maven.compiler.release>
         <mcp.sdk.version>1.1.2</mcp.sdk.version>
         <jetty.version>12.0.35</jetty.version>
+        <!-- MCP 可执行包通过 GitHub Release 分发，不发布到 Maven Central -->
+        <maven.deploy.skip>${consilens.deploy.skip.apps}</maven.deploy.skip>
         <slf4j.version>2.0.16</slf4j.version>
     </properties>
 

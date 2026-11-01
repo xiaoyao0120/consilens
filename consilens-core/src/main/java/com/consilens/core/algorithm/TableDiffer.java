@@ -3,6 +3,7 @@ package com.consilens.core.algorithm;
 import com.consilens.common.enums.ChecksumAlgorithm;
 import com.consilens.common.enums.LocalCompareMode;
 import com.consilens.connector.api.model.ColumnInfo;
+import com.consilens.connector.api.model.DataType;
 import com.consilens.core.segment.TableSegment;
 import com.consilens.core.diff.DiffEmitter;
 import com.consilens.core.diff.DiffResult;
@@ -10,6 +11,7 @@ import com.consilens.core.diff.DiffRow;
 import com.consilens.core.diff.DiffSink;
 import com.consilens.core.diff.InfoTreeRecorder;
 import com.consilens.core.diff.InMemoryDiffSink;
+import com.consilens.core.diff.SchemaCompatibility;
 import com.consilens.core.thread.ConcurrencyConfig;
 import com.consilens.core.thread.ExecutorProvider;
 import lombok.Getter;
@@ -45,11 +47,16 @@ public abstract class TableDiffer implements DiffEmitter {
         this.executorProvider = executorProvider;
         this.ownsExecutorProvider = ownsExecutorProvider;
         this.diffSink = new InMemoryDiffSink();
+        ((InMemoryDiffSink) this.diffSink).setMaxDifferences(config.getMaxDifferences());
     }
 
     @Override
     public void setDiffSink(DiffSink diffSink) {
         this.diffSink = diffSink != null ? diffSink : DiffSink.noop();
+        if (this.diffSink instanceof InMemoryDiffSink) {
+            // 换 sink 之后上限也要跟着走，否则外部注入的 sink 等于绕过了 maxDifferences
+            ((InMemoryDiffSink) this.diffSink).setMaxDifferences(config.getMaxDifferences());
+        }
     }
 
     @Override
@@ -64,6 +71,10 @@ public abstract class TableDiffer implements DiffEmitter {
         return new ArrayList<>();
     }
 
+    /**
+     * 尽早失败用的预检查：真正"不会超限"的保证在 {@link InMemoryDiffSink#onDiffRow} 里
+     * （按当前条数原子判断）。这里只负责在批次很大时给出更早、更省事的错误。
+     */
     protected void ensureDiffLimit(long nextDifferenceCount) {
         if (diffSink instanceof InMemoryDiffSink) {
             long current = ((InMemoryDiffSink) diffSink).size();
@@ -83,7 +94,7 @@ public abstract class TableDiffer implements DiffEmitter {
 
         try {
             // Align schemas between the two segments before any expensive work
-            validateAndAdjustColumns(table1, table2);
+            SchemaCompatibility schemaCompatibility = validateAndAdjustColumns(table1, table2);
 
             // 严格档（validateUniqueKeys=true，非默认）：键必须唯一。重复键下 join 会 N×M 倍增、
             // checksum 的归因会退化成整键 SM+TM，都属于"按键比对不成立"，必须在开始前明确失败并给出证据。
@@ -109,14 +120,16 @@ public abstract class TableDiffer implements DiffEmitter {
                         }
                         return result.toBuilder()
                                 .infoTree(Optional.of(infoTreeRecorder.snapshot()))
+                                .schemaCompatibility(schemaCompatibility)
                                 .build();
                     });
 
         } catch (Exception e) {
             log.error("Error during table diffing", e);
-            // 唯一键校验失败等"业务性拒绝"要保留原始信息（键与两侧行数），
+            // 唯一键校验失败、预算超限等"业务性拒绝"要保留原始信息（键与两侧行数），
             // 不能被 "Table diff failed" 包一层导致明细丢失。
-            if (e instanceof com.consilens.connector.api.ConnectorException) {
+            if (e instanceof com.consilens.connector.api.ConnectorException
+                    || e instanceof com.consilens.core.exception.BudgetExceededException) {
                 return CompletableFuture.failedFuture(e);
             }
             return CompletableFuture.failedFuture(new RuntimeException("Table diff failed", e));
@@ -143,7 +156,7 @@ public abstract class TableDiffer implements DiffEmitter {
      * Validate table schemas and adjust for compatibility.
      * Supports tables with different column names but same structure.
      */
-    protected void validateAndAdjustColumns(TableSegment table1, TableSegment table2) {
+    protected SchemaCompatibility validateAndAdjustColumns(TableSegment table1, TableSegment table2) {
         // Validate key columns count match (names can be different, but count must match)
         if (table1.getKeyColumns().size() != table2.getKeyColumns().size()) {
             log.warn("Table1 key columns: {}, Table2 key columns: {}",
@@ -174,18 +187,154 @@ public abstract class TableDiffer implements DiffEmitter {
         // 由 TableSegment 的 IS NULL 边界谓词与 ValueNormalizer 的 NULL 归一化处理。
         validateKeyNullability(table1);
         validateKeyNullability(table2);
-        warnPrecisionLoss(table1);
-        warnPrecisionLoss(table2);
-        warnJsonCrossDialect(table1, table2);
-        warnJsonKeyColumns(table1);
-        warnJsonKeyColumns(table2);
-        TemporalShapeCompatibility.warnIfRisky(table1, table2);
-        KeyCollationCompatibility.warnIfRisky(table1);
-        KeyCollationCompatibility.warnIfRisky(table2);
+
+        List<String> warnings = new ArrayList<>();
+        warnings.addAll(precisionWarnings(table1));
+        warnings.addAll(precisionWarnings(table2));
+        warnJsonCrossDialect(table1, table2).ifPresent(warnings::add);
+        warnings.addAll(warnJsonKeyColumns(table1));
+        warnings.addAll(warnJsonKeyColumns(table2));
+        TemporalShapeCompatibility.describeIfRisky(table1, table2)
+                .ifPresent(message -> {
+                    log.warn(message);
+                    warnings.add(message);
+                });
+        KeyCollationCompatibility.describeIfRisky(table1)
+                .ifPresent(message -> {
+                    log.warn(message);
+                    warnings.add(message);
+                });
+        KeyCollationCompatibility.describeIfRisky(table2)
+                .ifPresent(message -> {
+                    log.warn(message);
+                    warnings.add(message);
+                });
 
         log.info("Column validation completed for tables {} and {} (key columns: {}, extra columns: {} vs {})",
                 table1.getTablePath(), table2.getTablePath(),
                 table1.getKeyColumns().size(), table1.getExtraColumns().size(), table2.getExtraColumns().size());
+        return buildSchemaCompatibility(table1, table2, warnings);
+    }
+
+    /**
+     * Builds an additive structured report from the same checks that already run in
+     * {@link #validateAndAdjustColumns(TableSegment, TableSegment)}. It never changes
+     * comparison behavior; incompatible columns are reported, not skipped silently.
+     */
+    private SchemaCompatibility buildSchemaCompatibility(TableSegment table1,
+                                                         TableSegment table2,
+                                                         List<String> warnings) {
+        List<String> leftColumns = new ArrayList<>(table1.getKeyColumns());
+        leftColumns.addAll(table1.getExtraColumns());
+        List<String> rightColumns = new ArrayList<>(table2.getKeyColumns());
+        rightColumns.addAll(table2.getExtraColumns());
+
+        List<SchemaCompatibility.ColumnCompatibility> columns = new ArrayList<>();
+        boolean incompatible = false;
+        boolean normalized = false;
+        int size = Math.max(leftColumns.size(), rightColumns.size());
+        for (int index = 0; index < size; index++) {
+            String leftName = index < leftColumns.size() ? leftColumns.get(index) : null;
+            String rightName = index < rightColumns.size() ? rightColumns.get(index) : null;
+            if (leftName == null && rightName == null) {
+                continue;
+            }
+            if (leftName == null) {
+                normalized = true;
+                columns.add(SchemaCompatibility.ColumnCompatibility.builder()
+                        .targetColumn(rightName)
+                        .targetType(typeName(table2, rightName))
+                        .action(SchemaCompatibility.Action.MISSING_SOURCE)
+                        .reason("column exists only on the target side")
+                        .build());
+                continue;
+            }
+            if (rightName == null) {
+                normalized = true;
+                columns.add(SchemaCompatibility.ColumnCompatibility.builder()
+                        .sourceColumn(leftName)
+                        .sourceType(typeName(table1, leftName))
+                        .action(SchemaCompatibility.Action.MISSING_TARGET)
+                        .reason("column exists only on the source side")
+                        .build());
+                continue;
+            }
+
+            DataType sourceType = dataType(table1, leftName);
+            DataType targetType = dataType(table2, rightName);
+            SchemaCompatibility.Action action = compareTypes(sourceType, targetType);
+            if (action == SchemaCompatibility.Action.INCOMPATIBLE) {
+                incompatible = true;
+            } else if (action != SchemaCompatibility.Action.DIRECT) {
+                normalized = true;
+            }
+            columns.add(SchemaCompatibility.ColumnCompatibility.builder()
+                    .sourceColumn(leftName)
+                    .targetColumn(rightName)
+                    .sourceType(sourceType.name())
+                    .targetType(targetType.name())
+                    .action(action)
+                    .reason(reason(action, sourceType, targetType))
+                    .build());
+        }
+
+        SchemaCompatibility.Status status = incompatible
+                ? SchemaCompatibility.Status.INCOMPATIBLE
+                : normalized
+                ? SchemaCompatibility.Status.COMPATIBLE_WITH_NORMALIZATION
+                : SchemaCompatibility.Status.COMPATIBLE;
+        return SchemaCompatibility.builder()
+                .status(status)
+                .columns(columns)
+                .warnings(warnings)
+                .build();
+    }
+
+    private SchemaCompatibility.Action compareTypes(DataType sourceType, DataType targetType) {
+        if (sourceType == DataType.UNKNOWN || targetType == DataType.UNKNOWN) {
+            return SchemaCompatibility.Action.NORMALIZE;
+        }
+        if (sourceType == targetType) {
+            return SchemaCompatibility.Action.DIRECT;
+        }
+        if (sourceType.isCompatibleWith(targetType)) {
+            return SchemaCompatibility.Action.NORMALIZE;
+        }
+        if ((sourceType == DataType.JSON || sourceType == DataType.JSONB)
+                && (targetType == DataType.JSON || targetType == DataType.JSONB)) {
+            return SchemaCompatibility.Action.NORMALIZE;
+        }
+        if ((sourceType == DataType.BOOLEAN || sourceType == DataType.BIT)
+                && (targetType == DataType.BOOLEAN || targetType == DataType.BIT)) {
+            return SchemaCompatibility.Action.NORMALIZE;
+        }
+        return SchemaCompatibility.Action.INCOMPATIBLE;
+    }
+
+    private String reason(SchemaCompatibility.Action action, DataType sourceType, DataType targetType) {
+        switch (action) {
+            case DIRECT:
+                return "same type";
+            case NORMALIZE:
+                return "compatible type families; normalization required (" + sourceType + " -> " + targetType + ")";
+            case INCOMPATIBLE:
+                return "incompatible type families (" + sourceType + " vs " + targetType + ")";
+            default:
+                return action.name();
+        }
+    }
+
+    private DataType dataType(TableSegment table, String column) {
+        if (table == null || column == null || table.getSchema() == null || table.getSchema().isEmpty()) {
+            return DataType.UNKNOWN;
+        }
+        return table.getSchema().get().getColumn(column)
+                .map(ColumnInfo::getType)
+                .orElse(DataType.UNKNOWN);
+    }
+
+    private String typeName(TableSegment table, String column) {
+        return dataType(table, column).name();
     }
 
     /**
@@ -193,16 +342,21 @@ public abstract class TableDiffer implements DiffEmitter {
      * 列 scale 超过该精度时，末位差异会被抹平。这里显式告警，避免"看起来一致"却掩盖差异；
      * 不直接失败，因为是否可接受取决于业务对末位精度的要求。
      */
-    private void warnPrecisionLoss(TableSegment table) {
+    private List<String> precisionWarnings(TableSegment table) {
         int precision = config != null
                 ? config.getDecimalScale() : ValueNormalizer.DEFAULT_DECIMAL_SCALE;
         List<String> risky = decimalColumnsBeyondScale(table, precision);
-        if (!risky.isEmpty()) {
-            log.warn("Table {} has decimal column(s) with scale > {}: {}. Comparison normalizes decimals to {} "
-                    + "decimal places, so differences beyond that are treated as equal. "
-                    + "Raise the normalization precision (strategy.normalization) or compare these columns "
-                    + "separately if that matters.", table.getTablePath(), precision, risky, precision);
+        if (risky.isEmpty()) {
+            return List.of();
         }
+        String message = String.format(
+                "Table %s has decimal column(s) with scale > %d: %s. Comparison normalizes decimals to %d "
+                        + "decimal places, so differences beyond that are treated as equal. "
+                        + "Raise the normalization precision (strategy.normalization) or compare these columns "
+                        + "separately if that matters.",
+                table.getTablePath(), precision, risky, precision);
+        log.warn(message);
+        return List.of(message);
     }
 
     /** 供测试与告警复用：返回 scale 超过给定归一化精度的 DECIMAL/NUMERIC 列。 */
@@ -233,16 +387,16 @@ public abstract class TableDiffer implements DiffEmitter {
      * JSON 归一化是各 handle 的"文本级 canonical 化"，跨方言渲染（键序/空格/转义）并不完全一致。
      * 同方言内可闭环；跨方言时显式告警，避免把"渲染差异"当成业务差异却无人知晓。
      */
-    private void warnJsonCrossDialect(TableSegment table1, TableSegment table2) {
+    private Optional<String> warnJsonCrossDialect(TableSegment table1, TableSegment table2) {
         if (table1.getSchema() == null || table1.getSchema().isEmpty()
                 || table2.getSchema() == null || table2.getSchema().isEmpty()
                 || table1.getDatabase() == null || table2.getDatabase() == null) {
-            return;
+            return Optional.empty();
         }
         String type1 = table1.getDatabase().getConnectorType();
         String type2 = table2.getDatabase().getConnectorType();
         if (type1 == null || type2 == null || type1.equalsIgnoreCase(type2)) {
-            return;
+            return Optional.empty();
         }
         List<String> jsonColumns = new ArrayList<>();
         for (String column : table1.getExtraColumns()) {
@@ -256,12 +410,16 @@ public abstract class TableDiffer implements DiffEmitter {
                 jsonColumns.add(column);
             }
         }
-        if (!jsonColumns.isEmpty()) {
-            log.warn("Comparing JSON column(s) {} across {} and {}: JSON normalization is textual and "
-                    + "rendering differs between engines (key order/whitespace/escaping). A mismatch may be "
-                    + "formatting rather than data; verify with a normalized cast or exclude the column.",
-                    jsonColumns, type1, type2);
+        if (jsonColumns.isEmpty()) {
+            return Optional.empty();
         }
+        String message = String.format(
+                "Comparing JSON column(s) %s across %s and %s: JSON normalization is textual and "
+                        + "rendering differs between engines (key order/whitespace/escaping). A mismatch may be "
+                        + "formatting rather than data; verify with a normalized cast or exclude the column.",
+                jsonColumns, type1, type2);
+        log.warn(message);
+        return Optional.of(message);
     }
 
     /**
@@ -269,14 +427,18 @@ public abstract class TableDiffer implements DiffEmitter {
      * 而键区间的生成、校验和分组、DiffResult 去重都依赖"同一把键渲染相同"。
      * 这类形态无法用归一化兜住，显式告警。
      */
-    private void warnJsonKeyColumns(TableSegment table) {
+    private List<String> warnJsonKeyColumns(TableSegment table) {
         List<String> jsonKeys = jsonKeyColumns(table);
-        if (!jsonKeys.isEmpty()) {
-            log.warn("Table {} uses JSON/JSONB column(s) as key: {}. Key rendering is not stable across "
-                    + "engines (key order, whitespace, number formats), so segmentation and checksum "
-                    + "grouping can miss rows. Use a scalar key or a deterministic normalized cast.",
-                    table.getTablePath(), jsonKeys);
+        if (jsonKeys.isEmpty()) {
+            return List.of();
         }
+        String message = String.format(
+                "Table %s uses JSON/JSONB column(s) as key: %s. Key rendering is not stable across "
+                        + "engines (key order, whitespace, number formats), so segmentation and checksum "
+                        + "grouping can miss rows. Use a scalar key or a deterministic normalized cast.",
+                table.getTablePath(), jsonKeys);
+        log.warn(message);
+        return List.of(message);
     }
 
     /** 供告警与测试复用：返回参与主键的 JSON/JSONB 列。 */
@@ -335,7 +497,29 @@ public abstract class TableDiffer implements DiffEmitter {
     }
 
     /** where 条件（已小写、去引号）里是否显式排除了该键的 NULL 值。 */
-    private boolean excludesNullKeys(String normalizedWhere, String key) {
+    /**
+     * 该表是否可能含 NULL 键（键列可空且过滤条件没有排除 NULL）。
+     * <p>MIN()/MAX() 与 {@code k >= ?} 区间谓词都丢弃 NULL 行，所以这种表的行数可能分布在
+     * 任何分段之外；分段前必须先问这个问题，否则 NULL 键行会被静默漏报。
+     */
+    static boolean mayContainNullKeys(TableSegment table) {
+        if (table == null || table.getSchema() == null || !table.getSchema().isPresent()) {
+            return false;
+        }
+        String where = table.getWhereClause().orElse("")
+                .toLowerCase(java.util.Locale.ROOT)
+                .replace("`", "")
+                .replace("\"", "");
+        for (String key : table.getKeyColumns()) {
+            Optional<ColumnInfo> column = table.getSchema().get().getColumn(key);
+            if (column.isPresent() && column.get().isNullable() && !excludesNullKeys(where, key)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean excludesNullKeys(String normalizedWhere, String key) {
         if (normalizedWhere.isEmpty()) {
             return false;
         }
@@ -395,6 +579,11 @@ public abstract class TableDiffer implements DiffEmitter {
         private final boolean validateUniqueKeys;
         private final int decimalScale;
         private final boolean allowNullableKeys;
+        private final long maxDurationMs;
+        private final long maxRowsScanned;
+        private final long maxBytesFetched;
+        /** 原始归一化 spec：容差等"取数点之后"的规则由终局比较解析。 */
+        private final com.consilens.connector.api.normalization.NormalizationSpec normalizationSpec;
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,
                            ChecksumAlgorithm checksumAlgorithm,
@@ -402,6 +591,31 @@ public abstract class TableDiffer implements DiffEmitter {
                            ConcurrencyConfig concurrencyConfig,
                            long maxDifferences, boolean validateUniqueKeys,
                            int decimalScale, boolean allowNullableKeys) {
+            this(bisectionFactor, bisectionThreshold, checksumAlgorithm, localCompareMode,
+                    concurrencyConfig, maxDifferences, validateUniqueKeys, decimalScale,
+                    allowNullableKeys, Long.MAX_VALUE, Long.MAX_VALUE, Long.MAX_VALUE, null);
+        }
+
+        public DifferConfig(int bisectionFactor, long bisectionThreshold,
+                           ChecksumAlgorithm checksumAlgorithm,
+                           LocalCompareMode localCompareMode,
+                           ConcurrencyConfig concurrencyConfig,
+                           long maxDifferences, boolean validateUniqueKeys,
+                           int decimalScale, boolean allowNullableKeys,
+                           long maxDurationMs, long maxRowsScanned, long maxBytesFetched) {
+            this(bisectionFactor, bisectionThreshold, checksumAlgorithm, localCompareMode,
+                    concurrencyConfig, maxDifferences, validateUniqueKeys, decimalScale,
+                    allowNullableKeys, maxDurationMs, maxRowsScanned, maxBytesFetched, null);
+        }
+
+        public DifferConfig(int bisectionFactor, long bisectionThreshold,
+                           ChecksumAlgorithm checksumAlgorithm,
+                           LocalCompareMode localCompareMode,
+                           ConcurrencyConfig concurrencyConfig,
+                           long maxDifferences, boolean validateUniqueKeys,
+                           int decimalScale, boolean allowNullableKeys,
+                           long maxDurationMs, long maxRowsScanned, long maxBytesFetched,
+                           com.consilens.connector.api.normalization.NormalizationSpec normalizationSpec) {
             this.bisectionFactor = bisectionFactor;
             this.bisectionThreshold = bisectionThreshold;
             this.maxDepth = 10;
@@ -413,6 +627,10 @@ public abstract class TableDiffer implements DiffEmitter {
             this.decimalScale = decimalScale > 0
                     ? decimalScale : com.consilens.core.algorithm.ValueNormalizer.DEFAULT_DECIMAL_SCALE;
             this.allowNullableKeys = allowNullableKeys;
+            this.maxDurationMs = maxDurationMs > 0 ? maxDurationMs : Long.MAX_VALUE;
+            this.maxRowsScanned = maxRowsScanned > 0 ? maxRowsScanned : Long.MAX_VALUE;
+            this.maxBytesFetched = maxBytesFetched > 0 ? maxBytesFetched : Long.MAX_VALUE;
+            this.normalizationSpec = normalizationSpec;
         }
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,

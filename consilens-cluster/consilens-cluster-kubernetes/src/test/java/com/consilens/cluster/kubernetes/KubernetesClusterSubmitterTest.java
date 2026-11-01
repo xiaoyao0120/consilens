@@ -67,7 +67,8 @@ class KubernetesClusterSubmitterTest {
         assertEquals("registry.example/consilens:1.0.0", container.getImage());
         assertEquals("IfNotPresent", container.getImagePullPolicy());
         assertEquals(List.of("java"), container.getCommand());
-        assertTrue(container.getArgs().contains("-Xmx2048m"));
+        // 堆只占容器内存的 70%（2048Mi → 1433m），剩余留给非堆内存
+        assertTrue(container.getArgs().contains("-Xmx1433m"), container.getArgs().toString());
         assertTrue(container.getArgs().contains("com.consilens.runtime.KubernetesCoordinator"));
         assertTrue(container.getArgs().contains("submission-kubernetes-1"));
         assertTrue(container.getArgs().contains("https://quality-configs.example/consilens/orders.json"));
@@ -192,6 +193,43 @@ class KubernetesClusterSubmitterTest {
 
         assertEquals("prod", gateway.deletedNamespace);
         assertEquals("consilens-orders-prod", gateway.deletedJobName);
+    }
+
+    @Test
+    void shouldSweepStaleJobWithCustomNameWhenJobCarriesConsilensLabel() {
+        RecordingGateway gateway = new RecordingGateway();
+        KubernetesSubmissionSpec spec = validSpec();
+        spec.setJobName("orders-nightly");
+        gateway.jobLabels = java.util.Map.of(
+                "app.kubernetes.io/name", KubernetesSubmissionSpec.DEFAULT_APPLICATION_LABEL);
+
+        new KubernetesClusterSubmitter(gateway).killStale(kubernetesRequest(spec, 1));
+
+        // 自定义 jobName 也必须清扫，否则同名 Job 第二次提交会 AlreadyExists
+        assertEquals("orders-nightly", gateway.deletedJobName);
+    }
+
+    @Test
+    void shouldNotSweepCustomJobNameOwnedBySomebodyElse() {
+        RecordingGateway gateway = new RecordingGateway();
+        KubernetesSubmissionSpec spec = validSpec();
+        spec.setJobName("orders-nightly");
+        gateway.jobLabels = java.util.Map.of("app.kubernetes.io/name", "other-app");
+
+        new KubernetesClusterSubmitter(gateway).killStale(kubernetesRequest(spec, 1));
+
+        assertNull(gateway.deletedJobName);
+    }
+
+    @Test
+    void shouldNotSweepUnknownCustomJobName() {
+        RecordingGateway gateway = new RecordingGateway();
+        KubernetesSubmissionSpec spec = validSpec();
+        spec.setJobName("orders-nightly");
+
+        new KubernetesClusterSubmitter(gateway).killStale(kubernetesRequest(spec, 1));
+
+        assertNull(gateway.deletedJobName);
     }
 
     /**
@@ -420,6 +458,13 @@ class KubernetesClusterSubmitterTest {
         @Override
         public java.util.Optional<String> jobFailureDetails(String namespace, String jobName) {
             return java.util.Optional.ofNullable(failureDetails);
+        }
+
+        private java.util.Map<String, String> jobLabels;
+
+        @Override
+        public java.util.Optional<java.util.Map<String, String>> jobLabels(String namespace, String jobName) {
+            return java.util.Optional.ofNullable(jobLabels);
         }
 
         @Override

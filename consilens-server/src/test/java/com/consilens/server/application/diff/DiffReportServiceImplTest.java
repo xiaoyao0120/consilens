@@ -1,6 +1,7 @@
 package com.consilens.server.application.diff;
 
 import com.consilens.server.api.dto.DiffReportDto;
+import com.consilens.core.diff.SchemaCompatibility;
 import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.domain.enums.TaskStatus;
 import com.consilens.server.domain.exception.ResourceNotFoundException;
@@ -87,6 +88,7 @@ class DiffReportServiceImplTest {
         assertEquals(3, report.getSampleSize());
         assertEquals(false, report.getSampleTruncated());
         assertEquals(3, report.getStatistics().get("totalDifferences"));
+        assertNull(report.getResultSchemaVersion());
 
         assertEquals(3, report.getColumns().size());
         DiffReportDto.ColumnStat price = report.getColumns().get(0);
@@ -108,6 +110,145 @@ class DiffReportServiceImplTest {
         DiffReportDto.SampleDiff sourceMissing = report.getSamples().get(2);
         assertEquals("SOURCE_MISSING", sourceMissing.getOperation());
         assertTrue(sourceMissing.getChangedColumns().isEmpty());
+    }
+
+    @Test
+    void shouldReadResultSchemaVersionFromArtifactMetadata() throws Exception {
+        TaskInstanceRecord task = task(TaskStatus.SUCCEEDED);
+        when(taskRepository.resolveByRef(TASK_KEY)).thenReturn(Optional.of(task));
+        ArtifactRecord runResult = runResult("storage://versioned");
+        runResult.setMetadataJson("{\"source\":\"run\",\"resultSchemaVersion\":1}");
+        when(artifactRepository.listByTaskId(TASK_ID)).thenReturn(List.of(runResult));
+        when(contentStore.read("storage://versioned")).thenReturn(content("{\n"
+                + "  \"success\": true,\n"
+                + "  \"differenceCount\": 0,\n"
+                + "  \"statistics\": {\n"
+                + "    \"sourceRowCount\": 10, \"targetRowCount\": 10,\n"
+                + "    \"totalDifferences\": 0, \"differencePercentage\": 0\n"
+                + "  },\n"
+                + "  \"differences\": []\n"
+                + "}"));
+
+        DiffReportDto report = service.getDiffReport(TASK_KEY);
+
+        assertEquals(1, report.getResultSchemaVersion());
+    }
+
+    @Test
+    void shouldReadLegacyArtifactWithoutStatisticsOrNewFields() throws Exception {
+        TaskInstanceRecord task = task(TaskStatus.SUCCEEDED);
+        when(taskRepository.resolveByRef(TASK_KEY)).thenReturn(Optional.of(task));
+        when(artifactRepository.listByTaskId(TASK_ID))
+                .thenReturn(List.of(runResult("storage://legacy-v0")));
+        when(contentStore.read("storage://legacy-v0")).thenReturn(content("{\n"
+                + "  \"success\": true,\n"
+                + "  \"differenceCount\": 2,\n"
+                + "  \"differences\": [\n"
+                + "    {\"operation\": \"MISMATCH\", \"primaryKey\": [\"1\"],\n"
+                + "     \"metadata\": {\"changedColumns1\": [\"amount\"]}},\n"
+                + "    {\"operation\": \"SOURCE_MISSING\", \"primaryKey\": [\"2\"], \"metadata\": {}}\n"
+                + "  ]\n"
+                + "}"));
+
+        DiffReportDto report = service.getDiffReport(TASK_KEY);
+
+        assertEquals(2L, report.getTotalDifferenceCount());
+        assertNull(report.getResultSchemaVersion());
+        assertEquals(1, report.getColumns().size());
+        assertEquals(2, report.getSamples().size());
+        assertNotNull(report.getStatus());
+    }
+
+    @Test
+    void shouldPreserveUnknownFutureVersionAndFields() throws Exception {
+        TaskInstanceRecord task = task(TaskStatus.SUCCEEDED);
+        when(taskRepository.resolveByRef(TASK_KEY)).thenReturn(Optional.of(task));
+        ArtifactRecord runResult = runResult("storage://future");
+        runResult.setMetadataJson("{\"source\":\"run\",\"resultSchemaVersion\":99,"
+                + "\"futureField\":{\"a\":1}}");
+        when(artifactRepository.listByTaskId(TASK_ID)).thenReturn(List.of(runResult));
+        when(contentStore.read("storage://future")).thenReturn(content("{\n"
+                + "  \"success\": true,\n"
+                + "  \"differenceCount\": 0,\n"
+                + "  \"futureContent\": {\"x\": 1},\n"
+                + "  \"statistics\": {\n"
+                + "    \"sourceRowCount\": 10, \"targetRowCount\": 10,\n"
+                + "    \"totalDifferences\": 0, \"differencePercentage\": 0\n"
+                + "  },\n"
+                + "  \"differences\": []\n"
+                + "}"));
+
+        DiffReportDto report = service.getDiffReport(TASK_KEY);
+
+        assertEquals(99, report.getResultSchemaVersion());
+        assertEquals("EXCELLENT", report.getStatus());
+        assertEquals(0L, report.getTotalDifferenceCount());
+    }
+
+    @Test
+    void shouldTreatMalformedMetadataAsUnversioned() throws Exception {
+        TaskInstanceRecord task = task(TaskStatus.SUCCEEDED);
+        when(taskRepository.resolveByRef(TASK_KEY)).thenReturn(Optional.of(task));
+        ArtifactRecord runResult = runResult("storage://bad-metadata");
+        runResult.setMetadataJson("not-json");
+        when(artifactRepository.listByTaskId(TASK_ID)).thenReturn(List.of(runResult));
+        when(contentStore.read("storage://bad-metadata")).thenReturn(content("{\n"
+                + "  \"success\": true,\n"
+                + "  \"differenceCount\": 0,\n"
+                + "  \"statistics\": {\n"
+                + "    \"sourceRowCount\": 10, \"targetRowCount\": 10,\n"
+                + "    \"totalDifferences\": 0, \"differencePercentage\": 0\n"
+                + "  },\n"
+                + "  \"differences\": []\n"
+                + "}"));
+
+        DiffReportDto report = service.getDiffReport(TASK_KEY);
+
+        assertNull(report.getResultSchemaVersion());
+        assertEquals("EXCELLENT", report.getStatus());
+    }
+
+    @Test
+    void shouldPreferExactColumnStatsWhenPresent() throws Exception {
+        TaskInstanceRecord task = task(TaskStatus.SUCCEEDED);
+        when(taskRepository.resolveByRef(TASK_KEY)).thenReturn(Optional.of(task));
+        when(artifactRepository.listByTaskId(TASK_ID))
+                .thenReturn(List.of(runResult("storage://exact-columns")));
+        when(contentStore.read("storage://exact-columns")).thenReturn(content("{\n"
+                + "  \"success\": true,\n"
+                + "  \"differenceCount\": 3,\n"
+                + "  \"statistics\": {\n"
+                + "    \"sourceRowCount\": 100, \"targetRowCount\": 100,\n"
+                + "    \"sourceMissingCount\": 1, \"targetMissingCount\": 0, \"mismatchCount\": 2,\n"
+                + "    \"totalDifferences\": 3, \"differencePercentage\": 3.0\n"
+                + "  },\n"
+                + "  \"columnStats\": [{\n"
+                + "    \"name\": \"amount\", \"sourceName\": \"amount\", \"targetName\": \"amount\",\n"
+                + "    \"insertCount\": 1, \"updateCount\": 2, \"deleteCount\": 0,\n"
+                + "    \"differenceCount\": 3, \"differencePercentage\": 100.0,\n"
+                + "    \"differenceRate\": 1.5, \"aggregatedFromSamples\": false, \"truncated\": false\n"
+                + "  }],\n"
+                + "  \"schemaCompatibility\": {\n"
+                + "    \"status\": \"COMPATIBLE_WITH_NORMALIZATION\", \"columns\": [], \"warnings\": []\n"
+                + "  },\n"
+                + "  \"differences\": []\n"
+                + "}"));
+
+        DiffReportDto report = service.getDiffReport(TASK_KEY);
+
+        assertEquals(1, report.getColumns().size());
+        DiffReportDto.ColumnStat amount = report.getColumns().get(0);
+        assertEquals("amount", amount.getName());
+        assertEquals(1L, amount.getInsertCount());
+        assertEquals(2L, amount.getUpdateCount());
+        assertEquals(0L, amount.getDeleteCount());
+        assertEquals(3L, amount.getDifferenceCount());
+        assertEquals(1.5, amount.getDifferenceRate());
+        assertEquals(false, amount.getAggregatedFromSamples());
+        assertEquals(false, amount.getTruncated());
+        assertEquals(SchemaCompatibility.Status.COMPATIBLE_WITH_NORMALIZATION,
+                report.getSchemaCompatibility().getStatus());
+        assertTrue(report.getSamples().isEmpty());
     }
 
     @Test

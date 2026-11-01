@@ -60,6 +60,39 @@ class PlanTaskHandlerTest {
     }
 
     @Test
+    void shouldEncryptEveryCredentialShapedConnectionKey() {
+        ArtifactService artifactService = mock(ArtifactService.class);
+        when(artifactService.writeArtifact(any(), eq(ArtifactKind.CONFIG), eq("json"), any(), anyMap()))
+                .thenReturn(ArtifactRefDto.builder().id("artifact-1").type("CONFIG").format("json")
+                        .metadata(Map.of()).build());
+        AesGcmSecretProtector protector = SecretProtectorTestKeys.protector();
+        PlanTaskHandler handler = new PlanTaskHandler(artifactService,
+                new ServerCompareConfigService(artifactService, new ObjectMapper()), protector);
+
+        PlanRequest request = request();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> connection = new LinkedHashMap<>(
+                (Map<String, Object>) request.getHints().get("sourceConnection"));
+        // 这些键同样出现在 JDBC 连接参数里，只加密 password 会让它们以明文进 CONFIG artifact
+        connection.put("sslPassword", "ssl-secret");
+        connection.put("accessToken", "token-secret");
+        request.getHints().put("sourceConnection", connection);
+
+        handler.handle(TaskExecutionContext.builder().instanceKey("instance-1").build(), request);
+
+        ArgumentCaptor<Object> content = ArgumentCaptor.forClass(Object.class);
+        verify(artifactService).writeArtifact(any(), eq(ArtifactKind.CONFIG), eq("json"),
+                content.capture(), anyMap());
+        ServerCompareConfig config = (ServerCompareConfig) content.getValue();
+
+        Map<?, ?> persisted = config.getSource().getConnection();
+        assertEquals("ssl-secret", protector.reveal(String.valueOf(persisted.get("sslPassword"))));
+        assertEquals("token-secret", protector.reveal(String.valueOf(persisted.get("accessToken"))));
+        // 非凭据字段保持原样
+        assertEquals("jdbc:mysql://localhost:3306/source", persisted.get("url"));
+    }
+
+    @Test
     void shouldNotDoubleEncryptAlreadyProtectedPasswords() {
         ArtifactService artifactService = mock(ArtifactService.class);
         when(artifactService.writeArtifact(any(), eq(ArtifactKind.CONFIG), eq("json"), any(), anyMap()))

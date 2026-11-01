@@ -39,6 +39,16 @@ public interface KubernetesSubmissionGateway extends AutoCloseable {
     }
 
     /**
+     * Job 的 labels；Job 不存在或实现不支持时返回 empty。
+     *
+     * <p>用于清扫陈旧作业前判断"这个 Job 是不是本系统创建的"：jobName 可以由
+     * 调用方自定义，不能靠前缀猜归属。
+     */
+    default java.util.Optional<java.util.Map<String, String>> jobLabels(String namespace, String jobName) {
+        return java.util.Optional.empty();
+    }
+
+    /**
      * Deletes the Job (cascading to pods); idempotent.
      */
     default void deleteJob(String namespace, String jobName) {

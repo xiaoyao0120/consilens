@@ -130,8 +130,10 @@ public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
                 sql.append(" WHERE ").append(whereClause);
             }
 
-            // Order by pk_key to ensure deterministic checksum
-            sql.append(" ORDER BY pk_key, row_checksum");
+            // Order by pk_key to ensure deterministic checksum。
+            // 派生表里的 ORDER BY 没有 LIMIT 会被 MySQL 系优化器直接丢弃（TiDB/ClickHouse
+            // 生成器同样用这个写法），GROUP_CONCAT 的顺序就不再保证，checksum 会随机变化。
+            sql.append(" ORDER BY pk_key, row_checksum LIMIT 18446744073709551615");
             sql.append(") AS ordered_data) AS data");
         }
 

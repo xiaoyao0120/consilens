@@ -67,6 +67,15 @@ async function loadData() {
     data.total = result.total;
     data.items = result.items || [];
     pagination.itemCount = result.total;
+    // 页码越界（URL 手改、末页删光）时回退到最后一页：否则会停在 items=[] 的空态，
+    // 分页条随表格一起消失，用户连"上一页"都点不到。
+    const maxPage = Math.max(1, Math.ceil((result.total || 0) / pagination.pageSize));
+    if (pagination.page > maxPage) {
+      pagination.page = maxPage;
+      loadData();
+      return;
+    }
+
   } catch {
     if (seq !== loadSeq) return;
     loadError.value = true;

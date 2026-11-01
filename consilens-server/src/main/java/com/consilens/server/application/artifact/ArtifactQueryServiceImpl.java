@@ -202,11 +202,22 @@ public class ArtifactQueryServiceImpl implements ArtifactQueryService {
     /**
      * 新格式：jsonl 文件按行偏移分页（流式读取，不整文件加载）。
      * operation 非空时仅统计并返回该类型的记录，offset/limit 作用于过滤后的结果。
+     *
+     * <p>不做无谓的全文件扫描：
+     * <ul>
+     *   <li>不带 operation 时总数优先用工件元数据（{@code differenceRows}），取满一页就停；</li>
+     *   <li>需要过滤时，先用一次字符串定位取 {@code operation} 字段，命中的行才做 JSON 解析
+     *       （原来每行都完整反序列化，只为读一个字段）。</li>
+     * </ul>
      */
     private DiffPageDto readJsonlPage(ArtifactRecord record, long offset, int limit, String operation) throws Exception {
+        boolean filtered = operation != null && !operation.isBlank();
+        Long knownTotal = filtered ? null : record.getDifferenceRows();
+        boolean counting = knownTotal == null;
         java.util.List<Map<String, Object>> items = new java.util.ArrayList<>();
         long matched = 0;
         long totalMatched = 0;
+        boolean reachedEnd = true;
         try (BufferedReader reader = Files.newBufferedReader(
                 java.nio.file.Paths.get(record.getDifferencesUri()))) {
             String line;
@@ -214,27 +225,64 @@ public class ArtifactQueryServiceImpl implements ArtifactQueryService {
                 if (line.isBlank()) {
                     continue;
                 }
-                Map<String, Object> row = objectMapper.readValue(line, new TypeReference<Map<String, Object>>() {
-                });
-                if (operation != null && !operation.isBlank()
-                        && !matchesOperation(operation, String.valueOf(row.get("operation")))) {
+                if (filtered && !matchesOperation(operation, operationOf(line))) {
                     continue;
                 }
-                totalMatched++;
+                if (counting) {
+                    totalMatched++;
+                }
                 if (matched >= offset && items.size() < limit) {
-                    items.add(row);
+                    items.add(objectMapper.readValue(line, new TypeReference<Map<String, Object>>() {
+                    }));
                 }
                 matched++;
+                if (!counting && items.size() >= limit) {
+                    // 总数已知且本页已满：剩下的行与返回值无关
+                    reachedEnd = false;
+                    break;
+                }
             }
         }
+        long total = counting || reachedEnd ? matched : Math.max(knownTotal, matched);
         return DiffPageDto.builder()
                 .artifactId(record.getId())
-                .total(totalMatched)
+                .total(total)
                 .rows(items.size())
                 .truncated(Boolean.TRUE.equals(record.getDifferenceTruncated()))
-                .hasMore(matched > offset + items.size())
+                .hasMore(offset + items.size() < total)
                 .items(items)
                 .build();
+    }
+
+    /** 只取顶层 {@code operation} 字段，避免为了过滤把整行反序列化。 */
+    private String operationOf(String line) {
+        int index = line.indexOf("\"operation\"");
+        if (index < 0) {
+            return parseOperation(line);
+        }
+        int colon = line.indexOf(':', index + 11);
+        if (colon < 0) {
+            return parseOperation(line);
+        }
+        int quote = line.indexOf('"', colon + 1);
+        if (quote < 0) {
+            return parseOperation(line);
+        }
+        int end = line.indexOf('"', quote + 1);
+        if (end < 0) {
+            return parseOperation(line);
+        }
+        return line.substring(quote + 1, end);
+    }
+
+    private String parseOperation(String line) {
+        try {
+            Map<String, Object> row = objectMapper.readValue(line, new TypeReference<Map<String, Object>>() {
+            });
+            return row.get("operation") == null ? null : String.valueOf(row.get("operation"));
+        } catch (Exception exception) {
+            return null;
+        }
     }
 
     /** operation 多选过滤：逗号分隔（如 mismatch,source_missing），忽略大小写。 */

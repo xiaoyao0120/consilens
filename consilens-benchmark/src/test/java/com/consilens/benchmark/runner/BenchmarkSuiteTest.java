@@ -12,6 +12,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BenchmarkSuiteTest {
 
     @Test
+    void shouldUseDistinctScenarioIdsForAlgorithmAndFileBenchmarks() {
+        assertThat(BenchmarkSuite.resolveScenarioId(
+                "com.consilens.benchmark.micro.LocalDiffEngineBenchmark",
+                "100000", null, "0.00"))
+                .isEqualTo("M01.100000.ratio0.00");
+        assertThat(BenchmarkSuite.resolveScenarioId(
+                "com.consilens.benchmark.micro.FileDiffBenchmark",
+                "100000", "parquet", "0.05"))
+                .isEqualTo("F02.100000.parquet.ratio0.05");
+        assertThat(BenchmarkSuite.resolveScenarioId(
+                "com.consilens.benchmark.micro.FileDiffBenchmark.diff",
+                "100000", "parquet", "0.05"))
+                .isEqualTo("F02.100000.parquet.ratio0.05");
+        assertThat(BenchmarkSuite.resolveScenarioId(
+                "com.consilens.benchmark.micro.FileDiffBenchmark",
+                "10000", "csv", "0.00"))
+                .isEqualTo("F01.10000.csv.ratio0.00");
+    }
+
+    @Test
     void updateBaselineDoesNotEraseItWhenEveryScenarioIsSkipped() throws Exception {
         Path baseline = Files.createTempFile("benchmark-baseline", ".json");
         String original = "{\"version\":1,\"entries\":{\"G01\":{\"score\":10,\"unit\":\"ms\",\"threshold\":0.2}}}";

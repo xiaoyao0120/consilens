@@ -22,12 +22,17 @@ const definition = ref(null);
 const detailTab = ref("config");
 const running = ref(false);
 
+// 404 才是"不存在"；500/断网要说清是加载失败，并给重试入口（否则用户会以为定义被删了）
+const loadFailed = ref(false);
+
 async function loadData() {
   loading.value = true;
+  loadFailed.value = false;
   try {
     definition.value = await getTaskDefinition(definitionId);
-  } catch {
+  } catch (error) {
     definition.value = null;
+    loadFailed.value = error?.status !== 404;
   } finally {
     loading.value = false;
   }
@@ -217,6 +222,11 @@ onMounted(loadData);
         </n-card>
       </template>
 
+      <n-card v-else-if="!loading && loadFailed" :bordered="true">
+        <EmptyState title="定义加载失败" description="请求出错（不是“定义不存在”），可重试">
+          <n-button size="small" :loading="loading" @click="loadData">重试</n-button>
+        </EmptyState>
+      </n-card>
       <n-card v-else-if="!loading" :bordered="true">
         <EmptyState title="定义不存在" description="定义可能已被删除" action="返回定义列表" @action="router.push('/definitions')" />
       </n-card>

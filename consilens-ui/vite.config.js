@@ -44,7 +44,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/v1": {
-        // E2E 运行时（scripts/e2e/run.sh）用 E2E_BACKEND 指向专用后端；默认指向开发服务
+        // E2E 运行时（devlop/scripts/e2e/run.sh）用 E2E_BACKEND 指向专用后端；默认指向开发服务
         target: process.env.E2E_BACKEND || "http://localhost:16789",
         changeOrigin: true,
       },

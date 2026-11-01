@@ -29,9 +29,28 @@ import java.util.Map;
 public class CompareRequestFactory {
 
     public CompareRequest create(CliConfiguration config) {
+        return create(config, null);
+    }
+
+    /**
+     * @param window optional incremental window; compiled into the existing
+     *               {@link PredicateSpec} filters. File sources are rejected
+     *               because the file scanner does not apply SQL predicates.
+     */
+    public CompareRequest create(CliConfiguration config, WindowSpec window) {
         ComparisonConfig comparison = config.getComparison();
         ConnectorConfig source = ConnectorConfigMapper.toConnectorConfig(config.getSource());
         ConnectorConfig target = ConnectorConfigMapper.toConnectorConfig(config.getTarget());
+        if (window != null) {
+            window.validate();
+            if (hasMappings(comparison)) {
+                throw new IllegalArgumentException("incremental window does not support comparison.mappings");
+            }
+            if (isFile(config.getSource()) || isFile(config.getTarget())) {
+                throw new IllegalArgumentException("incremental window requires a JDBC source;"
+                        + " file sources do not apply SQL filters");
+            }
+        }
         boolean mappings = hasMappings(comparison);
         // mappings 只对 table 资源编译成带 WHERE 的 SQL；SQL 资源原样透传，
         // 此时 filter 必须作为 PredicateSpec 传给引擎，否则会被静默丢弃。
@@ -50,8 +69,8 @@ public class CompareRequestFactory {
                 .targetKeySpec(buildResult.targetKeySpec)
                 .sourceComparisons(buildResult.sourceComparisons)
                 .targetComparisons(buildResult.targetComparisons)
-                .sourceFilter(buildResult.sourceFilter)
-                .targetFilter(buildResult.targetFilter)
+                .sourceFilter(mergeFilters(buildResult.sourceFilter, windowPredicate(window, true)))
+                .targetFilter(mergeFilters(buildResult.targetFilter, windowPredicate(window, false)))
                 .normalizationSpec(toNormalizationSpec(config.getNormalization()))
                 .strategyPreference(toStrategyPreference(config))
                 .executionOptions(toExecutionOptions(config))
@@ -67,6 +86,10 @@ public class CompareRequestFactory {
     }
 
     public List<String> logicalSortKeys(CliConfiguration config) {
+        return logicalSortKeys(config, true);
+    }
+
+    private List<String> logicalSortKeys(CliConfiguration config, boolean sourceSide) {
         ComparisonConfig comparison = config.getComparison();
         if (hasMappings(comparison)) {
             List<String> mappedKeys = new ArrayList<>();
@@ -79,14 +102,24 @@ public class CompareRequestFactory {
                 return mappedKeys;
             }
         }
-        return comparison.getKeys() != null && comparison.getKeys().getSource() != null
+        if (comparison.getKeys() == null) {
+            return List.of();
+        }
+        // keys.source / keys.target 可以不同名：目标侧必须用 keys.target，
+        // 否则目标列清单里会混进源侧的列名，生成引用不存在列的 SQL（或整列全是 NULL）。
+        List<String> sideKeys = sourceSide ? comparison.getKeys().getSource()
+                : comparison.getKeys().getTarget();
+        if (sideKeys != null && !sideKeys.isEmpty()) {
+            return sideKeys;
+        }
+        return comparison.getKeys().getSource() != null
                 ? comparison.getKeys().getSource()
-                : List.of();
+                : (comparison.getKeys().getTarget() != null ? comparison.getKeys().getTarget() : List.of());
     }
 
     private List<String> logicalColumns(CliConfiguration config, boolean sourceSide) {
         ComparisonConfig comparison = config.getComparison();
-        List<String> columns = new ArrayList<>(logicalSortKeys(config));
+        List<String> columns = new ArrayList<>(logicalSortKeys(config, sourceSide));
         if (hasMappings(comparison)) {
             for (CompareMappingConfig mapping : comparison.getMappings()) {
                 if (!Boolean.TRUE.equals(mapping.getKey())
@@ -158,6 +191,56 @@ public class CompareRequestFactory {
     private boolean isTableResource(ConnectorConfig config) {
         return config != null && config.getResource() != null
                 && "table".equalsIgnoreCase(config.getResource().getType());
+    }
+
+    private boolean isFile(ConnectionConfig config) {
+        return config != null && config.getType() != null
+                && "file".equalsIgnoreCase(config.getType().trim());
+    }
+
+    /**
+     * Compiles the window into a SQL predicate. Values are quoted as SQL string
+     * literals so timestamps/dates work across JDBC dialects; column names are
+     * passed through as configured.
+     */
+    private PredicateSpec windowPredicate(WindowSpec window, boolean sourceSide) {
+        if (window == null) {
+            return null;
+        }
+        String column = sourceSide ? window.sourceColumn() : window.targetColumn();
+        List<String> parts = new ArrayList<>();
+        if (!WindowSpec.blank(window.getFrom())) {
+            parts.add(column + " >= " + sqlLiteral(window.getFrom()));
+        }
+        if (!WindowSpec.blank(window.getTo())) {
+            parts.add(column + " < " + sqlLiteral(window.getTo()));
+        }
+        if (parts.isEmpty()) {
+            return null;
+        }
+        String expression = String.join(" AND ", parts);
+        if (parts.size() > 1) {
+            expression = "(" + expression + ")";
+        }
+        return PredicateSpec.builder().type("sql").expression(expression).build();
+    }
+
+    private PredicateSpec mergeFilters(PredicateSpec existing, PredicateSpec window) {
+        if (existing == null || existing.getExpression() == null
+                || existing.getExpression().isBlank()) {
+            return window;
+        }
+        if (window == null) {
+            return existing;
+        }
+        return PredicateSpec.builder()
+                .type("sql")
+                .expression("(" + existing.getExpression() + ") AND (" + window.getExpression() + ")")
+                .build();
+    }
+
+    private String sqlLiteral(String value) {
+        return "'" + value.trim().replace("'", "''") + "'";
     }
 
     private List<String> mappedKeys(ComparisonConfig comparison) {
@@ -394,6 +477,9 @@ public class CompareRequestFactory {
                 // 可空键档位走配置：默认关闭（键列可空即拒绝），true 时允许 NULL 键参与比较
                 .allowNullableKeys(Boolean.TRUE.equals(config.getStrategy().getAllowNullableKeys()))
                 .maxDifferences(config.getStrategy().getMaxDifferences())
+                .maxDurationMs(config.getStrategy().getMaxDurationMs())
+                .maxRowsScanned(config.getStrategy().getMaxRowsScanned())
+                .maxBytesFetched(config.getStrategy().getMaxBytesFetched())
                 .attributes(attributes.isEmpty() ? null : attributes)
                 .build();
     }
@@ -412,10 +498,32 @@ public class CompareRequestFactory {
         if (normalizationConfig == null) {
             return null;
         }
-        return NormalizationSpecs.fromTypeRules(
+        NormalizationSpec spec = NormalizationSpecs.fromTypeRules(
                 toRuleMaps(normalizationConfig.getGlobal()),
                 toRuleMaps(normalizationConfig.getSource()),
                 toRuleMaps(normalizationConfig.getTarget()));
+        return NormalizationSpecs.withColumnRules(spec, toColumnRuleMaps(normalizationConfig.getColumns()));
+    }
+
+    private Map<String, Map<String, Object>> toColumnRuleMaps(Map<String, TypeNormalizationRule> rules) {
+        if (rules == null || rules.isEmpty()) {
+            return null;
+        }
+        Map<String, Map<String, Object>> result = new LinkedHashMap<>();
+        for (Map.Entry<String, TypeNormalizationRule> entry : rules.entrySet()) {
+            TypeNormalizationRule rule = entry.getValue();
+            if (rule == null) {
+                continue;
+            }
+            // 列级规则当前只开放数值容差（precision 等需要 SQL 侧同步实现）
+            Map<String, Object> fields = new LinkedHashMap<>();
+            putIfNotNull(fields, "tolerance", rule.getTolerance());
+            putIfNotNull(fields, "relativeTolerance", rule.getRelativeTolerance());
+            if (!fields.isEmpty()) {
+                result.put(entry.getKey(), fields);
+            }
+        }
+        return result;
     }
 
     private Map<String, Map<String, Object>> toRuleMaps(Map<String, TypeNormalizationRule> rules) {
@@ -439,6 +547,9 @@ public class CompareRequestFactory {
             putIfNotNull(fields, "trueValue", rule.getTrueValue());
             putIfNotNull(fields, "falseValue", rule.getFalseValue());
             putIfNotNull(fields, "nullValue", rule.getNullValue());
+            putIfNotNull(fields, "tolerance", rule.getTolerance());
+            putIfNotNull(fields, "relativeTolerance", rule.getRelativeTolerance());
+            putIfNotNull(fields, "sessionTimeZone", rule.getSessionTimeZone());
             result.put(entry.getKey(), fields);
         }
         return result;

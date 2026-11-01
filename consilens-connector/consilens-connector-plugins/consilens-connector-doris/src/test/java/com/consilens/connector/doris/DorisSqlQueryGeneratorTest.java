@@ -65,7 +65,8 @@ class DorisSqlQueryGeneratorTest {
 
         assertTrue(sql.contains("MD5(GROUP_CONCAT"));
         assertTrue(sql.contains("CONCAT_WS"));
-        assertTrue(sql.contains("ORDER BY"));
+        // 派生表 ORDER BY 必须带 LIMIT，否则 MySQL 系优化器会丢弃排序，checksum 不稳定
+        assertTrue(sql.contains("ORDER BY pk_key, row_checksum LIMIT 18446744073709551615"), sql);
     }
     @Test
     void testGetBatchInsertSQL() {

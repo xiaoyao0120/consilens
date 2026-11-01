@@ -96,7 +96,7 @@ public class PlanTaskHandler implements CapabilityHandler<PlanRequest> {
 
     private void protectHintPassword(Map<String, Object> hints, String key) {
         Object value = hints.get(key);
-        if (value instanceof String) {
+        if (value instanceof String && isCredentialKey(key)) {
             String password = (String) value;
             if (protectable(password)) {
                 hints.put(key, secretProtector.protect(password));
@@ -137,16 +137,36 @@ public class PlanTaskHandler implements CapabilityHandler<PlanRequest> {
         throw new InvalidInputException("connection.properties must be a string or object");
     }
 
+    /**
+     * 加密连接里所有"看起来是凭据"的字符串值。
+     *
+     * <p>只处理 {@code password} 会漏掉 {@code sslPassword} / {@code trustStorePassword} /
+     * {@code accessToken} / {@code clientSecret} 这类同样出现在 JDBC 连接参数里的键——它们会以明文
+     * 进入 CONFIG artifact，而 artifact 是可读的文件。
+     */
     private boolean protectPassword(Map<String, Object> connection) {
-        Object value = connection.get("password");
-        if (value instanceof String) {
-            String password = (String) value;
-            if (protectable(password)) {
-                connection.put("password", secretProtector.protect(password));
-                return true;
+        boolean changed = false;
+        for (Map.Entry<String, Object> entry : connection.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            if (!(value instanceof String) || !isCredentialKey(key)) {
+                continue;
+            }
+            String text = (String) value;
+            if (protectable(text)) {
+                entry.setValue(secretProtector.protect(text));
+                changed = true;
             }
         }
-        return false;
+        return changed;
+    }
+
+    private static boolean isCredentialKey(String key) {
+        if (key == null) {
+            return false;
+        }
+        return "password".equalsIgnoreCase(key)
+                || DatasourceConnectionPolicy.isSensitivePropertyKey(key);
     }
 
     /** 掩码占位/空值直接移除；已加密的保持，避免二次加密。 */

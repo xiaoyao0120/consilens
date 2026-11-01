@@ -5,11 +5,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
-OUT="$ROOT/target/release-checks/$RUN_ID"
+# Keep gate artifacts outside target/ so `mvn clean` (root-tests gate) cannot
+# delete the logs and smoke output of the running gate.
+OUT="$ROOT/.release-checks/$RUN_ID"
 LOG_DIR="$OUT/logs"
 mkdir -p "$LOG_DIR"
 
 WITH_MCP=true
+SKIP_DOCKER=false
 DOCKER_VERIFY_ONLY=false
 EXTERNAL_DATABASE_VERIFY_ONLY=false
 OCEANBASE_VERIFY_ONLY=false
@@ -17,6 +20,9 @@ for arg in "$@"; do
   case "$arg" in
     --skip-mcp)
       WITH_MCP=false
+      ;;
+    --skip-docker)
+      SKIP_DOCKER=true
       ;;
     --docker-verify-only)
       DOCKER_VERIFY_ONLY=true
@@ -221,6 +227,14 @@ external_database_verify() {
   local report_dir="$ROOT/consilens-core/target/failsafe-reports"
 
   require_docker
+  local required_env
+  for required_env in CONSILENS_IT_MYSQL_PASSWORD CONSILENS_IT_POSTGRESQL_PASSWORD \
+      CONSILENS_IT_CLICKHOUSE_PASSWORD CONSILENS_IT_OCEANBASE_PASSWORD; do
+    if [[ -z "${!required_env:-}" ]]; then
+      echo "Set $required_env for the external database verify gate" >&2
+      return 1
+    fi
+  done
   rm -rf "$report_dir"
   ./mvnw -B -pl consilens-core -am -Pexternal-databases \
       -Dit.test=CrossDatabaseDockerITest,OceanBaseSameDbComparisonTest,OceanBaseCrossDbComparisonTest verify
@@ -283,8 +297,63 @@ smoke_dist_cli() {
     echo "MCP skills not found in release archive" >&2
     exit 1
   fi
+  for required in LICENSE README.md SECURITY.md SUPPORT.md; do
+    if [[ ! -f "$app/$required" ]]; then
+      echo "$required not found in release archive" >&2
+      exit 1
+    fi
+  done
+  if [[ ! -d "$app/docs" || -z "$(find "$app/docs" -maxdepth 1 -name '*.md' -print -quit)" ]]; then
+    echo "User documentation not found in release archive" >&2
+    exit 1
+  fi
+
+  if ! tar -tzf "$archive" | grep -q '/sbom/bom.json'; then
+    echo "SBOM not found in release archive" >&2
+    exit 1
+  fi
+
+  local cli_jar cli_entries
+  cli_jar="$(find "$app/libs" -maxdepth 1 -name 'consilens-cli-*.jar' | head -1)"
+  if [[ -z "$cli_jar" ]]; then
+    echo "CLI jar not found in release archive" >&2
+    exit 1
+  fi
+  cli_entries="$OUT/cli-jar-entries.txt"
+  jar tf "$cli_jar" > "$cli_entries"
+  for required_class in org/apache/orc/OrcFile.class org/duckdb/DuckDBDriver.class \
+      com/consilens/connector/iceberg/IcebergConnectorProvider.class \
+      org/apache/iceberg/TableMetadata.class org/apache/iceberg/avro/Avro.class \
+      org/apache/hadoop/conf/Configuration.class; do
+    if ! grep -q "$required_class" "$cli_entries"; then
+      echo "Required reader class missing from CLI jar: $required_class" >&2
+      exit 1
+    fi
+  done
 
   "$app/bin/consilens-cli.sh" --version
+
+  (
+    cd "$app"
+    ./bin/consilens-cli.sh diff -c examples/files/csv-to-csv.yaml >/dev/null
+    ./bin/consilens-cli.sh diff -c examples/files/csv-to-csv.yaml --engine duckdb >/dev/null
+    ./bin/consilens-cli.sh metrics -c examples/files/csv-to-csv.yaml \
+      --engine duckdb --metric count >/dev/null
+    ./bin/consilens-cli.sh connector certify -c examples/files/csv-to-csv.yaml >/dev/null
+  )
+
+  local verify_dir="$OUT/dist-verify"
+  rm -rf "$verify_dir"
+  set +e
+  (cd "$app" && ./bin/consilens-cli.sh verify -c examples/files/csv-to-csv.yaml \
+      --fail-on any --format json --output-dir "$verify_dir" >/dev/null)
+  local verify_exit=$?
+  set -e
+  if [[ "$verify_exit" -ne 1 ]]; then
+    echo "dist verify expected exit 1, got $verify_exit" >&2
+    exit 1
+  fi
+  test -f "$verify_dir/verify-result.json"
 }
 
 smoke_server_artifact() {
@@ -298,6 +367,15 @@ smoke_server_artifact() {
   unzip -p "$jar" META-INF/MANIFEST.MF | grep -q '^Main-Class: org.springframework.boot.loader.JarLauncher'
   unzip -p "$jar" META-INF/MANIFEST.MF | grep -q '^Start-Class: com.consilens.server.ConsilensServerApplication'
   jar tf "$jar" | grep -q '^BOOT-INF/classes/com/consilens/server/ConsilensServerApplication.class$'
+  jar tf "$jar" | grep -q '^BOOT-INF/classes/static/index.html$'
+
+  local dist_count jar_count
+  dist_count="$(find "$ROOT/consilens-ui/dist" -type f | wc -l | tr -d ' ')"
+  jar_count="$(jar tf "$jar" | grep -c '^BOOT-INF/classes/static/.*[^/]$' || true)"
+  if [[ "$dist_count" -ne "$jar_count" ]]; then
+    echo "Server static assets do not match UI dist: dist=$dist_count jar=$jar_count" >&2
+    exit 1
+  fi
 }
 
 smoke_mcp() {
@@ -336,11 +414,18 @@ if [[ "$OCEANBASE_VERIFY_ONLY" == "true" ]]; then
   exit 0
 fi
 
-run_gate root-tests ./mvnw -B test
-run_gate docker-verify docker_verify
+run_gate pom-versions python3 scripts/release/check-pom-versions.py
+run_gate root-tests ./mvnw -B clean test
+if [[ "$SKIP_DOCKER" == "true" ]]; then
+  echo "==> docker-verify (skipped by --skip-docker)"
+else
+  run_gate docker-verify docker_verify
+fi
+run_gate ui-package ./mvnw -B -Prelease -pl consilens-ui package
 run_gate server-package ./mvnw -B -pl consilens-server -am package -DskipTests
 run_gate server-smoke smoke_server_artifact
-run_gate release-package ./mvnw -B -Prelease -pl consilens-dist -am package -DskipTests
+run_gate release-package ./mvnw -B -Prelease,javadoc -pl consilens-dist -am install -DskipTests
+run_gate sbom-policy python3 scripts/release/check-sbom.py consilens-dist/target/bom.json
 run_gate dist-cli-smoke smoke_dist_cli
 
 if [[ "$WITH_MCP" == "true" ]]; then

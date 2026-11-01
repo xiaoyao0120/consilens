@@ -197,6 +197,32 @@ class ClusterSubmitSupportTest {
     }
 
     @Test
+    void shouldRewriteUrlOnlyConnectionHostAndPort() {
+        ConsilensServerProperties properties = new ConsilensServerProperties();
+        properties.getCluster().getLoopbackHosts().put("yarn", "kuanilens-mysql");
+        properties.getCluster().getLoopbackPorts().put("yarn", 3306);
+        ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()), properties);
+        // 只写 url、没有 host/port 字段：端口也必须从 URL 里取出来改，否则是半改写
+        EndpointConfig loopback = EndpointConfig.builder()
+                .type("mysql")
+                .table("t")
+                .connection(Map.of(
+                        "url", "jdbc:mysql://127.0.0.1:3466/dq_benchmark",
+                        "username", "root",
+                        "password", "p"))
+                .build();
+
+        Map<String, Object> descriptor = support.buildDescriptor(
+                ServerCompareConfig.builder().source(loopback).target(loopback).keys(List.of("id")).build(),
+                false, "yarn");
+
+        Map<String, Object> connection = connectionOf(descriptor, "source");
+        assertThat(String.valueOf(connection.get("url")))
+                .isEqualTo("jdbc:mysql://kuanilens-mysql:3306/dq_benchmark");
+        assertThat(connection).doesNotContainKey("port");
+    }
+
+    @Test
     void shouldRejectOneSidedFilterForClusterSubmission() {
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()));
         EndpointConfig filtered = EndpointConfig.builder()
@@ -246,6 +272,33 @@ class ClusterSubmitSupportTest {
         assertThat(submitter.request.getKubernetesSubmission().getSecretEnv())
                 .containsKeys("SOURCE_PASSWORD", "TARGET_PASSWORD");
         assertThat(submitter.killed).isFalse();
+    }
+
+    @Test
+    void shouldRedactTableSinkPasswordInKubernetesDescriptor() {
+        ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(kubernetesSubmitter()));
+        ServerCompareConfig config = ServerCompareConfig.builder()
+                .source(endpoint("source-password"))
+                .target(endpoint("target-password"))
+                .keys(List.of("id"))
+                .result(com.consilens.sink.api.model.ResultConfig.builder()
+                        .sinks(List.of(com.consilens.sink.api.model.SinkConfig.builder()
+                                .format("table")
+                                .type("result")
+                                .properties("{\"url\":\"jdbc:mysql://db:3306/x\","
+                                        + "\"username\":\"u\",\"password\":\"sink-secret\"}")
+                                .build()))
+                        .build())
+                .build();
+
+        Map<String, Object> kubernetes = support.buildDescriptor(config, true, "kubernetes");
+        assertThat(String.valueOf(kubernetes.get("result")))
+                .contains("${env.SINK_PASSWORD}")
+                .doesNotContain("sink-secret");
+
+        // 非脱敏平台（yarn 以挂载文件下发但保留明文）行为不变
+        Map<String, Object> yarn = support.buildDescriptor(config, false, "yarn");
+        assertThat(String.valueOf(yarn.get("result"))).contains("sink-secret");
     }
 
     @Test

@@ -45,6 +45,24 @@ public class CompareExecutionSettings {
     @Builder.Default
     private final java.time.ZoneId sessionZone = null;
 
+    /** 墙钟预算（毫秒）；Long.MAX_VALUE 表示不限。分段边界与行批次检查。 */
+    @Builder.Default
+    private final long maxDurationMs = Long.MAX_VALUE;
+
+    /** 累计扫描行数预算；Long.MAX_VALUE 表示不限。在已知取数点累计。 */
+    @Builder.Default
+    private final long maxRowsScanned = Long.MAX_VALUE;
+
+    /** 累计取回字节预算；Long.MAX_VALUE 表示不限。流式路径不含字节计数。 */
+    @Builder.Default
+    private final long maxBytesFetched = Long.MAX_VALUE;
+
+    /** 原始归一化 spec：终局本地比较据此解析列级/类型级数值容差。 */
+    private final com.consilens.connector.api.normalization.NormalizationSpec normalizationSpec;
+
+    /** 可选进度回调；流式合并路径会周期性上报。 */
+    private final com.consilens.connector.api.planner.ProgressListener progressListener;
+
     public static CompareExecutionSettings fromRequest(CompareRequest request) {
         CompareExecutionOptions executionOptions = request != null ? request.getExecutionOptions() : null;
         Map<String, Object> attributes = executionOptions != null ? executionOptions.getAttributes() : null;
@@ -71,6 +89,15 @@ public class CompareExecutionSettings {
                 .maxDifferences(resolveMaxDifferences(executionOptions, attributes))
                 .decimalScale(resolveDecimalScale(request != null ? request.getNormalizationSpec() : null))
                 .sessionZone(resolveSessionZone(request != null ? request.getNormalizationSpec() : null))
+                .maxDurationMs(resolvePositiveLong(executionOptions != null
+                        ? executionOptions.getMaxDurationMs() : null, attributes, "maxDurationMs"))
+                .maxRowsScanned(resolvePositiveLong(executionOptions != null
+                        ? executionOptions.getMaxRowsScanned() : null, attributes, "maxRowsScanned"))
+                .maxBytesFetched(resolvePositiveLong(executionOptions != null
+                        ? executionOptions.getMaxBytesFetched() : null, attributes, "maxBytesFetched"))
+                .normalizationSpec(request != null ? request.getNormalizationSpec() : null)
+                .progressListener(executionOptions != null
+                        ? executionOptions.getProgressListener() : null)
                 .build();
     }
 
@@ -146,7 +173,11 @@ public class CompareExecutionSettings {
                 maxDifferences,
                 validateUniqueKeys,
                 decimalScale,
-                allowNullableKeys);
+                allowNullableKeys,
+                maxDurationMs,
+                maxRowsScanned,
+                maxBytesFetched,
+                normalizationSpec);
     }
 
     public CompareExecutionSettings withChecksumAlgorithm(ChecksumAlgorithm checksumAlgorithm) {
@@ -162,10 +193,14 @@ public class CompareExecutionSettings {
                 .validateUniqueKeys(validateUniqueKeys)
                 .allowNullableKeys(allowNullableKeys)
                 .maxDifferences(maxDifferences)
-                // 降级只替换算法；归一化精度/会话时区必须保持原配置，
+                // 降级只替换算法；归一化精度/会话时区/预算/容差必须保持原配置，
                 // 否则 SQL 与 Java 两侧的数值/时间口径会悄悄分叉。
                 .decimalScale(decimalScale)
                 .sessionZone(sessionZone)
+                .maxDurationMs(maxDurationMs)
+                .maxRowsScanned(maxRowsScanned)
+                .maxBytesFetched(maxBytesFetched)
+                .normalizationSpec(normalizationSpec)
                 .build();
     }
 
@@ -177,6 +212,33 @@ public class CompareExecutionSettings {
             }
         }
         return ConcurrencyConfig.defaultConfig();
+    }
+
+    private static long resolvePositiveLong(Long explicit, Map<String, Object> attributes, String attributeName) {
+        if (explicit != null && explicit > 0) {
+            return explicit;
+        }
+        if (attributes != null) {
+            Object value = attributes.get(attributeName);
+            if (value instanceof Number) {
+                long parsed = ((Number) value).longValue();
+                if (parsed > 0) {
+                    return parsed;
+                }
+                return Long.MAX_VALUE;
+            }
+            if (value instanceof String && !((String) value).trim().isEmpty()) {
+                try {
+                    long parsed = Long.parseLong(((String) value).trim());
+                    if (parsed > 0) {
+                        return parsed;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // 解析失败视为未配置，保持不限；不要让一个笔误让整次比对失败
+                }
+            }
+        }
+        return Long.MAX_VALUE;
     }
 
     private static long resolveMaxDifferences(CompareExecutionOptions executionOptions, Map<String, Object> attributes) {

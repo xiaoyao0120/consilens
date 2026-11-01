@@ -1,11 +1,11 @@
 package com.consilens.benchmark.data;
 
+import com.consilens.common.io.PathSupport;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import lombok.Getter;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 
@@ -45,9 +45,7 @@ public final class BenchmarkDataReport {
 
     public void write(Path path) {
         try {
-            if (path.getParent() != null) {
-                Files.createDirectories(path.getParent());
-            }
+            PathSupport.ensureParent(path);
             ObjectMapper mapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
             mapper.writeValue(path.toFile(), this);
         } catch (IOException e) {

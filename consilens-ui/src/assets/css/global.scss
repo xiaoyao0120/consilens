@@ -491,19 +491,25 @@ p {
 
 // ===== 页面切换过渡 =====
 
-.fade-slide-enter-active,
-.fade-slide-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+.content-panel > .page-container {
+  animation: page-enter 0.2s ease;
 }
 
-.fade-slide-enter-from {
-  opacity: 0;
-  transform: translateY(8px);
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
-.fade-slide-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
+@media (prefers-reduced-motion: reduce) {
+  .content-panel > .page-container {
+    animation: none;
+  }
 }
 
 // ===== 侧边栏菜单（对标 EmonLens：中文分组标题 + 34px 行高 + 中性实底选中块） =====

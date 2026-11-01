@@ -89,15 +89,9 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
             }
 
             // Build per-row checksum using MD5
-            sql.append("lower(to_hex(md5(to_utf8(CONCAT(");
-            for (int i = 0; i < columns.size(); i++) {
-                if (i > 0)
-                    sql.append(", '|', ");
-                String col = columns.get(i);
-                DataType dataType = columnDataTypes.get(col);
-                sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
-            }
-            sql.append("))))) as row_checksum");
+            sql.append("lower(to_hex(md5(to_utf8(")
+                    .append(concatColumns(columns, columnDataTypes))
+                    .append(")))) as row_checksum");
         }
 
         sql.append(" FROM ");
@@ -112,6 +106,29 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
         }
 
         return sql.toString();
+    }
+
+    /**
+     * Trino 的 CONCAT 至少需要两个参数：只有一列（或没有列）时不能生成 CONCAT(...)，
+     * 否则 SQL 直接报 "There must be two or more concatenation arguments"。
+     */
+    private String concatColumns(List<String> columns, Map<String, DataType> columnDataTypes) {
+        if (columns.isEmpty()) {
+            return "''";
+        }
+        if (columns.size() == 1) {
+            String col = columns.get(0);
+            return escapeHashValue(dataTypeHandler.normalizeColumn(col, columnDataTypes.get(col)));
+        }
+        StringBuilder sql = new StringBuilder("CONCAT(");
+        for (int i = 0; i < columns.size(); i++) {
+            if (i > 0) {
+                sql.append(", '|', ");
+            }
+            String col = columns.get(i);
+            sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, columnDataTypes.get(col))));
+        }
+        return sql.append(")").toString();
     }
 
     @Override
@@ -130,18 +147,9 @@ public class TrinoSqlQueryGenerator extends BaseSqlQueryGenerator {
             sql.append(capabilityProvider.quote(primaryKeys.get(i)));
         }
 
-        sql.append(", lower(to_hex(md5(to_utf8(CONCAT(");
-
-        for (int i = 0; i < columns.size(); i++) {
-            if (i > 0) {
-                sql.append(", '|', ");
-            }
-            String col = columns.get(i);
-            DataType dataType = columnDataTypes.get(col);
-            sql.append(escapeHashValue(dataTypeHandler.normalizeColumn(col, dataType)));
-        }
-
-        sql.append("))))) AS row_hash");
+        sql.append(", lower(to_hex(md5(to_utf8(")
+                .append(concatColumns(columns, columnDataTypes))
+                .append(")))) AS row_hash");
 
         sql.append(" FROM ");
         sql.append(buildRelationRef(schemaName, tableName));

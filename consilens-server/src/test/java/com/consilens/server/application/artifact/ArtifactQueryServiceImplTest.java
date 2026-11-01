@@ -55,6 +55,83 @@ class ArtifactQueryServiceImplTest {
     }
 
     @Test
+    void shouldTrustDifferenceRowsAndStopAfterOnePage() throws Exception {
+        Path file = Files.createTempFile("diff-big", ".jsonl");
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        for (int index = 0; index < 200; index++) {
+            lines.add("{\"operation\":\"MISMATCH\",\"primaryKey\":[\"" + index + "\"],\"metadata\":{}}");
+        }
+        Files.write(file, lines, StandardCharsets.UTF_8);
+        when(repository.findById("a-big")).thenReturn(Optional.of(ArtifactRecord.builder()
+                .id("a-big")
+                .artifactType(ArtifactKind.RUN_RESULT)
+                .artifactFormat("ndjson")
+                .differencesUri(file.toString())
+                .differenceRows(200L)
+                .differenceTruncated(false)
+                .build()));
+
+        DiffPageDto page = service().listDifferences("a-big", 0, 5, null, "trace");
+
+        // 总数取工件元数据，取满一页即止；hasMore 由总数推出，不再依赖"多读一行"
+        assertEquals(200, page.getTotal());
+        assertEquals(5, page.getRows());
+        assertEquals(true, page.isHasMore());
+        assertEquals(List.of("0"), page.getItems().get(0).get("primaryKey"));
+        Files.deleteIfExists(file);
+    }
+
+    @Test
+    void shouldNotParseLinesBeyondTheRequestedPage() throws Exception {
+        // 第 6 行是坏数据：只要实现真的"取满一页就停"，本页就不会碰到它
+        Path file = Files.createTempFile("diff-lazy", ".jsonl");
+        java.util.List<String> lines = new java.util.ArrayList<>();
+        for (int index = 0; index < 5; index++) {
+            lines.add("{\"operation\":\"MISMATCH\",\"primaryKey\":[\"" + index + "\"],\"metadata\":{}}");
+        }
+        lines.add("{not-json");
+        Files.write(file, lines, StandardCharsets.UTF_8);
+        when(repository.findById("a-lazy")).thenReturn(Optional.of(ArtifactRecord.builder()
+                .id("a-lazy")
+                .artifactType(ArtifactKind.RUN_RESULT)
+                .artifactFormat("ndjson")
+                .differencesUri(file.toString())
+                .differenceRows(5L)
+                .differenceTruncated(false)
+                .build()));
+
+        DiffPageDto page = service().listDifferences("a-lazy", 0, 5, null, "trace");
+
+        assertEquals(5, page.getRows());
+        assertEquals(5, page.getTotal());
+        assertEquals(false, page.isHasMore());
+        Files.deleteIfExists(file);
+    }
+
+    @Test
+    void shouldFallBackToScannedTotalWhenMetadataOverstates() throws Exception {
+        Path file = Files.createTempFile("diff-short", ".jsonl");
+        Files.write(file, List.of(
+                "{\"operation\":\"MISMATCH\",\"primaryKey\":[\"1\"],\"metadata\":{}}",
+                "{\"operation\":\"MISMATCH\",\"primaryKey\":[\"2\"],\"metadata\":{}}"), StandardCharsets.UTF_8);
+        when(repository.findById("a-short")).thenReturn(Optional.of(ArtifactRecord.builder()
+                .id("a-short")
+                .artifactType(ArtifactKind.RUN_RESULT)
+                .artifactFormat("ndjson")
+                .differencesUri(file.toString())
+                .differenceRows(50L)
+                .differenceTruncated(false)
+                .build()));
+
+        DiffPageDto page = service().listDifferences("a-short", 0, 10, null, "trace");
+
+        // 读到文件末尾就以实际行数为准，不能相信元数据里的 50
+        assertEquals(2, page.getTotal());
+        assertEquals(false, page.isHasMore());
+        Files.deleteIfExists(file);
+    }
+
+    @Test
     void shouldFilterJsonlDifferencesByOperation() throws Exception {
         Path file = Files.createTempFile("diff-filter", ".jsonl");
         Files.write(file, List.of(

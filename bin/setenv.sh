@@ -22,9 +22,10 @@ if [ -z "$JAVA_OPTS" ]; then
     # Server mode for better performance
     JAVA_OPTS="-server"
     
-    # Heap memory settings (8GB)
-    # Adjust these values based on your available memory and workload
-    JAVA_OPTS="$JAVA_OPTS -Xmx8g -Xms8g"
+    # Heap memory settings (4GB max, small initial heap for short CLI runs).
+    # Raise -Xmx for very large comparisons; a fixed large -Xms can prevent the
+    # JVM from starting in CI containers with tight memory limits.
+    JAVA_OPTS="$JAVA_OPTS -Xmx4g -Xms256m"
     
     # Garbage Collection settings
     # Using G1GC for better performance with large heaps
@@ -47,7 +48,6 @@ if [ -z "$JAVA_OPTS" ]; then
     
     # Performance tuning
     JAVA_OPTS="$JAVA_OPTS -XX:+UseStringDeduplication"
-    JAVA_OPTS="$JAVA_OPTS -XX:+OptimizeStringConcat"
 fi
 
 #

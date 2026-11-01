@@ -36,4 +36,14 @@ public class TypeNormalizationRule {
     private String falseValue;
 
     private String nullValue;
+
+    /** 数值绝对容差（终局本地比较生效）。 */
+    private Double tolerance;
+
+    /** 数值相对容差（0..1）。 */
+    private Double relativeTolerance;
+
+    /** 会话时区（IANA 名称或 +08:00 偏移），两侧归一化按它统一。 */
+    @com.fasterxml.jackson.annotation.JsonAlias("session_time_zone")
+    private String sessionTimeZone;
 }

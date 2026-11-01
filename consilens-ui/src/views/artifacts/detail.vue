@@ -17,12 +17,17 @@ const loading = ref(true);
 const detail = ref(null); // ArtifactContentDto { artifactId, artifactType, artifactFormat, content }
 const PREVIEW_LIMIT = 200_000;
 
+// 404 才是"不存在"；500/断网要说清是加载失败并给重试入口
+const loadFailed = ref(false);
+
 async function loadDetail() {
   loading.value = true;
+  loadFailed.value = false;
   try {
     detail.value = await getArtifactContent(artifactId);
-  } catch {
+  } catch (error) {
     detail.value = null;
+    loadFailed.value = error?.status !== 404;
   } finally {
     loading.value = false;
   }
@@ -88,6 +93,11 @@ const prettyContent = computed(() => {
         />
       </n-card>
 
+      <n-card v-else-if="!loading && loadFailed" size="small" :bordered="true">
+        <EmptyState title="Artifact 加载失败" description="请求出错（不是“不存在”），可重试">
+          <n-button size="small" :loading="loading" @click="loadDetail">重试</n-button>
+        </EmptyState>
+      </n-card>
       <n-card v-else-if="!loading" size="small" :bordered="true">
         <EmptyState
           title="Artifact 不存在"

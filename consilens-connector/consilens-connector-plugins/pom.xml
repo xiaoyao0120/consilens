@@ -32,6 +32,8 @@
         <module>consilens-connector-clickhouse</module>
         <module>consilens-connector-tidb</module>
         <module>consilens-connector-oceanbase</module>
+        <module>consilens-connector-file</module>
+        <module>consilens-connector-iceberg</module>
         <module>consilens-connector-all</module>
     </modules>
 

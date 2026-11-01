@@ -150,6 +150,53 @@ class ChecksumDifferTest {
                 return future;
         }
 
+        @Test
+        @DisplayName("可空键兜底必须去掉区间边界：否则 NULL 行仍然取不出来")
+        void nullableKeyFallbackStripsBounds() throws Exception {
+                java.lang.reflect.Method method = ChecksumDiffer.class.getDeclaredMethod(
+                                "unbounded", TableSegment.class);
+                method.setAccessible(true);
+                TableSegment bounded = TableSegment.builder()
+                                .tablePath(TablePath.of("t1"))
+                                .keyColumns(List.of("id"))
+                                .extraColumns(List.of("v"))
+                                .minKey(Optional.of(List.of(1)))
+                                .maxKey(Optional.of(List.of(9)))
+                                .build();
+
+                TableSegment unbounded = (TableSegment) method.invoke(null, bounded);
+
+                // 带边界的段会生成 "id >= 1"，NULL 与任何值比较都是 UNKNOWN，行就取不出来
+                assertFalse(unbounded.isBounded(), "整表归一化键比较不能带区间谓词");
+                assertEquals(bounded.getKeyColumns(), unbounded.getKeyColumns());
+                assertEquals(bounded.getExtraColumns(), unbounded.getExtraColumns());
+        }
+
+        @Test
+        @DisplayName("预算拒绝原样上抛，不被包成 IOException 式的执行失败")
+        void budgetExceededSurfacesUnwrapped() throws Exception {
+                TableDiffer.DifferConfig budgetConfig = new TableDiffer.DifferConfig(
+                                4, 1000, ChecksumAlgorithm.CONCAT, LocalCompareMode.FULL,
+                                ConcurrencyConfig.defaultConfig(), 1_000_000L, false, 4, false,
+                                Long.MAX_VALUE, 1L, Long.MAX_VALUE);
+                ChecksumDiffer budgetDiffer = new ChecksumDiffer(budgetConfig);
+                try {
+                        // 两侧校验和不同 -> 必须走本地比较 -> 第一次累计行数就超预算
+                        stubAdapterSegmentData(mockAdapter1, 1000L, "left");
+                        stubAdapterSegmentData(mockAdapter2, 1000L, "right");
+
+                        CompletableFuture<DiffResult> future = budgetDiffer.diffTables(segment1, segment2);
+
+                        Throwable failure = assertThrows(java.util.concurrent.ExecutionException.class,
+                                        future::get).getCause();
+                        Throwable root = getRootCause(failure);
+                        assertTrue(root instanceof com.consilens.core.exception.BudgetExceededException,
+                                        "expected BudgetExceededException but was " + root);
+                } finally {
+                        budgetDiffer.close();
+                }
+        }
+
         @Nested
         @DisplayName("配置验证测试")
         class ConfigurationValidationTests {

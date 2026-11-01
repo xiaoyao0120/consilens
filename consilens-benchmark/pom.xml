@@ -21,6 +21,18 @@
             <artifactId>consilens-core</artifactId>
         </dependency>
 
+        <!-- 本地文件基准：CSV/Parquet 端到端比对 -->
+        <dependency>
+            <groupId>com.consilens</groupId>
+            <artifactId>consilens-connector-file</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.duckdb</groupId>
+            <artifactId>duckdb_jdbc</artifactId>
+            <version>${duckdb.version}</version>
+        </dependency>
+
         <!-- JMH 微基准框架 -->
         <dependency>
             <groupId>org.openjdk.jmh</groupId>
@@ -110,6 +122,9 @@
     <profiles>
         <profile>
             <id>benchmark</id>
+            <properties>
+                <exec.mainClass>com.consilens.benchmark.runner.Main</exec.mainClass>
+            </properties>
             <build>
                 <plugins>
                     <plugin>
@@ -117,7 +132,7 @@
                         <artifactId>exec-maven-plugin</artifactId>
                         <version>3.1.0</version>
                         <configuration>
-                            <mainClass>com.consilens.benchmark.runner.Main</mainClass>
+                            <mainClass>${exec.mainClass}</mainClass>
                         </configuration>
                     </plugin>
                 </plugins>

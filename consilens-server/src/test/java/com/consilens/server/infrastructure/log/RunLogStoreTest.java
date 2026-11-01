@@ -43,7 +43,10 @@ class RunLogStoreTest {
         RunLogStore.LogPage page = store.readTail("inst_1", 10);
 
         assertTrue(page.isAvailable());
-        assertEquals(2L, page.getNextOffset());
+        // nextOffset 现在是文件长度（字节），不再是行号：从这个偏移继续读应当是空的
+        RunLogStore.LogPage after = store.read("inst_1", page.getNextOffset(), 10);
+        assertEquals("", after.getContent());
+        assertFalse(after.isHasMore());
         assertTrue(page.getContent().contains("hello"));
         assertTrue(page.getContent().contains("WARN"));
     }
@@ -55,15 +58,17 @@ class RunLogStoreTest {
         store.endRun("inst_2");
 
         RunLogStore.LogPage first = store.read("inst_2", 0, 2);
-        assertEquals(2L, first.getNextOffset());
+        assertTrue(first.getNextOffset() > 2L, "偏移是字节，不是行号");
         assertTrue(first.isHasMore());
         assertTrue(first.getContent().contains("line-0"));
+        assertTrue(first.getContent().contains("line-1"));
         assertFalse(first.getContent().contains("line-2"));
 
         RunLogStore.LogPage rest = store.read("inst_2", first.getNextOffset(), 10);
-        assertEquals(5L, rest.getNextOffset());
         assertFalse(rest.isHasMore());
+        assertTrue(rest.getContent().contains("line-2"));
         assertTrue(rest.getContent().contains("line-4"));
+        assertFalse(rest.getContent().contains("line-0"));
     }
 
     @Test
@@ -105,5 +110,33 @@ class RunLogStoreTest {
                 .setTimeMillis(System.currentTimeMillis())
                 .setThreadName(Thread.currentThread().getName())
                 .build();
+    }
+
+    @Test
+    void incrementalReadsStayCheapOnLongLogs() {
+        store.beginRun("inst_long");
+        IntStream.range(0, 3000).forEach(i -> store.append(event(Level.INFO, "line-" + i)));
+        store.endRun("inst_long");
+
+        // 逐页推进：每一页都只读新增部分（字节偏移），不需要把前面几千行重新解码
+        long offset = 0L;
+        int pages = 0;
+        int lines = 0;
+        while (pages < 10) {
+            RunLogStore.LogPage page = store.read("inst_long", offset, 500);
+            lines += page.getContent().isEmpty() ? 0 : page.getContent().split("\n").length;
+            offset = page.getNextOffset();
+            pages++;
+            if (!page.isHasMore()) {
+                break;
+            }
+        }
+        assertEquals(3000, lines);
+        assertFalse(store.read("inst_long", offset, 10).isHasMore());
+
+        // 取末尾几行不应该受文件总长度影响（内部只回看固定窗口）
+        RunLogStore.LogPage tail = store.readTail("inst_long", 3);
+        assertTrue(tail.getContent().contains("line-2999"));
+        assertFalse(tail.getContent().contains("line-0\n"));
     }
 }

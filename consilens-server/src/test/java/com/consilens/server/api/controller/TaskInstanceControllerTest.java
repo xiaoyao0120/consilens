@@ -133,9 +133,11 @@ class TaskInstanceControllerTest {
 
     @Test
     void shouldDownloadRunLog() throws Exception {
+        java.nio.file.Path logFile = java.nio.file.Files.createTempFile("inst_1", ".log");
+        java.nio.file.Files.write(logFile, "run log".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         RunLogService.LogFile file = mock(RunLogService.LogFile.class);
         when(file.getFileName()).thenReturn("inst_1.log");
-        when(file.getContent()).thenReturn("run log".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        when(file.getPath()).thenReturn(logFile);
         when(runLogService.download("inst_1")).thenReturn(file);
 
         mockMvc.perform(get("/v1/task-instances/inst_1/logs/download"))

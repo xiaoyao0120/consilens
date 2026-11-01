@@ -21,6 +21,8 @@ import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
 import com.consilens.core.lifecycle.DiffLifecycle;
 import com.consilens.core.lifecycle.NoopDiffLifecycle;
+import com.consilens.sdk.ConsilensEngine;
+import com.consilens.sdk.DefaultConsilensEngine;
 import com.consilens.sink.api.DefaultDiffLifecycle;
 import com.consilens.sink.api.model.ResultConfig;
 
@@ -39,6 +41,19 @@ import java.util.Map;
 public class DiffService {
 
     private final CompareRequestFactory compareRequestFactory = new CompareRequestFactory();
+    private final CompareRuntime runtimeOverride;
+
+    public DiffService() {
+        this(null);
+    }
+
+    /**
+     * @param runtimeOverride optional engine override (for example DuckDB);
+     *                        null uses {@link DefaultCompareRuntime}
+     */
+    public DiffService(CompareRuntime runtimeOverride) {
+        this.runtimeOverride = runtimeOverride;
+    }
 
     /**
      * Perform data diff operation based on configuration using core algorithms.
@@ -47,6 +62,13 @@ public class DiffService {
      * @return diff result
      */
     public CliDiffResult performDiff(CliConfiguration config) throws Exception {
+        return performDiff(config, null);
+    }
+
+    /**
+     * @param window optional incremental window compiled into the request filters
+     */
+    public CliDiffResult performDiff(CliConfiguration config, WindowSpec window) throws Exception {
         log.info("Starting diff operation with configured strategy: {}, algorithm: {}",
                 config.getStrategyMode(), config.getAlgorithm());
 
@@ -59,8 +81,10 @@ public class DiffService {
 
         try {
             lifecycle.onDiffStart(diffContext);
-            CompareRuntime runtime = createCompareRuntime();
-            DiffResult coreResult = runtime.execute(toCompareRequest(config));
+            DiffResult coreResult;
+            try (ConsilensEngine engine = createEngine()) {
+                coreResult = engine.execute(toCompareRequest(config, window));
+            }
             if (coreResult == null) {
                 throw new IllegalStateException("compare runtime returned no result");
             }
@@ -112,7 +136,15 @@ public class DiffService {
     }
 
     protected CompareRuntime createCompareRuntime() {
-        return new DefaultCompareRuntime();
+        return runtimeOverride != null ? runtimeOverride : new DefaultCompareRuntime();
+    }
+
+    /**
+     * CLI uses the same SDK facade as platform integrators; the underlying
+     * runtime remains the existing DefaultCompareRuntime.
+     */
+    protected ConsilensEngine createEngine() {
+        return new DefaultConsilensEngine(createCompareRuntime());
     }
 
     protected DiffLifecycle buildLifecycle(CliConfiguration config) {
@@ -239,8 +271,8 @@ public class DiffService {
         return new ArrayList<>(coreDiffRows);
     }
 
-    private CompareRequest toCompareRequest(CliConfiguration config) {
-        return compareRequestFactory.create(config);
+    private CompareRequest toCompareRequest(CliConfiguration config, WindowSpec window) {
+        return compareRequestFactory.create(config, window);
     }
 
     private boolean isTableResource(ConnectionConfig connectionConfig) {

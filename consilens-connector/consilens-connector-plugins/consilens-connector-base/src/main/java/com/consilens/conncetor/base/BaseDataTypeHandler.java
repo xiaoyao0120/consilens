@@ -65,6 +65,20 @@ public class BaseDataTypeHandler implements DataTypeHandler {
      * @param defaultPrecision fallback precision when no config is present
      * @return configured precision, or defaultPrecision if not set
      */
+    /**
+     * Oracle / PostgreSQL {@code TO_CHAR} 的数值格式掩码：{@code FM999…990.0000}。
+     *
+     * <p>整数位必须覆盖到 38 位（Oracle {@code NUMBER} 的最大精度，也是 PostgreSQL
+     * {@code numeric} 的常见上限）。原来只给 15 位，超过 10^15 的值会被两个库都渲染成一串
+     * {@code #}——**不同的值渲染成同一个字符串**，差异因此被漏掉（比误报严重）。
+     */
+    protected static String decimalFormatMask(int precision) {
+        return "FM" + "9".repeat(DECIMAL_INTEGER_DIGITS - 1) + "0." + "0".repeat(Math.max(0, precision));
+    }
+
+    /** 整数位（含强制显示的 0）。 */
+    protected static final int DECIMAL_INTEGER_DIGITS = 38;
+
     protected int getPrecision(String dataTypeName, int defaultPrecision) {
         Integer precision = getRuleValue(dataTypeName, "getPrecision", Integer.class);
         return precision != null ? precision : defaultPrecision;

@@ -128,6 +128,8 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         Map<String, KubernetesSecretKeyRef> secretEnv = secretEnvsOf(params.get("secretEnv"));
         requirePasswordSecret(descriptor, secretEnv, "SOURCE_PASSWORD");
         requirePasswordSecret(descriptor, secretEnv, "TARGET_PASSWORD");
+        // 表 sink 的连接密码同样不能写进描述符（ConfigMap 明文可读）
+        requirePasswordSecret(descriptor, secretEnv, "SINK_PASSWORD");
         String descriptorReference = "configmap:" + descriptorConfigMapName(jobName);
         return ClusterSubmitRequest.builder()
                 .submissionId(submissionId)
@@ -338,10 +340,11 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
         String namespace = spec.getNamespace() != null && !spec.getNamespace().isBlank()
                 ? spec.getNamespace()
                 : KubernetesSubmissionSpec.DEFAULT_NAMESPACE;
-        // 只清扫本系统命名规则生成的应用。jobName 可由定义 properties 自定义，
-        // 无条件删除会允许调用方删掉同 namespace 内的任意 Job。
-        if (!spec.getJobName().startsWith(DEFAULT_JOB_NAME_PREFIX)) {
-            log.warn("skip stale sweep for non-consilens job name: {}", spec.getJobName());
+        // jobName 可由定义 properties 自定义，无条件删除会允许调用方删掉同 namespace 内的任意 Job。
+        // 但自定义名也必须能清扫：否则同名 Job 第二次提交必然 AlreadyExists 失败。
+        // 因此按"前缀命中"或"Job 带本系统 application label"判定归属。
+        if (!ownedByUs(namespace, spec)) {
+            log.warn("skip stale sweep for job not created by consilens: {}", spec.getJobName());
             return;
         }
         // best-effort：删除即返回，不阻塞新提交（等待删除不计入运行超时窗口；
@@ -352,6 +355,16 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
             descriptorConfigMaps.values().removeIf(configMapName::equals);
             deleteDescriptorConfigMap(namespace, configMapName);
         }
+    }
+
+    private boolean ownedByUs(String namespace, KubernetesSubmissionSpec spec) {
+        if (spec.getJobName().startsWith(DEFAULT_JOB_NAME_PREFIX)) {
+            return true;
+        }
+        String expectedLabel = applicationLabel(spec);
+        return gateway().jobLabels(namespace, spec.getJobName())
+                .map(labels -> expectedLabel.equals(labels.get("app.kubernetes.io/name")))
+                .orElse(false);
     }
 
     @Override
@@ -450,7 +463,8 @@ public class KubernetesClusterSubmitter implements ClusterSubmitter, AutoCloseab
 
     private List<String> commandArguments(ClusterSubmitRequest request, KubernetesSubmissionSpec spec) {
         return List.of(
-                "-Xmx" + spec.getMemoryMiB() + "m",
+                // 堆只占容器内存的 70%：剩下留给 metaspace/线程栈/直接缓冲区，否则容易 OOMKilled
+                "-Xmx" + ClusterSubmissionParameters.coordinatorHeapMb(spec.getMemoryMiB()) + "m",
                 "-cp",
                 runtimeClasspath(spec),
                 spec.getCoordinatorMainClass(),

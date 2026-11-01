@@ -38,15 +38,23 @@ function ensureValidTab(tab) {
 
 const activeTab = ref(ensureValidTab(route.query.tab));
 
+// 轮询与用户操作（取消/重试）会并发发请求：只认最后一次发起的响应，
+// 否则取消后返回的旧快照会把"已取消"覆盖回"运行中"。
+let taskRequestSeq = 0;
+
 async function loadTask(showLoading = false) {
   if (showLoading) loading.value = true;
+  const seq = ++taskRequestSeq;
   try {
-    task.value = await getTaskInstance(taskId);
+    const snapshot = await getTaskInstance(taskId);
+    if (seq !== taskRequestSeq) return;
+    task.value = snapshot;
     loadError.value = false;
     const status = task.value?.status;
     if (FINAL_STATUSES.includes(status)) stopPolling();
     loadClusterInfo();
   } catch (error) {
+    if (seq !== taskRequestSeq) return;
     // 只有 404 才是"任务不存在"；其它错误保持轮询，避免一次抖动后页面永久冻结
     if (error?.status === 404 || error?.response?.status === 404) {
       stopPolling();
@@ -56,7 +64,7 @@ async function loadTask(showLoading = false) {
       loadError.value = true;
     }
   } finally {
-    loading.value = false;
+    if (seq === taskRequestSeq) loading.value = false;
   }
 }
 
@@ -108,6 +116,8 @@ async function handleRetry() {
   await loadTask();
   // 重试后任务重新进入运行态：恢复轮询，否则页面会一直停在旧终态
   startPolling();
+  // 日志定时器在终态时被停掉了；这里不恢复的话，自动刷新开关显示"开"但内容不再更新
+  if (activeTab.value === "logs" && logState.autoRefresh) startLogPolling();
 }
 
 async function handleCancel() {
@@ -159,15 +169,21 @@ const diffReport = ref(null);
 const diffReportLoading = ref(false);
 let diffReportLoaded = false;
 
+const diffReportError = ref(false);
+
 async function loadDiffReport() {
   if (diffReportLoaded || status.value !== "SUCCEEDED") return;
   diffReportLoading.value = true;
   try {
     diffReport.value = await getDiffReport(taskId, { silent: true });
     diffReportLoaded = true;
+    diffReportError.value = false;
   } catch {
+    // 静默失败但不装成"没有差异"：报告拉取失败和"确实没有差异"是两件事，
+    // 前者会让用户以为比对通过
     diffReport.value = null;
     diffReportLoaded = false;
+    diffReportError.value = true;
   } finally {
     diffReportLoading.value = false;
   }
@@ -180,7 +196,12 @@ watch(
     // 任务结束后补拉一次日志，确保最后几行（结束标记）不丢；同时停掉日志轮询
     if (FINAL_STATUSES.includes(s)) {
       stopLogPolling();
-      if (activeTab.value === "logs") loadLogs(false);
+      // 末次轮询可能还在飞：直接 return 会把"结束标记"那几行永久丢掉。
+      // 在途时登记一次补拉，等当前请求结束后再取一次增量。
+      if (activeTab.value === "logs") {
+        if (logState.loading) pendingLogTail = true;
+        else loadLogs(false);
+      }
     }
   }
 );
@@ -365,6 +386,8 @@ const logViewer = ref(null);
 let logTimer = null;
 // 轮询请求在途时用户点“刷新”：不能直接丢弃，等当前请求结束后补一次完整重载
 let pendingLogReset = false;
+// 任务进入终态时若日志请求仍在途，登记一次补拉（见 status watcher）
+let pendingLogTail = false;
 
 async function loadLogs(reset = false) {
   if (logState.loading) {
@@ -378,21 +401,29 @@ async function loadLogs(reset = false) {
     const page = initial
       ? await getTaskLogs(taskId, { tailLines: LOG_TAIL_LINES })
       : await getTaskLogs(taskId, { offset: logState.offset, limit: LOG_PAGE_LINES });
+    const fileSize = page?.fileSize ?? 0;
+    // 日志文件被重建/截断：offset 已越过文件尾，继续按 offset 增量取会永远返回空，
+    // 页面会一直显示旧内容。此处按"文件变小"判一次重建，回到末尾重新读。
+    const rebuilt = !initial && fileSize > 0 && fileSize < logState.offset;
     logState.available = page?.available === true;
-    logState.fileSize = page?.fileSize ?? 0;
+    logState.fileSize = fileSize;
     logState.lastModified = page?.lastModified ?? null;
-    if (page?.content) {
-      logState.content = initial ? page.content : logState.content + page.content;
+    if (initial || rebuilt) {
+      // reset/重建时无论有没有内容都要覆盖：否则"暂无日志文件"会和旧日志同屏出现
+      logState.content = page?.content ?? "";
+    } else if (page?.content) {
+      logState.content += page.content;
     }
     logState.offset = page?.nextOffset ?? logState.offset;
     logState.loaded = true;
     logState.error = "";
     if (logState.content.length > LOG_MAX_CHARS) {
-      logState.content = logState.content.slice(-LOG_MAX_CHARS);
+      logState.content = trimLogContent(logState.content);
     }
     await nextTick();
     // 用户向上翻看历史日志时不要被轮询强行拉回底部
     if (stickToBottom) scrollLogToBottom();
+    else if (rebuilt) scrollLogToBottom();
   } catch {
     // 读取失败不能永远停在"加载中"：给出可重试的提示（自动刷新仍可恢复）
     logState.loaded = true;
@@ -402,8 +433,29 @@ async function loadLogs(reset = false) {
     if (pendingLogReset) {
       pendingLogReset = false;
       loadLogs(true);
+    } else if (pendingLogTail) {
+      pendingLogTail = false;
+      loadLogs(false);
     }
   }
+}
+
+/**
+ * 截断超长日志时只保留**完整行**：直接从中间切会留下半行，也会把代理对（emoji）切一半，
+ * 渲染出替换字符。
+ */
+function trimLogContent(content) {
+  let start = content.length - LOG_MAX_CHARS;
+  // 先退到下一个换行之后，保证不切行中间
+  const nextNewline = content.indexOf("\n", start);
+  if (nextNewline > 0 && nextNewline < content.length - 1) {
+    start = nextNewline + 1;
+  }
+  // 再避免切在代理对中间
+  if (start > 0 && start < content.length && /[\uDC00-\uDFFF]/.test(content[start])) {
+    start += 1;
+  }
+  return content.slice(start);
 }
 
 function isLogNearBottom() {
@@ -677,6 +729,15 @@ onBeforeUnmount(() => {
                 title="任务尚未完成"
                 description="任务执行完成后即可查看差异报告"
               />
+              <EmptyState
+                v-else-if="diffReportError"
+                title="差异报告加载失败"
+                description="报告拉取失败（不是“没有差异”），可重试"
+              >
+                <n-button size="small" :loading="diffReportLoading" @click="loadDiffReport">
+                  重试
+                </n-button>
+              </EmptyState>
               <EmptyState v-else title="暂无差异数据" description="该任务没有可用的差异报告" />
             </n-spin>
           </n-tab-pane>

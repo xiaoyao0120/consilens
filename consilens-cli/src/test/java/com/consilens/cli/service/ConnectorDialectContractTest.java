@@ -38,8 +38,12 @@ class ConnectorDialectContractTest {
         Map<String, DatabaseDialectProvider> dialectProviders = loadProviders(
                 DatabaseDialectProvider.class, DatabaseDialectProvider::getConnectorType);
 
-        assertEquals(expectedTypes, connectorProviders.keySet(),
-                "same-db 示例与 ConnectorProvider 清单不一致");
+        // 只校验 JDBC 方言连接器与 same-db 示例一一对应；file 等非 JDBC 源没有方言
+        Set<String> jdbcProviderTypes = connectorProviders.keySet().stream()
+                .filter(dialectProviders::containsKey)
+                .collect(Collectors.toSet());
+        assertEquals(expectedTypes, jdbcProviderTypes,
+                "same-db 示例与 JDBC ConnectorProvider 清单不一致");
         assertEquals(expectedTypes, dialectProviders.keySet(),
                 "same-db 示例与 DatabaseDialectProvider 清单不一致");
 

@@ -1,6 +1,7 @@
 package com.consilens.server.application.diff;
 
 import com.consilens.server.api.dto.DiffReportDto;
+import com.consilens.core.diff.SchemaCompatibility;
 import com.consilens.server.application.artifact.ArtifactQueryService;
 import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.domain.enums.TaskStatus;
@@ -77,6 +78,8 @@ public class DiffReportServiceImpl implements DiffReportService {
             return emptyReport(taskId);
         }
         JsonNode differences = differencesNode(runResult);
+        JsonNode columnStats = columnStatsNode(runResult);
+        SchemaCompatibility schemaCompatibility = schemaCompatibilityNode(runResult);
 
         long totalDifferenceCount;
         Double differencePercentage;
@@ -116,7 +119,11 @@ public class DiffReportServiceImpl implements DiffReportService {
                 .status(DiffReportSupport.statusOf(matchScore, totalDifferenceCount))
                 .matchScore(matchScore)
                 .statistics(toMap(statistics))
-                .columns(buildColumns(differences))
+                .columns(hasExactColumnStats(columnStats)
+                        ? buildExactColumns(columnStats)
+                        : buildColumns(differences))
+                .schemaCompatibility(schemaCompatibility)
+                .resultSchemaVersion(resultSchemaVersion(runResult))
                 .samples(buildSamples(differences))
                 .sampleSize((int) Math.min(SAMPLE_LIMIT, totalDifferenceCount))
                 .totalDifferenceCount(totalDifferenceCount)
@@ -139,6 +146,25 @@ public class DiffReportServiceImpl implements DiffReportService {
                 .sampleTruncated(false)
                 .timeline(List.of())
                 .build();
+    }
+
+    /**
+     * Read the additive result schema version from artifact metadata. Old
+     * artifacts have no version and return null; readers must treat that as the
+     * pre-version schema rather than failing.
+     */
+    private Integer resultSchemaVersion(ArtifactRecord record) {
+        if (record == null || record.getMetadataJson() == null
+                || record.getMetadataJson().isBlank()) {
+            return null;
+        }
+        try {
+            JsonNode version = objectMapper.readTree(record.getMetadataJson())
+                    .path("resultSchemaVersion");
+            return version.isInt() ? version.asInt() : null;
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     /**
@@ -193,8 +219,69 @@ public class DiffReportServiceImpl implements DiffReportService {
                 .orElse(null);
     }
 
-    private List<DiffReportDto.ColumnStat> buildColumns(JsonNode differences) {
-        if (differences == null || !differences.isArray()) {
+    private boolean hasExactColumnStats(JsonNode columnStats) {
+        return columnStats != null && columnStats.isArray() && columnStats.size() > 0;
+    }
+
+    /**
+     * Exact column stats are written into the RUN_RESULT content by RunTaskHandler.
+     * They are optional so old artifacts keep falling back to sample aggregation.
+     */
+    private JsonNode columnStatsNode(ArtifactRecord record) {
+        JsonNode root = contentRootNode(record);
+        return root == null ? null : root.get("columnStats");
+    }
+
+    /**
+     * Schema compatibility is an optional additive field written by the local run
+     * path. Old artifacts and cluster runs fall back to null.
+     */
+    private SchemaCompatibility schemaCompatibilityNode(ArtifactRecord record) {
+        JsonNode root = contentRootNode(record);
+        JsonNode node = root == null ? null : root.get("schemaCompatibility");
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        try {
+            return objectMapper.treeToValue(node, SchemaCompatibility.class);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private List<DiffReportDto.ColumnStat> buildExactColumns(JsonNode columnStats) {
+        List<DiffReportDto.ColumnStat> result = new ArrayList<>(columnStats.size());
+        for (JsonNode node : columnStats) {
+            if (node == null || !node.isObject()) {
+                continue;
+            }
+            String name = textOrNull(node, "name");
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            result.add(DiffReportDto.ColumnStat.builder()
+                    .name(name)
+                    .sourceName(textOrNull(node, "sourceName"))
+                    .targetName(textOrNull(node, "targetName"))
+                    .insertCount(node.path("insertCount").asLong(0L))
+                    .updateCount(node.path("updateCount").asLong(0L))
+                    .deleteCount(node.path("deleteCount").asLong(0L))
+                    .differenceCount(node.path("differenceCount").asLong(0L))
+                    .differencePercentage(doubleValue(node, "differencePercentage"))
+                    .differenceRate(doubleValue(node, "differenceRate"))
+                    .aggregatedFromSamples(node.path("aggregatedFromSamples").asBoolean(false))
+                    .truncated(node.path("truncated").asBoolean(false))
+                    .build());
+        }
+        return result;
+    }
+
+    private String textOrNull(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        return value == null || value.isNull() ? null : value.asText();
+    }
+
+    private List<DiffReportDto.ColumnStat> buildColumns(JsonNode differences) {        if (differences == null || !differences.isArray()) {
             return List.of();
         }
         Map<String, Long> counts = new LinkedHashMap<>();

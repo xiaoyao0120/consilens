@@ -61,6 +61,9 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
 
     private final SegmentPermitController activeSegmentBudget;
 
+    /** 预算守卫：maxDuration/maxRows/maxBytes 在取数点累计，超限抛 BudgetExceededException。 */
+    private final BudgetGuard budgetGuard;
+
     /**
      * 按主键回查差异行时每批绑定的主键个数。单条 SQL 的 IN 列表过长会触及部分数据库的
      * 表达式/参数上限（Oracle 1000 个表达式）并放大解析开销；500 留出一半余量，
@@ -122,6 +125,8 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
         this.checksumCache = new ChecksumCache();
         this.performanceMonitor = new PerformanceMonitor();
         this.progressReporter = new ProgressReporter();
+        this.budgetGuard = new BudgetGuard(config.getMaxDurationMs(), config.getMaxRowsScanned(),
+                config.getMaxBytesFetched());
         int segmentBudget = resolveSegmentBudget(config);
         this.activeSegmentBudget = new SegmentPermitController(segmentBudget);
         
@@ -195,9 +200,39 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                     performanceMonitor.endDiff("root");
                     progressReporter.shutdown();
                     infoTreeRecorder.endNode("checksum-diff");
+                    // 预算拒绝不是执行失败：必须原样上抛，否则上层会按"可重试的 RUN_EXECUTION_ERROR"
+                    // 处理，把"结果不完整"当成可以重跑就能好的问题
+                    com.consilens.core.exception.BudgetExceededException budget = unwrapBudget(e);
+                    if (budget != null) {
+                        throw budget;
+                    }
                     log.error("ChecksumDiff failed", e);
                     throw new RuntimeException("ChecksumDiff failed", e);
                 });
+    }
+
+    /** 沿 cause 链找预算拒绝，找不到返回 null。 */
+    private static com.consilens.core.exception.BudgetExceededException unwrapBudget(Throwable error) {
+        for (Throwable current = error; current != null; current = current.getCause()) {
+            if (current instanceof com.consilens.core.exception.BudgetExceededException) {
+                return (com.consilens.core.exception.BudgetExceededException) current;
+            }
+            if (current.getCause() == current) {
+                break;
+            }
+        }
+        return null;
+    }
+
+    /** 去掉区间边界的段：整表按归一化键比较时不能带 {@code key >= min} 之类的谓词。 */
+    private static TableSegment unbounded(TableSegment segment) {
+        if (segment == null) {
+            return null;
+        }
+        return segment.toBuilder()
+                .minKey(java.util.Optional.empty())
+                .maxKey(java.util.Optional.empty())
+                .build();
     }
 
     @Override
@@ -376,15 +411,31 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             return performLocalComparison(table1, table2, infoTreeRecorder, parentSegmentId, true);
         }
 
+        // allowNullableKeys 打开时键列可能混有 NULL：MIN()/MAX() 跳过 NULL，区间谓词对 NULL
+        // 恒为 UNKNOWN，这些行不属于任何分段，会被静默漏报（统计行数却包含它们）。
+        // 这种形态在根段直接做整表归一化键比较，NULL 键按归一化语义正常参与比较。
+        if (level == 0 && config.isAllowNullableKeys()
+                && (TableDiffer.mayContainNullKeys(table1) || TableDiffer.mayContainNullKeys(table2))) {
+            log.warn("Nullable key column(s) with allowNullableKeys=true on {} / {}; comparing whole tables "
+                            + "by normalized keys because range predicates cannot cover NULL keys",
+                    table1.getDisplayName(), table2.getDisplayName());
+            // 必须去掉边界：根段是 createBoundedSegment 的产物，带边界时 where 子句里仍有
+            // "key >= min"，NULL 行照样取不出来，等于这条兜底没生效
+            return performLocalComparison(unbounded(table1), unbounded(table2),
+                    infoTreeRecorder, parentSegmentId, false);
+        }
+
+        // 键列排序语义不一致（如一侧 INT、另一侧 VARCHAR）时，任何区间谓词在两侧的含义都不同：
+        // 分段边界不能跨侧复用，"> 对端 maxKey" 式尾扫也会把大量行误判为单侧缺失。此类形态直接
+        // 整表按归一化键做哈希比较。判断必须放在"是否已有边界"之前——两侧都已 bounded 时
+        // （根段由 createBoundedSegment 建好后即带边界，是漂移场景的常见入口）原来会跳过它。
+        if (!keyOrderingCompatible(table1, table2)) {
+            log.warn("Key ordering differs between {} and {}; comparing whole tables by normalized keys "
+                    + "instead of range predicates", table1.getDisplayName(), table2.getDisplayName());
+            return performLocalComparison(table1, table2, infoTreeRecorder, parentSegmentId, false);
+        }
+
         if (!table1.isBounded() || !table2.isBounded()) {
-            if (!keyOrderingCompatible(table1, table2)) {
-                // 两侧键列排序语义不同（如一侧 INT、另一侧 VARCHAR）时，任何区间谓词在两侧的
-                // 含义都不一致：分段边界不能跨侧复用，"> 对端 maxKey" 式尾扫也会把大量行误判
-                // 为单侧缺失。此类形态直接整表按归一化键做哈希比较。
-                log.warn("Key ordering differs between {} and {}; comparing whole tables by normalized keys "
-                        + "instead of range predicates", table1.getDisplayName(), table2.getDisplayName());
-                return performLocalComparison(table1, table2, infoTreeRecorder, parentSegmentId, false);
-            }
             log.debug("Creating initial bounds for unbounded segments at level {}", level);
             return createInitialBoundsAndBisection(table1, table2, infoTreeRecorder, level, bisectionFactor, parentSegmentId);
         }
@@ -706,7 +757,9 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             RowHashSide index1 = new RowHashSide();
             boolean[] duplicates = new boolean[1];
             table1.getDatabase().forEachSegmentRowHash(table1, (rawKey, hash) -> {
-                infoTreeRecorder.addBytesFetched(segmentId, estimateKeyHashBytes(rawKey, hash));
+                long keyBytes = estimateKeyHashBytes(rawKey, hash);
+                infoTreeRecorder.addBytesFetched(segmentId, keyBytes);
+                budgetGuard.addBytesFetched(keyBytes);
                 List<Object> normalizedKey = normalizeKeyValues(rawKey, table1.getKeyColumns(), columnTypes1);
                 if (index1.put(normalizedKey, rawKey, hash)) {
                     duplicates[0] = true;
@@ -724,7 +777,9 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             long[] table2RowCount = new long[1];
             Set<List<Object>> seenInTable2 = new HashSet<>();
             table2.getDatabase().forEachSegmentRowHash(table2, (rawKey2, hash2) -> {
-                infoTreeRecorder.addBytesFetched(segmentId, estimateKeyHashBytes(rawKey2, hash2));
+                long keyBytes2 = estimateKeyHashBytes(rawKey2, hash2);
+                infoTreeRecorder.addBytesFetched(segmentId, keyBytes2);
+                budgetGuard.addBytesFetched(keyBytes2);
                 table2RowCount[0]++;
                 List<Object> normalizedKey = normalizeKeyValues(rawKey2, table2.getKeyColumns(), columnTypes2);
                 if (!seenInTable2.add(normalizedKey)) {
@@ -904,6 +959,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                 storeDifferences(infoTreeRecorder, differences, segmentId);
                 infoTreeRecorder.addRowsFetched(segmentId,
                         snapshot.table1RowCount + snapshot.table2RowCount);
+                budgetGuard.addRowsScanned(snapshot.table1RowCount + snapshot.table2RowCount);
 
                 progressReporter.segmentCompleted(segmentId,
                         snapshot.table1RowCount + snapshot.table2RowCount,
@@ -932,17 +988,19 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
 
     /**
      * 对候选键的两侧行做精确比较（与全量比较同一套归一化/多重集语义）。
+     * 归一化 spec 透传给 LocalDiffEngine，用于解析列级/类型级数值容差。
      */
-    private static List<DiffRow> compareKeyRows(List<Object[]> rows1, List<Object[]> rows2,
+    private List<DiffRow> compareKeyRows(List<Object[]> rows1, List<Object[]> rows2,
             TableSegment table1, TableSegment table2,
             Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2,
             DataTypeHandler handler1, DataTypeHandler handler2) {
-        return LocalDiffEngine.findDifferences(
+        return LocalDiffEngine.findDifferencesWithTolerance(
                 rows1, rows2,
                 table1.getKeyColumns(), table1.getExtraColumns(),
                 table2.getKeyColumns(), table2.getExtraColumns(),
                 columnTypes1, columnTypes2,
-                handler1, handler2);
+                handler1, handler2,
+                config.getNormalizationSpec());
     }
 
     private CompletableFuture<Void> performFullDataComparison(
@@ -953,7 +1011,9 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             List<Object[]> rows1 = table1.getValues();
             List<Object[]> rows2 = table2.getValues();
             infoTreeRecorder.addQueryCount(segmentId, 2);
-            infoTreeRecorder.addBytesFetched(segmentId, estimateRowsBytes(rows1) + estimateRowsBytes(rows2));
+            long fullBytes = estimateRowsBytes(rows1) + estimateRowsBytes(rows2);
+            infoTreeRecorder.addBytesFetched(segmentId, fullBytes);
+            budgetGuard.addBytesFetched(fullBytes);
             return new FullDataSnapshot(rows1, rows2);
         }, executorProvider.getIoExecutor())
                 .thenAcceptAsync(snapshot -> {
@@ -961,7 +1021,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                         Map<String, DataType> columnTypes1 = extractColumnTypes(table1);
                         Map<String, DataType> columnTypes2 = extractColumnTypes(table2);
 
-                        List<DiffRow> differences = LocalDiffEngine.findDifferences(
+                        List<DiffRow> differences = LocalDiffEngine.findDifferencesWithTolerance(
                                 snapshot.rows1, snapshot.rows2,
                                 table1.getKeyColumns(),
                                 table1.getExtraColumns(),
@@ -970,13 +1030,15 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                                 columnTypes1,
                                 columnTypes2,
                                 dataTypeHandler(table1),
-                                dataTypeHandler(table2));
+                                dataTypeHandler(table2),
+                                config.getNormalizationSpec());
 
                         performanceMonitor.recordLocalComparison(segmentId,
                                 snapshot.rows1.size(), snapshot.rows2.size(), differences.size());
 
                         storeDifferences(infoTreeRecorder, differences, segmentId);
                         infoTreeRecorder.addRowsFetched(segmentId, snapshot.rows1.size() + snapshot.rows2.size());
+                        budgetGuard.addRowsScanned(snapshot.rows1.size() + snapshot.rows2.size());
 
                         progressReporter.segmentCompleted(segmentId,
                                 snapshot.rows1.size() + snapshot.rows2.size(), differences.size());
@@ -1012,7 +1074,10 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             Set<List<Object>> batch = new HashSet<>(keyList.subList(i, end));
             List<Object[]> rows = segment.getValuesByKeys(batch);
             infoTreeRecorder.addQueryCount(segmentId, 1);
-            infoTreeRecorder.addBytesFetched(segmentId, estimateRowsBytes(rows));
+            long batchBytes = estimateRowsBytes(rows);
+            infoTreeRecorder.addBytesFetched(segmentId, batchBytes);
+            budgetGuard.addBytesFetched(batchBytes);
+            budgetGuard.addRowsScanned(rows.size());
             for (Object[] row : rows) {
                 List<Object> primaryKey = normalizeKeyValues(
                         Arrays.asList(row).subList(0, Math.min(keyColumnCount, row.length)),

@@ -1,5 +1,6 @@
 package com.consilens.server.infrastructure.log;
 
+import com.consilens.common.io.PathSupport;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.logging.log4j.core.LogEvent;
@@ -42,6 +43,13 @@ public class RunLogStore {
     /** MDC key：当前线程正在执行的运行实例。 */
     public static final String MDC_INSTANCE_KEY = "runInstanceId";
 
+    /** 增量读一次最多读这么多字节：够一屏几百行，又不至于把整份日志读进内存。 */
+    private static final int READ_CHUNK_BYTES = 128 * 1024;
+    /** 单行上限（防止没有换行的超大行把轮询卡死）。 */
+    private static final int MAX_LINE_BYTES = 4 * 1024 * 1024;
+    /** 取末尾 N 行时只回看这么多字节。 */
+    private static final int TAIL_WINDOW_BYTES = 256 * 1024;
+
     private static final int MAX_OPEN_WRITERS = 128;
     private static final int MAX_INSTANCE_KEY_LENGTH = 128;
     private static final DateTimeFormatter TIMESTAMP_FORMAT =
@@ -72,7 +80,7 @@ public class RunLogStore {
             return;
         }
         try {
-            Files.createDirectories(directory);
+            PathSupport.ensureDirectory(directory);
         } catch (IOException e) {
             log.warn("Cannot create run log directory {}: {}", directory, e.getMessage());
             return;
@@ -106,38 +114,53 @@ public class RunLogStore {
     }
 
     /**
-     * 从指定行偏移读取日志。{@code hasMore} 为 true 表示文件还有后续行。
+     * 从指定**字节偏移**读取日志。{@code hasMore} 为 true 表示文件还有后续内容。
+     *
+     * <p>偏移是字节而不是行号：轮询接口只把上次的 {@code nextOffset} 原样带回来，
+     * 用行号就得把前 N 行全部解码丢弃（长跑任务的日志轮询会退化成 O(n²) 磁盘与解码开销）。
+     * 只返回到最后一个换行为止的完整行，末尾半行留到下次再读。
      */
     public LogPage read(String instanceKey, long offset, int limit) {
         Path file = fileFor(instanceKey);
         if (!available(file)) {
             return LogPage.unavailable(offset);
         }
-        long from = Math.max(0L, offset);
+        long fileSize = sizeOf(file);
+        long start = Math.min(Math.max(0L, offset), fileSize);
         int max = Math.max(1, limit);
-        List<String> lines;
-        try (Stream<String> stream = Files.lines(file, StandardCharsets.UTF_8)) {
-            lines = stream.skip(from).limit((long) max + 1).collect(Collectors.toList());
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to read run log: " + file, e);
+        byte[] chunk = readChunk(file, start, READ_CHUNK_BYTES);
+        int complete = lastNewline(chunk) + 1;
+        if (complete == 0 && start + chunk.length < fileSize) {
+            // 单行超过一个读块：这一行只能整段读出来，否则永远推进不了
+            chunk = readChunk(file, start, MAX_LINE_BYTES);
+            complete = lastNewline(chunk) + 1;
         }
-        boolean hasMore = lines.size() > max;
-        if (hasMore) {
-            lines = new ArrayList<>(lines.subList(0, max));
+        List<String> lines = splitLines(new String(chunk, 0, complete, StandardCharsets.UTF_8));
+        long consumed = complete;
+        if (lines.size() > max) {
+            List<String> kept = new ArrayList<>(lines.subList(0, max));
+            consumed = 0L;
+            for (String line : kept) {
+                consumed += line.getBytes(StandardCharsets.UTF_8).length + 1L;
+            }
+            lines = kept;
         }
+        long nextOffset = start + consumed;
         return LogPage.builder()
                 .available(true)
                 .content(join(lines))
-                .nextOffset(from + lines.size())
-                .hasMore(hasMore)
-                .fileSize(sizeOf(file))
+                .nextOffset(nextOffset)
+                .hasMore(nextOffset < fileSize)
+                .fileSize(fileSize)
                 .lastModified(lastModifiedOf(file))
                 .build();
     }
 
     /**
-     * 读取文件末尾 {@code tailLines} 行。{@code nextOffset} 是文件总行数，
+     * 读取文件末尾 {@code tailLines} 行。{@code nextOffset} 是文件长度（字节），
      * 便于调用方随后按 offset 增量拉取。
+     *
+     * <p>只从文件尾部固定窗口反向切行，不再为了取末尾几行把整份日志读一遍。
      */
     public LogPage readTail(String instanceKey, int tailLines) {
         Path file = fileFor(instanceKey);
@@ -145,44 +168,83 @@ public class RunLogStore {
             return LogPage.unavailable(0L);
         }
         int tail = Math.max(1, tailLines);
-        Deque<String> ring = new ArrayDeque<>(tail);
-        long total = 0L;
-        try (Stream<String> stream = Files.lines(file, StandardCharsets.UTF_8)) {
-            Iterator<String> iterator = stream.iterator();
-            while (iterator.hasNext()) {
-                String line = iterator.next();
-                total++;
-                if (ring.size() == tail) {
-                    ring.removeFirst();
-                }
-                ring.addLast(line);
-            }
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to read run log: " + file, e);
+        long fileSize = sizeOf(file);
+        long start = Math.max(0L, fileSize - TAIL_WINDOW_BYTES);
+        byte[] chunk = readChunk(file, start, TAIL_WINDOW_BYTES);
+        List<String> lines = splitLines(new String(chunk, StandardCharsets.UTF_8));
+        // 文件中间截断读取时，第一行可能是半行
+        if (start > 0 && !lines.isEmpty()) {
+            lines.remove(0);
+        }
+        if (lines.size() > tail) {
+            lines = new ArrayList<>(lines.subList(lines.size() - tail, lines.size()));
         }
         return LogPage.builder()
                 .available(true)
-                .content(join(new ArrayList<>(ring)))
-                .nextOffset(total)
+                .content(join(lines))
+                .nextOffset(fileSize)
                 .hasMore(false)
-                .fileSize(sizeOf(file))
+                .fileSize(fileSize)
                 .lastModified(lastModifiedOf(file))
                 .build();
     }
 
-    /**
-     * 下载整个日志文件；文件不存在或功能关闭时返回空数组。
-     */
-    public byte[] readAll(String instanceKey) {
-        Path file = fileFor(instanceKey);
-        if (!available(file)) {
-            return new byte[0];
-        }
-        try {
-            return Files.readAllBytes(file);
+    private static byte[] readChunk(Path file, long start, int maxBytes) {
+        try (java.nio.channels.SeekableByteChannel channel =
+                     java.nio.file.Files.newByteChannel(file, StandardOpenOption.READ)) {
+            channel.position(start);
+            java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(maxBytes);
+            while (buffer.hasRemaining()) {
+                if (channel.read(buffer) < 0) {
+                    break;
+                }
+            }
+            int read = buffer.position();
+            byte[] bytes = new byte[read];
+            buffer.flip();
+            buffer.get(bytes);
+            return bytes;
         } catch (IOException e) {
             throw new UncheckedIOException("Failed to read run log: " + file, e);
         }
+    }
+
+    private static int lastNewline(byte[] bytes) {
+        for (int index = bytes.length - 1; index >= 0; index--) {
+            if (bytes[index] == '\n') {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static List<String> splitLines(String text) {
+        List<String> lines = new ArrayList<>();
+        if (text.isEmpty()) {
+            return lines;
+        }
+        int from = 0;
+        while (from < text.length()) {
+            int newline = text.indexOf('\n', from);
+            if (newline < 0) {
+                lines.add(text.substring(from));
+                break;
+            }
+            lines.add(text.substring(from, newline));
+            from = newline + 1;
+        }
+        return lines;
+    }
+
+    /**
+     * 日志文件路径；不存在时返回 {@link java.util.Optional#empty()}。
+     *
+     * <p>下载接口直接把它交给 Spring 的 {@code FileSystemResource} 做流式响应——
+     * 之前是 {@code Files.readAllBytes} 整份读进堆，几十分钟的运行日志会把内存顶满。
+     */
+    public java.util.Optional<Path> path(String instanceKey) {
+        Path file = fileFor(instanceKey);
+        return available(file) ? java.util.Optional.of(file) : java.util.Optional.empty();
     }
 
     public void closeAll() {
@@ -225,7 +287,7 @@ public class RunLogStore {
                     eldest.remove();
                 }
             }
-            Files.createDirectories(directory);
+            PathSupport.ensureDirectory(directory);
             BufferedWriter created = Files.newBufferedWriter(fileFor(instanceKey), StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             writers.put(instanceKey, created);

@@ -31,14 +31,24 @@ final class TemporalShapeCompatibility {
     }
 
     static void warnIfRisky(TableSegment left, TableSegment right) {
+        describeIfRisky(left, right).ifPresent(message -> log.warn(message));
+    }
+
+    /**
+     * Same detection as {@link #warnIfRisky(TableSegment, TableSegment)} but returns the
+     * warning text so callers can also expose it in a structured schema report.
+     */
+    static Optional<String> describeIfRisky(TableSegment left, TableSegment right) {
         List<String> mismatches = mismatchedTemporalColumns(left, right);
-        if (!mismatches.isEmpty()) {
-            log.warn("Temporal shape differs across sides: {}. One side is normalized as date-only "
-                    + "(YYYY-MM-DD) while the other keeps time-of-day (YYYY-MM-DD HH:MI:SS), so rows with a "
-                    + "non-midnight time will be reported as MISMATCH (or time differences will be truncated). "
-                    + "Oracle DATE columns always carry time-of-day; use the same logical type on both sides "
-                    + "(or configure the date format) before trusting the result.", mismatches);
+        if (mismatches.isEmpty()) {
+            return Optional.empty();
         }
+        return Optional.of(String.format(
+                "Temporal shape differs across sides: %s. One side is normalized as date-only "
+                        + "(YYYY-MM-DD) while the other keeps time-of-day (YYYY-MM-DD HH:MI:SS), so rows with a "
+                        + "non-midnight time will be reported as MISMATCH (or time differences will be truncated). "
+                        + "Oracle DATE columns always carry time-of-day; use the same logical type on both sides "
+                        + "(or configure the date format) before trusting the result.", mismatches));
     }
 
     /** @return {@code column(leftType↔rightType)}；只统计两侧同名、且都参与比较的列。 */

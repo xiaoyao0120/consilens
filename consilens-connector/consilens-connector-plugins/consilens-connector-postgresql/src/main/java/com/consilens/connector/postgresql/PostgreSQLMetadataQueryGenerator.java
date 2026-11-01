@@ -45,7 +45,12 @@ public class PostgreSQLMetadataQueryGenerator extends BaseMetadataQueryGenerator
         return "SELECT kcu.column_name, kcu.ordinal_position " +
                 "FROM information_schema.key_column_usage kcu " +
                 "JOIN information_schema.table_constraints tc " +
+                // 约束名只在 schema 内唯一：只按名字 join，跨 schema 的同名主键会把两边的列混在一起
+                // （结果里出现重复列，键顺序与唯一性判断随之失真）
                 "ON kcu.constraint_name = tc.constraint_name " +
+                "AND kcu.constraint_schema = tc.constraint_schema " +
+                "AND kcu.table_schema = tc.table_schema " +
+                "AND kcu.table_name = tc.table_name " +
                 "WHERE tc.constraint_type = 'PRIMARY KEY' " +
                 "AND kcu.table_schema = '" + escapeString(schemaName) + "' " +
                 "AND kcu.table_name = '" + escapeString(tableName) + "' " +

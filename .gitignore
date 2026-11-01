@@ -25,6 +25,7 @@ replay_pid*
 
 # Maven
 target/
+.release-checks/
 pom.xml.tag
 pom.xml.releaseBackup
 pom.xml.versionsBackup
@@ -134,6 +135,9 @@ temp/
 
 AGENTS.md
 scripts/*
+# 仓库自带的校验/冒烟脚本（CI 与文档引用）必须可提交，别被上面的通配忽略
+!scripts/check-doc-links.py
+!scripts/s3-smoke.sh
 !scripts/release/
 !scripts/release/release-check.sh
 design/
@@ -158,3 +162,4 @@ consilens-ui/.vite
 .vite
 test-results
 consilens-ui/e2e
+devlop

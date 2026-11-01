@@ -43,6 +43,10 @@ class PostgreSQLMetadataQueryGeneratorTest {
 
         assertTrue(sql.contains("information_schema"));
         assertTrue(sql.contains("PRIMARY KEY"));
+        // 约束名只在 schema 内唯一，join 必须带上 schema/table 限定，否则跨 schema 同名主键会串列
+        assertTrue(sql.contains("kcu.constraint_schema = tc.constraint_schema"), sql);
+        assertTrue(sql.contains("kcu.table_schema = tc.table_schema"), sql);
+        assertTrue(sql.contains("kcu.table_name = tc.table_name"), sql);
     }
 
     @Test

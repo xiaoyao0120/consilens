@@ -12,7 +12,6 @@ examples/
 │   ├── mysql/         #   每个数据源：load-<db>.sql + 01-identical + 02-join-diff
 │   ├── postgresql/
 │   └── ...            # oracle/sqlserver/clickhouse/tidb/starrocks/doris/oceanbase/trino/presto
-├── _archive/          # 旧版散落配置归档（不再参与回归）
 ├── run-comparison-test.sh
 ├── test-baselines.json
 └── README.md

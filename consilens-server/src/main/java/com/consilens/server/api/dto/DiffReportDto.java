@@ -1,5 +1,6 @@
 package com.consilens.server.api.dto;
 
+import com.consilens.core.diff.SchemaCompatibility;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -31,6 +32,12 @@ public class DiffReportDto {
     /** Column-level change counts aggregated from the sampled diff rows. */
     private List<ColumnStat> columns;
 
+    /** Structured schema compatibility report; null for old artifacts or dry runs. */
+    private SchemaCompatibility schemaCompatibility;
+
+    /** Result/artifact schema version; null for artifacts written before the field existed. */
+    private Integer resultSchemaVersion;
+
     /** Sampled difference rows (bounded by the artifact sample size). */
     private List<SampleDiff> samples;
 
@@ -53,6 +60,8 @@ public class DiffReportDto {
     public static class ColumnStat {
 
         private String name;
+        private String sourceName;
+        private String targetName;
         private Long insertCount;
         private Long updateCount;
         private Long deleteCount;
@@ -61,8 +70,14 @@ public class DiffReportDto {
         /** Share of sampled MISMATCH rows touching this column (0..100, 1 decimal). */
         private Double differencePercentage;
 
-        /** Always true in this release: column stats are aggregated from the sample. */
+        /** Difference count / total rows (0..100, 4 decimals); exact-mode supplementary rate. */
+        private Double differenceRate;
+
+        /** True when the counts are aggregated from a bounded sample. */
         private Boolean aggregatedFromSamples;
+
+        /** Exact stats may cover only retained rows when maxDifferences truncates the run. */
+        private Boolean truncated;
     }
 
     @Data

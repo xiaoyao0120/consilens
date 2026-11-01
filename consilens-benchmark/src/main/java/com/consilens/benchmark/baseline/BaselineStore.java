@@ -1,5 +1,6 @@
 package com.consilens.benchmark.baseline;
 
+import com.consilens.common.io.PathSupport;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import lombok.extern.slf4j.Slf4j;
@@ -46,9 +47,7 @@ public class BaselineStore {
     /** 原子写入基线（先写临时文件再 move）。失败抛 RuntimeException。 */
     public static void store(Baseline baseline, Path path) {
         try {
-            if (path.getParent() != null) {
-                Files.createDirectories(path.getParent());
-            }
+            PathSupport.ensureParent(path);
             Path tmp = path.resolveSibling(path.getFileName() + ".tmp");
             MAPPER.writeValue(tmp.toFile(), baseline);
             Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);

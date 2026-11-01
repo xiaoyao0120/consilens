@@ -17,6 +17,10 @@ cd consilens
 
 # 构建项目
 ./mvnw -B clean package
+
+# 版本与文档链接检查
+python3 scripts/release/check-pom-versions.py
+python3 scripts/check-doc-links.py
 ```
 
 ## 项目结构

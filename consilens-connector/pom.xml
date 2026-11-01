@@ -21,6 +21,7 @@
     
     <modules>
         <module>consilens-connector-api</module>
+        <module>consilens-connector-testkit</module>
         <module>consilens-connector-plugins</module>
     </modules>
 </project>

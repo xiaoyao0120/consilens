@@ -96,19 +96,27 @@ final class KeyCollationCompatibility {
     }
 
     static void warnIfRisky(TableSegment table) {
+        describeIfRisky(table).ifPresent(message -> log.warn(message));
+    }
+
+    /**
+     * Same detection as {@link #warnIfRisky(TableSegment)} but returns the warning text
+     * so callers can also expose it in a structured schema report.
+     */
+    static Optional<String> describeIfRisky(TableSegment table) {
         if (table == null || table.getDatabase() == null) {
-            return;
+            return Optional.empty();
         }
         List<String> stringKeys = stringKeyColumns(table);
         if (stringKeys.isEmpty()) {
-            return;
+            return Optional.empty();
         }
         boolean engineDefaultCaseInsensitive =
                 engineDefaultsToCaseInsensitiveCollation(table.getDatabase().getConnectorType());
         if (!engineDefaultCaseInsensitive) {
             // 引擎默认大小写敏感时，只有列上显式声明了 CI 排序规则才需要告警
             if (stringKeys.stream().noneMatch(key -> columnCollationIsCaseInsensitive(table, key))) {
-                return;
+                return Optional.empty();
             }
         } else {
             // 引擎默认 CI：列上显式 binary/case-sensitive 的键可以排除
@@ -116,14 +124,15 @@ final class KeyCollationCompatibility {
                     .filter(key -> !columnCollationIsBinary(table, key))
                     .collect(java.util.stream.Collectors.toList());
             if (stringKeys.isEmpty()) {
-                return;
+                return Optional.empty();
             }
         }
-        log.warn("Table {} compares string key column(s) {} on an engine whose default collation is "
-                        + "case-insensitive ({}). SQL grouping/joins treat 'A' and 'a' as equal while this "
+        return Optional.of(String.format(
+                "Table %s compares string key column(s) %s on an engine whose default collation is "
+                        + "case-insensitive (%s). SQL grouping/joins treat 'A' and 'a' as equal while this "
                         + "engine compares keys byte-wise, so keys that differ only in case can be grouped "
                         + "or attributed incorrectly. Use a binary/deterministic collation for these columns "
                         + "or normalize the key before comparing.",
-                table.getTablePath(), stringKeys, table.getDatabase().getConnectorType());
+                table.getTablePath(), stringKeys, table.getDatabase().getConnectorType()));
     }
 }

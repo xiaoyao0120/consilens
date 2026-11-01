@@ -5,6 +5,7 @@
 # the consilens-server so you can run end-to-end diff tasks.
 #
 # Usage:
+#   cp .env.example .env   # set MYSQL_ROOT_PASSWORD
 #   docker compose up --build -d
 #   docker compose down -v   # teardown
 #
@@ -17,7 +18,7 @@ services:
     image: mysql:8.0
     container_name: consilens-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: consilens123
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in deploy/.env}"
       MYSQL_DATABASE: source_db
     ports:
       - "13306:3306"
@@ -25,7 +26,7 @@ services:
       - ./mysql-init:/docker-entrypoint-initdb.d:ro
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pconsilens123"]
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_ROOT_PASSWORD\" mysqladmin ping -h localhost -uroot"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -43,20 +44,22 @@ services:
   consilens-server:
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: deploy/Dockerfile
+      args:
+        JAR_PATH: ${CONSILENS_SERVER_JAR:-consilens-server/target/consilens-server-0.1-SNAPSHOT.jar}
     image: consilens-server:latest
     container_name: consilens-server
     depends_on:
       mysql:
         condition: service_healthy
     ports:
-      - "18080:18080"
+      - "16789:16789"
     environment:
       SPRING_PROFILES_ACTIVE: local
     volumes:
       - artifact_data:/opt/consilens/.consilens-server/artifacts
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:18080/actuator/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:16789/actuator/health"]
       interval: 10s
       timeout: 5s
       retries: 15

@@ -1,5 +1,6 @@
 package com.consilens.server.infrastructure.storage;
 
+import com.consilens.common.io.PathSupport;
 import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.server.domain.enums.ArtifactKind;
 import com.consilens.server.support.hash.Sha256Support;
@@ -24,7 +25,7 @@ public class LocalFileArtifactContentStore implements ArtifactContentStore {
             validateContentSize(content.length);
             String safeArtifactId = safeArtifactId(artifactId);
             Path baseDir = baseDir();
-            Files.createDirectories(baseDir);
+            PathSupport.ensureDirectory(baseDir);
             Path file = baseDir.resolve(safeArtifactId + extension(format)).normalize();
             if (!file.startsWith(baseDir)) {
                 throw new IllegalArgumentException("Artifact path escapes local storage directory");

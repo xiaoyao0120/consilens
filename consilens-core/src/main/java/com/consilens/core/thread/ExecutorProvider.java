@@ -104,6 +104,8 @@ public class ExecutorProvider {
         };
     }
 
+    private static final long SHUTDOWN_WAIT_SECONDS = 12L;
+
     private void shutdownExecutor(String name, ExecutorService executor) {
         if (executor == null) {
             return;
@@ -111,7 +113,9 @@ public class ExecutorProvider {
         log.info("Shutting down {} executor", name);
         executor.shutdown();
         try {
-            if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+            // 12s 而不是 60s：收尾时所有任务都已经结束（毫秒级退出），而失败路径上可能还有卡在
+            // 长查询里的任务——等满 60 秒只会让整个比对迟迟不返回。超过 12 秒一律强制中断。
+            if (!executor.awaitTermination(SHUTDOWN_WAIT_SECONDS, TimeUnit.SECONDS)) {
                 log.warn("{} executor did not terminate in time, forcing shutdown", name);
                 executor.shutdownNow();
             }

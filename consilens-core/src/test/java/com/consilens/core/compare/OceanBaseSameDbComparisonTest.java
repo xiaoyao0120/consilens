@@ -10,6 +10,7 @@ import com.consilens.connector.api.planner.CompareExecutionOptions;
 import com.consilens.connector.api.planner.CompareRequest;
 import com.consilens.connector.api.planner.CompareStrategyPreference;
 import com.consilens.core.diff.DiffResult;
+import com.consilens.core.integration.IntegrationCredentials;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -40,11 +41,13 @@ class OceanBaseSameDbComparisonTest {
 
     @Test
     void shouldDetectDifferencesWithinOceanBase() throws Exception {
+        String oceanBasePassword = IntegrationCredentials.require("CONSILENS_IT_OCEANBASE_PASSWORD");
+
         // Source: OceanBase orders (has rows 1-10000)
         Map<String, Object> sourceConnection = new LinkedHashMap<>();
         sourceConnection.put("url", "jdbc:mysql://127.0.0.1:2881/test?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&allowPublicKeyRetrieval=true");
         sourceConnection.put("username", "root@test");
-        sourceConnection.put("password", "Admin123_123");
+        sourceConnection.put("password", oceanBasePassword);
 
         ConnectorConfig sourceConfig = ConnectorConfig.builder()
                 .type("oceanbase")
@@ -57,7 +60,7 @@ class OceanBaseSameDbComparisonTest {
         Map<String, Object> targetConnection = new LinkedHashMap<>();
         targetConnection.put("url", "jdbc:mysql://127.0.0.1:2881/test?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&allowPublicKeyRetrieval=true");
         targetConnection.put("username", "root@test");
-        targetConnection.put("password", "Admin123_123");
+        targetConnection.put("password", oceanBasePassword);
 
         ConnectorConfig targetConfig = ConnectorConfig.builder()
                 .type("oceanbase")

@@ -1,5 +1,6 @@
 package com.consilens.sink.csv;
 
+import com.consilens.common.io.PathSupport;
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
 import com.consilens.sink.api.ColumnValueInterpolator;
@@ -46,9 +47,7 @@ public class CsvDiffRecordSink implements Sink {
         String resolvedPath = ColumnValueInterpolator.resolvePath(
                 path != null ? path : "diff-record-${taskId}.csv", context);
         Path filePath = Paths.get(resolvedPath);
-        if (filePath.getParent() != null) {
-            Files.createDirectories(filePath.getParent());
-        }
+        PathSupport.ensureParent(filePath);
         writer = Files.newBufferedWriter(filePath);
         if (sinkConfig.isIncludeHeader()) {
             writeHeader();
@@ -156,8 +155,34 @@ public class CsvDiffRecordSink implements Sink {
         }
     }
 
+
+    /**
+     * 防止 CSV 注入：以 = + @ 或（非数字的）- 开头的单元格会被 Excel/Sheets 当作公式执行。
+     * 这类值统一加一个前导单引号，让表格软件按文本显示；纯数字（含负数）保持原样，
+     * 否则会把 -12.5 这类合法数值改坏。
+     */
+    private static String defuseFormula(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        char first = value.charAt(0);
+        boolean risky;
+        if (first == '=' || first == '+' || first == '@') {
+            risky = true;
+        } else if (first == '-') {
+            risky = !NUMERIC.matcher(value).matches();
+        } else {
+            risky = first == '\t' || first == '\r';
+        }
+        return risky ? "'" + value : value;
+    }
+
+    private static final java.util.regex.Pattern NUMERIC =
+            java.util.regex.Pattern.compile("-?\\d+(\\.\\d+)?([eE][-+]?\\d+)?");
+
     private String escapeCSV(String value) {
         if (value == null) return "";
+        value = defuseFormula(value);
         String delim = sinkConfig.getDelimiter();
         if (value.contains(delim) || value.contains("\"") || value.contains("\n") || value.contains("\r")) {
             return "\"" + value.replace("\"", "\"\"") + "\"";

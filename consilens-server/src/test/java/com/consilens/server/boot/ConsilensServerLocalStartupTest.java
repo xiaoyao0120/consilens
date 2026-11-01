@@ -23,5 +23,10 @@ class ConsilensServerLocalStartupTest {
         assertThat(environment.getProperty("consilens.server.database.allow-embedded")).isEqualTo("true");
         assertThat(environment.getProperty("consilens.server.security.enabled")).isEqualTo("false");
         assertThat(environment.getProperty("spring.sql.init.mode")).isEqualTo("always");
+        assertThat(environment.getProperty("server.shutdown")).isEqualTo("graceful");
+        assertThat(environment.getProperty("spring.lifecycle.timeout-per-shutdown-phase")).isEqualTo("30s");
+        assertThat(environment.getProperty("management.endpoint.health.probes.enabled")).isEqualTo("true");
+        assertThat(environment.getProperty("management.endpoint.health.group.readiness.include"))
+                .isEqualTo("readinessState,db");
     }
 }

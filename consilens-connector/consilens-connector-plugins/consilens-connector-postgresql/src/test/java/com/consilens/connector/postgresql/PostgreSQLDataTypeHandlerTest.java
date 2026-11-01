@@ -130,4 +130,17 @@ class PostgreSQLDataTypeHandlerTest {
                         .elementType(TypeDescriptor.builder(com.consilens.common.enums.DataType.INTEGER_TYPE).bitWidth(64).build())
                         .build()));
     }
+
+    @Test
+    void decimalMaskCoversTheFullNumericPrecision() {
+        // PostgreSQL numeric 的整数位远多于 15 位；15 位掩码会让 10^15 以上的值渲染成 '#'，
+        // 不同的值变成同一个字符串（漏报差异，比误报严重）
+        String sql = handler.normalizeColumn("amount", DataType.DECIMAL);
+
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("'FM(9+)0\\.(0+)'").matcher(sql);
+        assertTrue(matcher.find(), sql);
+        assertEquals(38, matcher.group(1).length() + 1, "integer digits in " + sql);
+        assertEquals(4, matcher.group(2).length());
+    }
 }

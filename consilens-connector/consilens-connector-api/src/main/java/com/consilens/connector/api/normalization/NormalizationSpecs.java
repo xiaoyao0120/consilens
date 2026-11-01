@@ -59,6 +59,10 @@ public final class NormalizationSpecs {
         List<NormalizationRule> result = new ArrayList<>();
         Integer precision = integer(rule.get("precision"));
         Boolean rounding = bool(rule.get("rounding"));
+        // 数值容差：绝对值 / 相对值。容忍列在 checksum 候选回查与本地比较中生效；
+        // SQL 侧校验和无法容忍（值不同哈希必不同），容差列由递归收敛到终局比较兜底。
+        Double tolerance = doubleValue(rule.get("tolerance"));
+        Double relativeTolerance = doubleValue(rule.get("relativeTolerance"));
         String format = string(rule.get("format"));
         String timezone = string(rule.get("timezone"));
         String comparisonMode = string(rule.get("comparisonMode"));
@@ -68,14 +72,29 @@ public final class NormalizationSpecs {
         if (sessionTimeZone == null) {
             sessionTimeZone = string(rule.get("session_time_zone"));
         }
+        if (sessionTimeZone != null) {
+            // 时区写错不能让 core 静默当成"没配置"：那样两侧会用不同时区归一化，差异永远对不上
+            try {
+                java.time.ZoneId.of(sessionTimeZone.trim());
+            } catch (java.time.DateTimeException exception) {
+                throw new IllegalArgumentException("sessionTimeZone must be an IANA zone or UTC offset, got: "
+                        + sessionTimeZone, exception);
+            }
+        }
 
-        if (precision != null || rounding != null) {
+        if (precision != null || rounding != null || tolerance != null || relativeTolerance != null) {
             Map<String, Object> params = new LinkedHashMap<>();
             if (precision != null) {
                 params.put("precision", precision);
             }
             if (rounding != null) {
                 params.put("rounding", rounding);
+            }
+            if (tolerance != null) {
+                params.put("tolerance", tolerance);
+            }
+            if (relativeTolerance != null) {
+                params.put("relativeTolerance", relativeTolerance);
             }
             result.add(rule(type, "format_number", params));
         }
@@ -137,6 +156,90 @@ public final class NormalizationSpecs {
                 .operation(operation)
                 .params(params)
                 .build();
+    }
+
+    /** 列级规则：{@code match.path} 指向列名，优先级高于类型级规则（见引擎侧解析顺序）。 */
+    private static NormalizationRule pathRule(String column, String operation, Map<String, Object> params) {
+        return NormalizationRule.builder()
+                .match(MatchSpec.builder().path(column).build())
+                .operation(operation)
+                .params(params)
+                .build();
+    }
+
+    /**
+     * 把"按列配置"的规则（{@code columns: {amount: {precision: 6}}}）编译成
+     * {@code MatchSpec.path} 规则。编译结果与类型级规则合并在同一个 spec 里，
+     * 引擎侧解析时列级优先。
+     */
+    public static NormalizationSpec withColumnRules(NormalizationSpec base,
+                                                    Map<String, Map<String, Object>> columns) {
+        List<NormalizationRule> columnRules = toColumnRules(columns);
+        if (columnRules == null && base == null) {
+            return null;
+        }
+        return NormalizationSpec.builder()
+                .global(mergeRules(base == null ? null : base.getGlobal(), columnRules))
+                .source(base == null ? null : base.getSource())
+                .target(base == null ? null : base.getTarget())
+                .build();
+    }
+
+    private static List<NormalizationRule> mergeRules(List<NormalizationRule> existing,
+                                                      List<NormalizationRule> columnRules) {
+        List<NormalizationRule> merged = new ArrayList<>();
+        if (existing != null) {
+            merged.addAll(existing);
+        }
+        if (columnRules != null) {
+            merged.addAll(columnRules);
+        }
+        return merged.isEmpty() ? null : merged;
+    }
+
+    public static List<NormalizationRule> toColumnRules(Map<String, Map<String, Object>> columns) {
+        if (columns == null || columns.isEmpty()) {
+            return null;
+        }
+        List<NormalizationRule> result = new ArrayList<>();
+        for (Map.Entry<String, Map<String, Object>> entry : columns.entrySet()) {
+            String column = entry.getKey();
+            Map<String, Object> rule = entry.getValue();
+            if (column == null || column.isBlank() || rule == null || rule.isEmpty()) {
+                continue;
+            }
+            // 列级规则当前只开放数值容差。precision/timezone 等需要 SQL 侧同步实现，
+            // 未打穿前不接受，避免本地与校验和口径分叉（validator 会拒绝其它参数）。
+            Double tolerance = doubleValue(rule.get("tolerance"));
+            Double relativeTolerance = doubleValue(rule.get("relativeTolerance"));
+            if (tolerance != null || relativeTolerance != null) {
+                Map<String, Object> params = new LinkedHashMap<>();
+                if (tolerance != null) {
+                    params.put("tolerance", tolerance);
+                }
+                if (relativeTolerance != null) {
+                    params.put("relativeTolerance", relativeTolerance);
+                }
+                result.add(pathRule(column, "format_number", params));
+            }
+        }
+        return result.isEmpty() ? null : result;
+    }
+
+    private static Double doubleValue(Object value) {
+        if (value instanceof Number) {
+            double parsed = ((Number) value).doubleValue();
+            return parsed >= 0 ? parsed : null;
+        }
+        if (value instanceof String && !((String) value).isBlank()) {
+            try {
+                double parsed = Double.parseDouble(((String) value).trim());
+                return parsed >= 0 ? parsed : null;
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private static String string(Object value) {

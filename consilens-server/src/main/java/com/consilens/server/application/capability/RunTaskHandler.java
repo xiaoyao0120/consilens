@@ -30,7 +30,11 @@ import com.consilens.core.diff.DiffResult;
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
 import com.consilens.core.lifecycle.DiffLifecycle;
+import com.consilens.core.diff.DiffEvidenceFactory;
+import com.consilens.core.diff.RunFingerprintFactory;
 import com.consilens.core.lifecycle.NoopDiffLifecycle;
+import com.consilens.sdk.EngineInfo;
+import com.consilens.sdk.result.ColumnStatsCalculator;
 import com.consilens.server.boot.ConsilensServerProperties;
 import com.consilens.sink.api.model.ResultConfig;
 import com.consilens.sink.api.model.SinkConfig;
@@ -263,6 +267,12 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         } catch (TaskCancellationException exception) {
             log.info("run cancelled: instanceKey={}, reason={}", context.getInstanceKey(), exception.getMessage());
             throw exception;
+        } catch (com.consilens.core.exception.BudgetExceededException exception) {
+            String safeMessage = JdbcConnectionSupport.maskMessage(exception.getMessage());
+            log.error("run failed: instanceKey={}, errorCode={}, reason={}",
+                    context.getInstanceKey(), "BUDGET_EXCEEDED", safeMessage, exception);
+            ArtifactRefDto artifact = writeFailure(context, request, startedAt, "BUDGET_EXCEEDED", safeMessage);
+            throw new CapabilityExecutionException("BUDGET_EXCEEDED", safeMessage, artifact.getId(), false, exception);
         } catch (InvalidInputException exception) {
             String safeMessage = JdbcConnectionSupport.maskMessage(exception.getMessage());
             log.error("run failed: instanceKey={}, errorCode={}, reason={}",
@@ -283,7 +293,8 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
             log.error("run failed: instanceKey={}, errorCode={}, reason={}",
                     context.getInstanceKey(), "RUN_EXECUTION_ERROR", safeMessage, exception);
             ArtifactRefDto artifact = writeFailure(context, request, startedAt, "RUN_EXECUTION_ERROR", safeMessage);
-            throw new CapabilityExecutionException("RUN_EXECUTION_ERROR", safeMessage, artifact.getId(), true, exception);
+            throw new CapabilityExecutionException("RUN_EXECUTION_ERROR", safeMessage, artifact.getId(),
+                    isRetryable(exception), exception);
         } finally {
             log.info("run finished: instanceKey={}, elapsedMs={}",
                     context.getInstanceKey(), Duration.between(startedAt, Instant.now()).toMillis());
@@ -339,6 +350,38 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         throw new CapabilityExecutionException("CLUSTER_EXECUTION_FAILED", reason, artifact.getId(), false, null);
     }
 
+    /**
+     * 判断"再来一次会不会不一样"。
+     *
+     * <p>之前所有非预算/非入参异常都被标成可重试，于是 SQL 语法错、约束冲突、缺表这类确定性失败
+     * 会被反复重试——集群上重跑一遍、日志里再记一遍、结果仍然一样。只有连接/超时这类瞬时错误
+     * 才值得重试。
+     */
+    static boolean isRetryable(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof java.sql.SQLException) {
+                String state = ((java.sql.SQLException) current).getSQLState();
+                if (state != null && state.length() >= 2) {
+                    String sqlClass = state.substring(0, 2).toUpperCase(java.util.Locale.ROOT);
+                    // 22 数据异常 / 23 约束冲突 / 42 语法或权限 / 0A 不支持的特性：重试结论不变
+                    if (sqlClass.equals("22") || sqlClass.equals("23") || sqlClass.equals("42")
+                            || sqlClass.equals("0A")) {
+                        return false;
+                    }
+                }
+            }
+            if (current instanceof IllegalArgumentException
+                    || current instanceof UnsupportedOperationException
+                    || current instanceof java.nio.file.NoSuchFileException
+                    || current instanceof java.nio.file.AccessDeniedException) {
+                return false;
+            }
+            current = current.getCause();
+        }
+        return true;
+    }
+
     /** 执行结果 + 差异 sink 写入状态（行数/截断） */
     static final class CompareOutcome {
         final DiffResult diffResult;
@@ -374,7 +417,8 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         try {
             assertNotCancellationRequested(taskContext);
             lifecycle.onDiffStart(diffContext);
-            DiffResult diffResult = createCompareRuntime().execute(compareRequest);
+            DiffResult diffResult = enrichResult(
+                    createCompareRuntime().execute(compareRequest), compareRequest);
             assertNotCancellationRequested(taskContext);
             publishDifferences(diffResult, lifecycle, diffContext);
             assertNotCancellationRequested(taskContext);
@@ -421,6 +465,27 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
 
     protected CompareRuntime createCompareRuntime() {
         return new DefaultCompareRuntime();
+    }
+
+    /**
+     * Attaches exact per-column statistics, the run fingerprint and execution
+     * evidence before the result is written to the artifact. All three are
+     * post-processors over the completed result; none changes the comparison
+     * algorithm.
+     */
+    DiffResult enrichResult(DiffResult result, CompareRequest request) {
+        if (result == null) {
+            return null;
+        }
+        long maxDifferences = request.getExecutionOptions() != null
+                && request.getExecutionOptions().getMaxDifferences() != null
+                ? Math.max(1L, request.getExecutionOptions().getMaxDifferences())
+                : 1_000_000L;
+        return result.toBuilder()
+                .columnStats(ColumnStatsCalculator.calculate(result, request, maxDifferences))
+                .fingerprint(RunFingerprintFactory.create(request, EngineInfo.current().getVersion()))
+                .evidence(DiffEvidenceFactory.from(result))
+                .build();
     }
 
     protected DiffLifecycle buildLifecycle(ServerCompareConfig config, String taskId) {
@@ -622,7 +687,8 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
                 ArtifactKind.RUN_RESULT,
                 "json",
                 content,
-                Map.of("source", "run"));
+                Map.of("source", "run",
+                        "resultSchemaVersion", DiffResult.RESULT_SCHEMA_VERSION));
         // 无 outcome（dryRun、集群未回传统计）时 statistics 必须保持 null：
         // 空 map 会被 artifact 元数据当成"0 差异"，报告页将显示 100% 匹配。
         Map<String, Object> statistics = null;
@@ -707,7 +773,13 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
         long differenceCount = diffResult != null ? diffResult.getDifferenceCount() : 0L;
         content.put("hasDifferences", hasDifferences);
         content.put("differenceCount", differenceCount);
+        content.put("resultSchemaVersion", DiffResult.RESULT_SCHEMA_VERSION);
         content.put("statistics", diffResult != null ? diffResult.getStatisticsMap() : Map.of());
+        content.put("columnStats", diffResult != null ? diffResult.getColumnStats() : List.of());
+        content.put("schemaCompatibility",
+                diffResult != null ? diffResult.getSchemaCompatibility() : null);
+        content.put("fingerprint", diffResult != null ? diffResult.getFingerprint() : null);
+        content.put("evidence", diffResult != null ? diffResult.getEvidence() : null);
         content.put("metadata", diffResult != null ? diffResult.getMetadata() : Map.of());
         List<DiffRow> allDifferences = diffResult != null && diffResult.getDifferences() != null
                 ? diffResult.getDifferences()

@@ -7,9 +7,11 @@ import com.consilens.benchmark.baseline.DriftChecker;
 import com.consilens.benchmark.baseline.DriftReport;
 import com.consilens.benchmark.e2e.EndToEndBenchmark;
 import com.consilens.benchmark.e2e.ScenarioLoader;
+import com.consilens.benchmark.micro.FileDiffBenchmark;
 import com.consilens.benchmark.micro.LocalDiffEngineBenchmark;
 import com.consilens.benchmark.report.BenchmarkReportGenerator;
 import com.consilens.benchmark.report.BenchmarkResult;
+import com.consilens.common.io.PathSupport;
 import org.openjdk.jmh.results.RunResult;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
@@ -38,6 +40,8 @@ public final class BenchmarkSuite {
 
     static final String M01 = "M01";
     static final String M02 = "M02";
+    static final String F01 = "F01";
+    static final String F02 = "F02";
 
     private final BenchmarkOptions options;
 
@@ -66,7 +70,7 @@ public final class BenchmarkSuite {
     public List<BenchmarkResult> runMicro() throws RunnerException {
         ChainedOptionsBuilder builder = new OptionsBuilder()
                 .include(LocalDiffEngineBenchmark.class.getName())
-                .mode(org.openjdk.jmh.annotations.Mode.Throughput)
+                .include(FileDiffBenchmark.class.getName())
                 .forks(options.forks())
                 .warmupIterations(options.warmupIterations())
                 .measurementIterations(options.measurementIterations())
@@ -86,7 +90,9 @@ public final class BenchmarkSuite {
             double score = rr.getPrimaryResult().getScore();
             String unit = rr.getPrimaryResult().getScoreUnit();
 
-            String scenarioId = resolveScenarioId(rr.getParams().getParam("rows"),
+            String scenarioId = resolveScenarioId(rr.getParams().getBenchmark(),
+                    rr.getParams().getParam("rows"),
+                    rr.getParams().getParam("format"),
                     rr.getParams().getParam("diffRatio"));
             // shouldFailOnError(true) makes JMH throw on benchmark errors, so a returned
             // RunResult is a successful execution even when throughput is legitimately 0.
@@ -94,6 +100,10 @@ public final class BenchmarkSuite {
             Map<String, Double> subMetrics = new TreeMap<>();
             long sampleCount = (long) rr.getPrimaryResult().getStatistics().getN();
             subMetrics.put("sampleCount", (double) sampleCount);
+            String rowsParam = rr.getParams().getParam("rows");
+            if (rowsParam != null) {
+                subMetrics.put("rows", Double.parseDouble(rowsParam));
+            }
 
             BenchmarkResult result = new BenchmarkResult();
             result.setScenarioId(scenarioId);
@@ -138,7 +148,7 @@ public final class BenchmarkSuite {
 
        Path outputDir = options.outputDir();
        try {
-           Files.createDirectories(outputDir);
+           PathSupport.ensureDirectory(outputDir);
            new BenchmarkReportGenerator().generate(results, drift, outputDir);
         } catch (RuntimeException | IOException e) {
             System.err.println("benchmark: report generation failed: " + e.getMessage());
@@ -177,9 +187,7 @@ public final class BenchmarkSuite {
         baseline.setJdk(System.getProperty("java.version"));
         baseline.setEntries(entries);
        try {
-           if (baselinePath.getParent() != null) {
-               Files.createDirectories(baselinePath.getParent());
-           }
+           PathSupport.ensureParent(baselinePath);
            BaselineStore.store(baseline, baselinePath);
            System.out.println("benchmark: baseline written to " + baselinePath);
            return true;
@@ -194,10 +202,16 @@ public final class BenchmarkSuite {
         return ScenarioLoader.KIND_MICRO.equals(result.getKind()) ? 0.15 : 0.25;
     }
 
-    private static String resolveScenarioId(String rows, String diffRatio) {
+    static String resolveScenarioId(String benchmark, String rows, String format,
+                                    String diffRatio) {
         double ratio = diffRatio == null ? 0.05 : Double.parseDouble(diffRatio);
-        String code = ratio <= 0 ? M01 : M02;
         String ratioLabel = diffRatio == null ? "default" : diffRatio;
+        if (benchmark != null && benchmark.contains("FileDiffBenchmark")) {
+            String code = ratio <= 0 ? F01 : F02;
+            return code + "." + rows + "." + (format == null ? "unknown" : format)
+                    + ".ratio" + ratioLabel;
+        }
+        String code = ratio <= 0 ? M01 : M02;
         return code + "." + rows + ".ratio" + ratioLabel;
     }
 }

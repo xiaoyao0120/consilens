@@ -16,6 +16,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,10 +25,12 @@ import java.util.Optional;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 @ExtendWith(MockitoExtension.class)
@@ -90,6 +93,23 @@ class JoinDifferSegmentationTest {
         smallDiffer.diffSegments(source, target, new InfoTreeRecorder("root"), 0L, 0).join();
 
         verify(adapter1, atLeast(1)).query(anyString(), eq(Object[].class));
+    }
+
+    @Test
+    @DisplayName("空表导致 MIN/MAX 边界不可用时回退单段，不再反复建立边界")
+    void shouldFallBackToSingleSegmentWhenBoundsUnavailable() {
+        lenient().when(adapter1.countAndBounds(any())).thenReturn(
+                new TableSegment.ChecksumResult(0L, null, null, null));
+        lenient().when(adapter2.countAndBounds(any())).thenReturn(
+                new TableSegment.ChecksumResult(0L, null, null, null));
+        TableSegment source = segment(adapter1, TablePath.of("db", "t1"));
+        TableSegment target = segment(adapter2, TablePath.of("db", "t2"));
+
+        assertTimeoutPreemptively(Duration.ofSeconds(10),
+                () -> differ.diffSegments(source, target, new InfoTreeRecorder("root"), 0L, 0).join());
+
+        verify(adapter1, times(1)).countAndBounds(any());
+        verify(adapter2, times(1)).countAndBounds(any());
     }
 
     private TableSegment segment(DatabaseAdapter adapter, TablePath path) {

@@ -64,6 +64,68 @@ public class LocalDiffEngine {
                 columnTypes1, columnTypes2, null, null);
     }
 
+    public static List<DiffRow> findDifferences(
+            List<Object[]> rows1,
+            List<Object[]> rows2,
+            List<String> keyColumns1,
+            List<String> extraColumns1,
+            List<String> keyColumns2,
+            List<String> extraColumns2,
+            Map<String, DataType> columnTypes1,
+            Map<String, DataType> columnTypes2,
+            DataTypeHandler dataTypeHandler1,
+            DataTypeHandler dataTypeHandler2) {
+        return findDifferences(rows1, rows2, keyColumns1, extraColumns1, keyColumns2, extraColumns2,
+                columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2, (Map<String, ColumnTolerance>) null);
+    }
+
+    /**
+     * Find differences with dialect-aware value normalization and optional
+     * per-column numeric tolerance resolved from the normalization spec.
+     *
+     * @param spec normalization spec; tolerance rules (format_number with
+     *             {@code tolerance}/{@code relativeTolerance}) apply during
+     *             value comparison. Null means no tolerance.
+     */
+    public static List<DiffRow> findDifferencesWithTolerance(
+            List<Object[]> rows1,
+            List<Object[]> rows2,
+            List<String> keyColumns1,
+            List<String> extraColumns1,
+            List<String> keyColumns2,
+            List<String> extraColumns2,
+            Map<String, DataType> columnTypes1,
+            Map<String, DataType> columnTypes2,
+            DataTypeHandler dataTypeHandler1,
+            DataTypeHandler dataTypeHandler2,
+            com.consilens.connector.api.normalization.NormalizationSpec spec) {
+
+        // 容差只作用于非键列：键必须精确相等，否则键分组/去重语义会被破坏
+        List<String> comparedColumns1 = new ArrayList<>(keyColumns1);
+        comparedColumns1.addAll(extraColumns1);
+        List<String> comparedColumns2 = new ArrayList<>(keyColumns2);
+        comparedColumns2.addAll(extraColumns2);
+        Map<String, ColumnTolerance> tolerances = ColumnToleranceResolver.resolve(
+                spec,
+                withoutKeys(comparedColumns1, keyColumns1),
+                withoutKeys(comparedColumns2, keyColumns2),
+                columnTypes1, columnTypes2);
+
+        return findDifferences(rows1, rows2, keyColumns1, extraColumns1, keyColumns2, extraColumns2,
+                columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2, tolerances);
+    }
+
+    private static List<String> withoutKeys(List<String> columns, List<String> keys) {
+        if (columns == null) {
+            return List.of();
+        }
+        List<String> result = new ArrayList<>(columns);
+        if (keys != null) {
+            result.removeAll(keys);
+        }
+        return result;
+    }
+
     /**
      * Find differences with dialect-aware value normalization. Each side's
      * {@link DataTypeHandler} maps driver-specific representations onto the
@@ -79,7 +141,8 @@ public class LocalDiffEngine {
             Map<String, DataType> columnTypes1,
             Map<String, DataType> columnTypes2,
             DataTypeHandler dataTypeHandler1,
-            DataTypeHandler dataTypeHandler2) {
+            DataTypeHandler dataTypeHandler2,
+            Map<String, ColumnTolerance> tolerances) {
 
         log.info("Finding differences between {} and {} rows", rows1.size(), rows2.size());
 
@@ -112,7 +175,8 @@ public class LocalDiffEngine {
             List<String> columnNames2 = new ArrayList<>(keyColumns2);
             columnNames2.addAll(extraColumns2);
             List<DiffRow> pkDifferences = findPrimaryKeyDifferences(pk, pkRows1, pkRows2, relevantRows1, relevantRows2,
-                    columnNames1, columnNames2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2);
+                    columnNames1, columnNames2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2,
+                    tolerances);
             differences.addAll(pkDifferences);
         }
 
@@ -129,7 +193,7 @@ public class LocalDiffEngine {
             columnNames2.addAll(extraColumns2);
             List<DiffRow> pkDifferences = findPrimaryKeyDifferences(group2.rawKey, Collections.emptyList(), pkRows2,
                     Collections.emptyList(), relevantRows2, columnNames1, columnNames2, columnTypes1, columnTypes2,
-                    dataTypeHandler1, dataTypeHandler2);
+                    dataTypeHandler1, dataTypeHandler2, tolerances);
             differences.addAll(pkDifferences);
         }
 
@@ -228,7 +292,8 @@ public class LocalDiffEngine {
             Map<String, DataType> columnTypes1,
             Map<String, DataType> columnTypes2,
             DataTypeHandler dataTypeHandler1,
-            DataTypeHandler dataTypeHandler2) {
+            DataTypeHandler dataTypeHandler2,
+            Map<String, ColumnTolerance> tolerances) {
 
         List<DiffRow> differences = new ArrayList<>();
 
@@ -262,14 +327,15 @@ public class LocalDiffEngine {
                 Object[] row1 = relevantRows1.get(0);
                 Object[] row2 = relevantRows2.get(0);
                 if (!rowsEqualNormalized(row1, row2, columnNames1, columnNames2, columnTypes1, columnTypes2,
-                        dataTypeHandler1, dataTypeHandler2)) {
+                        dataTypeHandler1, dataTypeHandler2, tolerances)) {
                     // Values differ - identify which columns changed separately for each table
                     List<String> changedColumns1 = new ArrayList<>();
                     List<String> changedColumns2 = new ArrayList<>();
                     // Use columnNames1 for finding changed columns since both tables should have
                     // same structure for comparison
                     findChangedColumnsWithDetails(row1, row2, columnNames1, columnNames2, changedColumns1,
-                            changedColumns2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2);
+                            changedColumns2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2,
+                            tolerances);
                     log.debug("Creating modified diff row with changed columns1: {}, columns2: {} for PK: {}",
                             changedColumns1, changedColumns2, primaryKey);
                     // Normalize values for output to ensure consistent formatting
@@ -306,7 +372,8 @@ public class LocalDiffEngine {
                     List<String> changedColumns1 = new ArrayList<>();
                     List<String> changedColumns2 = new ArrayList<>();
                     findChangedColumnsWithDetails(row1, row2, columnNames1, columnNames2, changedColumns1,
-                            changedColumns2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2);
+                            changedColumns2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2,
+                            tolerances);
                     DiffRow diff = DiffRow.modified(primaryKey,
                             normalizeRowValues(row1, columnNames1, columnTypes1),
                             normalizeRowValues(row2, columnNames2, columnTypes2),
@@ -338,7 +405,8 @@ public class LocalDiffEngine {
             Object[] row1, Object[] row2, List<String> columnNames1, List<String> columnNames2,
             List<String> changedColumns1, List<String> changedColumns2,
             Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2,
-            DataTypeHandler dataTypeHandler1, DataTypeHandler dataTypeHandler2) {
+            DataTypeHandler dataTypeHandler1, DataTypeHandler dataTypeHandler2,
+            Map<String, ColumnTolerance> tolerances) {
 
         List<Integer> changedColumnIndices = new ArrayList<>();
 
@@ -370,7 +438,8 @@ public class LocalDiffEngine {
             // CRITICAL: In NONE mode, rows contain database-normalized values (strings)
             // Direct string comparison is sufficient - no need for ValueNormalizer
             // This ensures consistency with database-side normalization
-            if (!valuesEqual(val1, val2, preferExactType(dataType1, dataType2))) {
+            if (!valuesEqual(val1, val2, preferExactType(dataType1, dataType2), tolerances, columnName1, columnName2,
+                    dataType1, dataType2)) {
                 changedColumnIndices.add(i);
                 if (columnName1 != null) {
                     changedColumns1.add(columnName1);
@@ -390,13 +459,47 @@ public class LocalDiffEngine {
      * Compare two values with special handling for different types.
      */
     private static boolean valuesEqual(Object val1, Object val2) {
-        return valuesEqual(val1, val2, null);
+        return compareValuesInternal(val1, val2, null);
     }
 
     private static boolean valuesEqual(Object val1, Object val2, DataType dataType) {
+        return compareValuesInternal(val1, val2, dataType);
+    }
+
+    /**
+     * Value comparison with optional per-column numeric tolerance. Tolerance only
+     * applies when both values are numbers, the column resolves a tolerance, and
+     * the type is not an exact-comparison numeric (integer/decimal).
+     */
+    private static boolean valuesEqual(Object val1, Object val2, DataType dataType,
+                                       Map<String, ColumnTolerance> tolerances,
+                                       String columnName1, String columnName2,
+                                       DataType dataType1, DataType dataType2) {
+        ColumnTolerance tolerance = resolveTolerance(tolerances, columnName1, columnName2);
+        if (tolerance != null && val1 instanceof Number && val2 instanceof Number
+                && !requiresExactNumericComparison(preferExactType(dataType1, dataType2))) {
+            boolean equal = tolerance.isEqual(((Number) val1).doubleValue(), ((Number) val2).doubleValue());
+            log.trace("Comparing values with tolerance: '{}' vs '{}' = {}", val1, val2, equal);
+            return equal;
+        }
         boolean result = compareValuesInternal(val1, val2, dataType);
         log.trace("Comparing values: '{}' vs '{}' = {}", val1, val2, result);
         return result;
+    }
+
+    private static ColumnTolerance resolveTolerance(Map<String, ColumnTolerance> tolerances,
+                                                    String columnName1, String columnName2) {
+        if (tolerances == null || tolerances.isEmpty()) {
+            return null;
+        }
+        ColumnTolerance tolerance = null;
+        if (columnName1 != null) {
+            tolerance = tolerances.get(columnName1.toLowerCase(java.util.Locale.ROOT));
+        }
+        if (tolerance == null && columnName2 != null) {
+            tolerance = tolerances.get(columnName2.toLowerCase(java.util.Locale.ROOT));
+        }
+        return tolerance;
     }
 
     /**
@@ -648,7 +751,8 @@ public class LocalDiffEngine {
             Map<String, DataType> columnTypes1,
             Map<String, DataType> columnTypes2,
             DataTypeHandler dataTypeHandler1,
-            DataTypeHandler dataTypeHandler2) {
+            DataTypeHandler dataTypeHandler2,
+            Map<String, ColumnTolerance> tolerances) {
 
         if (row1.length != row2.length) {
             return false;
@@ -664,7 +768,8 @@ public class LocalDiffEngine {
             Object val1 = normalizeForComparison(row1[i], dataType1, dataTypeHandler1);
             Object val2 = normalizeForComparison(row2[i], dataType2, dataTypeHandler2);
 
-            if (!valuesEqual(val1, val2, preferExactType(dataType1, dataType2))) {
+            if (!valuesEqual(val1, val2, preferExactType(dataType1, dataType2), tolerances, columnName1, columnName2,
+                    dataType1, dataType2)) {
                 String logColumn = columnName1 != null ? columnName1 : String.valueOf(i);
                 log.trace("Column {} values differ: '{}' vs '{}'", logColumn, val1, val2);
                 return false;

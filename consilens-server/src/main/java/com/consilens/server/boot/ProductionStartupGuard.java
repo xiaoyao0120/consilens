@@ -1,5 +1,6 @@
 package com.consilens.server.boot;
 
+import com.consilens.common.io.PathSupport;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.stereotype.Component;
@@ -85,7 +86,7 @@ public class ProductionStartupGuard implements InitializingBean {
             if (Files.exists(path) && !Files.isDirectory(path)) {
                 throw new IllegalStateException("Artifact local base path is not a directory: " + path);
             }
-            Files.createDirectories(path);
+            PathSupport.ensureDirectory(path);
             if (!Files.isWritable(path)) {
                 throw new IllegalStateException("Artifact local base directory is not writable: " + path);
             }

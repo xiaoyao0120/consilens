@@ -41,7 +41,8 @@ public class RunLogService {
 
     public LogFile download(String taskRef) {
         TaskInstanceRecord task = resolve(taskRef);
-        return new LogFile(task.getInstanceKey() + ".log", runLogStore.readAll(task.getInstanceKey()));
+        java.nio.file.Path path = runLogStore.path(task.getInstanceKey()).orElse(null);
+        return new LogFile(task.getInstanceKey() + ".log", path);
     }
 
     private TaskInstanceRecord resolve(String taskRef) {
@@ -52,11 +53,12 @@ public class RunLogService {
     @Getter
     public static class LogFile {
         private final String fileName;
-        private final byte[] content;
+        /** 日志文件路径；为空表示文件还没生成（例如任务尚未开始跑）。 */
+        private final java.nio.file.Path path;
 
-        LogFile(String fileName, byte[] content) {
+        LogFile(String fileName, java.nio.file.Path path) {
             this.fileName = fileName;
-            this.content = content;
+            this.path = path;
         }
     }
 }

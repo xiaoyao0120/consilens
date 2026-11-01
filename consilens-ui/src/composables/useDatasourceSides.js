@@ -7,21 +7,28 @@ import {
 } from "@/api/modules";
 
 // ===== Step 1: 数据源选择与级联加载 =====
-export function useDatasourceSides({ planForm, message }) {
+export function useDatasourceSides({ planForm, message, onStructureChange = null }) {
   // 数据源选择（来自 /v1/datasources）
   const datasources = ref([]);
   const datasourcesLoaded = ref(false);
   // 每个 side 的级联加载共用序号：数据源/库/表快速切换时，较慢的旧响应不能覆盖新状态
   const requestSeq = { source: 0, target: 0 };
 
+  const datasourcesError = ref("");
+
   async function loadDatasources(force = false) {
     if (datasourcesLoaded.value && !force) return;
     try {
       datasources.value = (await listDatasources()) || [];
-    } catch {
-      datasources.value = [];
-    } finally {
+      // 只有成功才算加载过：失败时仍标记已加载，后续非 force 调用会直接 return，
+      // 于是页面既没有下拉数据、也没有任何重试入口。
       datasourcesLoaded.value = true;
+      datasourcesError.value = "";
+    } catch (error) {
+      datasources.value = [];
+      datasourcesLoaded.value = false;
+      datasourcesError.value = error?.message || "数据源列表加载失败";
+      throw error;
     }
   }
 
@@ -31,6 +38,12 @@ export function useDatasourceSides({ planForm, message }) {
       value: item.id,
     }))
   );
+
+  // 换数据源/表后旧的列名映射一律失效：留着会以"上一张表的列"提交，
+  // 轻则比对报"列不存在"，重则静默漏比一列。
+  function dropMappings() {
+    if (typeof onStructureChange === "function") onStructureChange();
+  }
 
   function handleDatasourceChange(side) {
     const selected = datasources.value.find((item) => item.id === planForm[side].datasourceId);
@@ -46,6 +59,7 @@ export function useDatasourceSides({ planForm, message }) {
     // finally 因序号不匹配不会再清 loading，必须在作废点同步复位。
     planForm[side].tablesLoading = false;
     planForm[side].columnsLoading = false;
+    dropMappings();
     loadSideDatabases(side);
   }
 
@@ -99,6 +113,7 @@ export function useDatasourceSides({ planForm, message }) {
   // 表选中后加载字段（Step2 使用）
   function handleSideTableChange(side) {
     planForm[side].columns = [];
+    dropMappings();
     loadSideColumns(side);
   }
 
@@ -171,6 +186,7 @@ export function useDatasourceSides({ planForm, message }) {
 
   return {
     datasources,
+    datasourcesError,
     datasourceOptions,
     loadDatasources,
     handleDatasourceChange,

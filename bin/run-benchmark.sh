@@ -70,8 +70,12 @@ log_info "Baseline: $BENCHMARK_BASELINE"
 log_info "Output: $BENCHMARK_OUTPUT_DIR"
 
 set +e
-./mvnw -pl consilens-benchmark -Pbenchmark exec:java \
-    -Dexec.args="--mode $MODE ${MAIN_ARGS[*]}"
+BENCH_CLASSPATH_FILE="$ROOT_DIR/consilens-benchmark/target/benchmark-classpath.txt"
+./mvnw -q -pl consilens-benchmark dependency:build-classpath \
+    -Dmdep.outputFile="$BENCH_CLASSPATH_FILE"
+# JMH forked VM 需要完整 java.class.path；exec:java 不传递。
+java -cp "$ROOT_DIR/consilens-benchmark/target/classes:$(cat "$BENCH_CLASSPATH_FILE")" \
+    com.consilens.benchmark.runner.Main --mode "$MODE" "${MAIN_ARGS[@]}"
 EXIT_CODE=$?
 set -e
 

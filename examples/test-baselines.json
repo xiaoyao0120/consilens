@@ -522,6 +522,14 @@
       "total": 2,
       "targetMissing": 1,
       "mismatch": 1
+    },
+    "files/csv-to-csv.yaml": {
+      "total": 1,
+      "mismatch": 1
+    },
+    "files/s3-to-csv.yaml": {
+      "requiresExternalStorage": true,
+      "note": "需要 S3/MinIO 环境，本地不参与自动回归；S3 下载/前缀/glob 用 scripts/s3-smoke.sh 验证"
     }
   }
 }

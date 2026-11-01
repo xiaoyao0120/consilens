@@ -14,6 +14,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -42,6 +43,12 @@ class ServerCompareConfigServiceTest {
         assertEquals("order_id", comparison.getKeyMappings().get(0).getSource());
         assertEquals("id", comparison.getKeyMappings().get(0).getTarget());
         assertTrue(comparison.getFields().isEmpty());
+    }
+
+    @Test
+    void shouldRejectCommentOnlyYamlInsteadOfFailingWithNullPointer() {
+        // 只有注释的 YAML 文档解析结果是 null：必须给出 400 级别的 InvalidInputException
+        assertThrows(InvalidInputException.class, () -> service().fromContent("# nothing here\n"));
     }
 
     @Test
@@ -153,6 +160,111 @@ class ServerCompareConfigServiceTest {
         assertThat(config.getComparison().getNormalization()).isNotNull();
         assertEquals(6, config.getComparison().getNormalization().getGlobal().get("decimal").getPrecision());
         assertEquals("UTC", config.getComparison().getNormalization().getGlobal().get("timestamp").getTimezone());
+    }
+
+    @Test
+    void shouldAcceptCliShapedConfigMap() {
+        Map<String, Object> content = Map.of(
+                "source", Map.of("type", "file",
+                        "resource", Map.of("type", "file", "name", "source.csv",
+                                "format", "csv")),
+                "target", Map.of("type", "file",
+                        "resource", Map.of("type", "file", "name", "target.csv",
+                                "format", "csv")),
+                "comparison", Map.of(
+                        "keys", Map.of("source", List.of("id"), "target", List.of("id")),
+                        "fields", Map.of("source", List.of("name"),
+                                "target", List.of("name"))));
+
+        ServerCompareConfig config = service().fromContent(content);
+
+        assertEquals("file", config.getSource().getType());
+        assertEquals("source.csv", config.getSource().getTable());
+        assertEquals("csv", ((Map<?, ?>) config.getSource().getReadOptions()
+                .get("options")).get("format"));
+        assertEquals(List.of("id"), config.getKeys());
+        assertEquals(List.of("name"), config.getComparison().getFields());
+
+        CompareRequest request = service().toCompareRequest(config, new RunRequest.Options());
+        assertEquals("file", request.getSource().getType());
+        assertEquals("source.csv", request.getSource().getResource().getName());
+        assertEquals("csv", request.getSource().getReadOptions().getOptions().get("format"));
+    }
+
+    @Test
+    void shouldResolveEnvironmentPlaceholdersWithDefaults() {
+        // 文档写的是 ${env.VAR:默认值}；只认 ${env.VAR} 时服务端会把占位符原样当值传下去
+        Map<String, Object> content = Map.of(
+                "source", Map.of("type", "mysql",
+                        "resource", Map.of("type", "table", "name", "orders"),
+                        "connection", Map.of(
+                                "url", "jdbc:mysql://localhost:3306/db?user=${env.CONSILENS_TEST_USER:app}")),
+                "target", Map.of("type", "mysql",
+                        "resource", Map.of("type", "table", "name", "orders_copy"),
+                        "connection", Map.of("url", "jdbc:mysql://localhost:3306/db")),
+                "comparison", Map.of(
+                        "keys", Map.of("source", List.of("id"), "target", List.of("id")),
+                        "fields", Map.of("source", List.of("name"), "target", List.of("name"))));
+
+        ServerCompareConfig config = service().fromContent(content);
+
+        assertEquals("jdbc:mysql://localhost:3306/db?user=app",
+                config.getSource().getConnection().get("url"));
+    }
+
+    @Test
+    void shouldRejectSinkPathsOutsideTheWorkingDirectory() {
+        // sink 的 path 直接来自 API：绝对路径可以覆盖进程有权限写的任意文件（配置、密钥、别的任务产物）
+        InvalidInputException absolute = assertThrows(InvalidInputException.class,
+                () -> service().fromContent(contentWithSinkPath("/etc/cron.d/evil")));
+        assertTrue(absolute.getMessage().contains("must be relative"));
+
+        InvalidInputException traversal = assertThrows(InvalidInputException.class,
+                () -> service().fromContent(contentWithSinkPath("../../etc/passwd")));
+        assertTrue(traversal.getMessage().contains("must not contain"));
+
+        // 相对路径照常放行
+        ServerCompareConfig relative = service().fromContent(contentWithSinkPath("./output/diff.csv"));
+        assertNotNull(relative.getResult());
+    }
+
+    private Map<String, Object> contentWithSinkPath(String path) {
+        return Map.of(
+                "source", Map.of("type", "file",
+                        "resource", Map.of("type", "file", "name", "source.csv", "format", "csv")),
+                "target", Map.of("type", "file",
+                        "resource", Map.of("type", "file", "name", "target.csv", "format", "csv")),
+                "comparison", Map.of(
+                        "keys", Map.of("source", List.of("id"), "target", List.of("id")),
+                        "fields", Map.of("source", List.of("name"), "target", List.of("name"))),
+                "result", Map.of("sinks", List.of(Map.of(
+                        "format", "csv",
+                        "type", "diff-record",
+                        "properties", Map.of("path", path)))));
+    }
+
+    @Test
+    void shouldCarryCliStrategyBudgetsIntoExecutionOptions() {
+        Map<String, Object> content = Map.of(
+                "source", Map.of("type", "file",
+                        "resource", Map.of("type", "file", "name", "source.csv", "format", "csv")),
+                "target", Map.of("type", "file",
+                        "resource", Map.of("type", "file", "name", "target.csv", "format", "csv")),
+                "comparison", Map.of(
+                        "keys", Map.of("source", List.of("id"), "target", List.of("id")),
+                        "fields", Map.of("source", List.of("name"), "target", List.of("name"))),
+                "strategy", Map.of(
+                        "mode", "checksum",
+                        "maxDurationMs", 60000,
+                        "maxRowsScanned", 500000,
+                        "maxBytesFetched", 1048576));
+
+        ServerCompareConfig config = service().fromContent(content);
+
+        // 预算写在 CLI 的 strategy 块里；不搬过去就等于"设了预算但服务端不执行"
+        assertEquals(60000, ((Number) config.getExecutionOptions().get("maxDurationMs")).intValue());
+        assertEquals(500000, ((Number) config.getExecutionOptions().get("maxRowsScanned")).intValue());
+        assertEquals(1048576, ((Number) config.getExecutionOptions().get("maxBytesFetched")).intValue());
     }
 
     @Test

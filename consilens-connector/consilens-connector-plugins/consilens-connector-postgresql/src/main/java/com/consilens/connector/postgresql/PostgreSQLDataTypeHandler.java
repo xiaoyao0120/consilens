@@ -394,6 +394,11 @@ public class PostgreSQLDataTypeHandler extends BaseDataTypeHandler {
      * <p>TO_CHAR 直接作用于数值列（numeric/double precision 均有重载），不经
      * {@code CAST(... AS DOUBLE PRECISION)}，避免 numeric 列的精度损失。
      */
+    /** 从 {@code 0000} 形态的小数位模式里数出位数。 */
+    private static int decimalDigits(String pattern) {
+        return pattern == null ? 0 : pattern.replaceAll("[^0]", "").length();
+    }
+
     @Override
     protected String normalizeDecimal(String quotedCol) {
         // Get precision from config, default to 4
@@ -407,7 +412,7 @@ public class PostgreSQLDataTypeHandler extends BaseDataTypeHandler {
             String roundFunction = rounding ? "ROUND" : "TRUNC";
             rendered = "TRIM(CAST(" + roundFunction + "(" + quotedCol + ", 0) AS VARCHAR))";
         } else {
-            String formatPattern = "FM999999999999990." + "0".repeat(precision);
+            String formatPattern = decimalFormatMask(precision);
             rendered = rounding
                     ? "TO_CHAR(" + quotedCol + ", '" + formatPattern + "')"
                     : "TO_CHAR(TRUNC(" + quotedCol + ", " + precision + "), '" + formatPattern + "')";
@@ -440,7 +445,7 @@ public class PostgreSQLDataTypeHandler extends BaseDataTypeHandler {
         }
         
         String decimalPattern = "0".repeat(precision);
-        String formatPattern = "FM999999999999990." + decimalPattern;
+        String formatPattern = decimalFormatMask(decimalDigits(decimalPattern));
         
         if (rounding) {
             return "COALESCE(TO_CHAR(CAST(" + quotedCol + " AS DOUBLE PRECISION), '" + formatPattern + "'), '')";

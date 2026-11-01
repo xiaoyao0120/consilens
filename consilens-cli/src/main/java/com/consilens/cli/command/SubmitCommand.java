@@ -1,5 +1,6 @@
 package com.consilens.cli.command;
 
+import picocli.CommandLine;
 import picocli.CommandLine.Command;
 
 /**
@@ -19,6 +20,6 @@ public class SubmitCommand implements Runnable {
 
     @Override
     public void run() {
-        // Picocli renders the command usage when no target is supplied.
+        new CommandLine(this).usage(System.out);
     }
 }

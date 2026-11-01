@@ -96,7 +96,16 @@ const {
   targetColumnOptions,
   ignoreColumnOptions,
   restoreSideSelects,
-} = useDatasourceSides({ planForm, message });
+} = useDatasourceSides({
+  planForm,
+  message,
+  // 换数据源/表后旧列名映射必须失效，否则会以上一张表的列提交
+  onStructureChange: () => {
+    compareForm.keyMappings = [];
+    compareForm.fieldMappings = [];
+    compareForm.ignoreColumns = [];
+  },
+});
 
 const {
   dsModal,
@@ -146,7 +155,7 @@ const defForm = reactive({
   runNow: true,
 });
 
-const { buildConfig, configDisplay, summary } = useDefinitionConfig({
+const { buildConfig, configDisplay, summary, validateMappings } = useDefinitionConfig({
   planForm,
   compareForm,
   advForm,
@@ -257,8 +266,9 @@ async function handleSaveDefinition() {
     message.warning("请填写定义名称");
     return;
   }
-  if (!hasCompleteKeyMapping()) {
-    message.warning("请至少配置一个完整的主键列（源端与目标端都要填写）");
+  const mappingProblem = validateMappings();
+  if (mappingProblem) {
+    message.warning(mappingProblem);
     return;
   }
   submitting.value = true;
@@ -313,8 +323,9 @@ async function goNext() {
       return;
     }
   } else if (currentStep.value === 2) {
-    if (!hasCompleteKeyMapping()) {
-      message.warning("请至少配置一个完整的主键列（源端与目标端都要填写）");
+    const mappingProblem = validateMappings();
+    if (mappingProblem) {
+      message.warning(mappingProblem);
       return;
     }
   }
@@ -324,10 +335,6 @@ async function goNext() {
     loadSideColumns("source");
     loadSideColumns("target");
   }
-}
-
-function hasCompleteKeyMapping() {
-  return compareForm.keyMappings.some((mapping) => mapping.source && mapping.target);
 }
 
 function goPrev() {
@@ -349,7 +356,10 @@ async function initializePage() {
     await loadDatasources();
     await loadForEdit();
   } else {
-    loadDatasources();
+    // 失败要给提示并可重试：静默失败会让第 1 步的数据源下拉永远空白
+    loadDatasources().catch(() => {
+      message.warning("数据源列表加载失败，请刷新页面重试");
+    });
     draftRestored.value = restoreDraft();
     if (draftRestored.value) {
       message.success("已恢复上次未提交的草稿");

@@ -439,7 +439,11 @@ public class YarnClusterSubmitter implements ClusterSubmitter, AutoCloseable {
                                   String descriptorDestination,
                                   String applicationStagingDir) {
         String javaHome = amJavaHomeOrDefault(spec);
-        return javaHome + "/bin/java -server -Xmx" + spec.getAmMemoryMb() + "m -cp \"$PWD:hadoop-conf:"
+        // 堆只占容器内存的 70%：YARN 容器上限同样包含 metaspace/线程栈等非堆开销
+        return javaHome + "/bin/java -server -Xmx"
+                + com.consilens.cluster.api.ClusterSubmissionParameters
+                        .coordinatorHeapMb(spec.getAmMemoryMb())
+                + "m -cp \"$PWD:hadoop-conf:"
                 + runtimeClasspath(spec) + "\" " + AM_MAIN_CLASS
                 + " --coordinator-class " + spec.getAmMainClass()
                 + " --descriptor " + descriptorDestination

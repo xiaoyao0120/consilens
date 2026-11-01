@@ -1,5 +1,6 @@
 package com.consilens.core.compare.executor;
 
+import com.consilens.connector.api.ConnectorException;
 import com.consilens.connector.api.dataset.DatasetHandle;
 import com.consilens.connector.api.dataset.DatasetMetadata;
 import com.consilens.connector.api.dataset.FilterPushdownProvider;
@@ -32,6 +33,7 @@ import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ConnectorRecordDifferTest {
 
@@ -60,6 +62,25 @@ class ConnectorRecordDifferTest {
         assertEquals(1L, result.getStatistics().getMismatchCount());
         assertEquals(3L, result.getStatistics().getTotalDifferences());
         assertEquals(3, result.getDifferences().size());
+    }
+
+    @Test
+    void shouldPropagateBudgetExceededInsteadOfWrappingIt() {
+        CompareSegment source = segment("source_orders", List.of(
+                record("1", "A"),
+                record("2", "B")));
+        CompareSegment target = segment("target_orders", List.of(
+                record("1", "A"),
+                record("2", "B")));
+
+        assertThrows(com.consilens.core.exception.BudgetExceededException.class,
+                () -> new ConnectorRecordDiffer().diff(
+                        source,
+                        target,
+                        CompareExecutionSettings.builder()
+                                .validateUniqueKeys(true)
+                                .maxRowsScanned(1L)
+                                .build()));
     }
 
     @Test
@@ -202,6 +223,22 @@ class ConnectorRecordDifferTest {
     }
 
     @Test
+    void shouldAllowDiffCountAtConfiguredLimit() {
+        CompareSegment source = segment("source_orders", List.of(record("1", "A")));
+        CompareSegment target = segment("target_orders", List.of());
+
+        DiffResult result = new ConnectorRecordDiffer().diff(
+                source,
+                target,
+                CompareExecutionSettings.builder()
+                        .validateUniqueKeys(true)
+                        .maxDifferences(1L)
+                        .build());
+
+        assertEquals(1L, result.getStatistics().getTotalDifferences());
+    }
+
+    @Test
     void shouldFailWhenDiffCountExceedsConfiguredLimit() {
         CompareSegment source = segment("source_orders", List.of(record("1", "A"), record("2", "B")));
         CompareSegment target = segment("target_orders", List.of());
@@ -312,6 +349,36 @@ class ConnectorRecordDifferTest {
 
         assertEquals(0L, result.getStatistics().getTotalDifferences(),
                 "大写元数据列名 + 小写 key 配置不应产生重复列/假差异");
+    }
+
+    @Test
+    void shouldRejectMissingComparisonColumn() {
+        SchemaDescriptor schema = schema(List.of("id", "value"));
+        CompareSegment source = segment("source_orders", schema,
+                ComparisonSpec.builder().fields(List.of("missing")).build(),
+                List.of(record("1", "A")));
+        CompareSegment target = segment("target_orders", schema,
+                ComparisonSpec.builder().fields(List.of("missing")).build(),
+                List.of(record("1", "A")));
+
+        ConnectorException exception = assertThrows(ConnectorException.class,
+                () -> new ConnectorRecordDiffer().diff(source, target,
+                        CompareExecutionSettings.builder().build()));
+        assertTrue(exception.getMessage().contains("not present in the input schema"));
+    }
+
+    @Test
+    void shouldRejectMissingKeyColumn() {
+        SchemaDescriptor schema = schema(List.of("id", "value"));
+        CompareSegment source = segment("source_orders", schema, null,
+                List.of(record("1", "A")), List.of("missing"));
+        CompareSegment target = segment("target_orders", schema, null,
+                List.of(record("1", "A")), List.of("missing"));
+
+        ConnectorException exception = assertThrows(ConnectorException.class,
+                () -> new ConnectorRecordDiffer().diff(source, target,
+                        CompareExecutionSettings.builder().build()));
+        assertTrue(exception.getMessage().contains("not present in the input schema"));
     }
 
     private CompareSegment segment(String tableName,

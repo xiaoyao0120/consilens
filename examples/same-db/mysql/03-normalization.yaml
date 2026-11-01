@@ -62,6 +62,9 @@ normalization:
     float:
       precision: 4
       rounding: false
+      # 数值容差：absolute 与 relative 任一满足即判等（终局本地比较生效）
+      tolerance: 0.01
+      relativeTolerance: 0.001
     date:
       format: yyyy-MM-dd
       comparisonMode: DATE_ONLY
@@ -75,6 +78,7 @@ normalization:
       format: yyyy-MM-dd HH:mm:ss
       timezone: Asia/Shanghai
       comparisonMode: "TRUNCATE_TO_SECOND"
+      sessionTimeZone: "+08:00"
     binary:
       encoding: hex
       uppercase: true
@@ -86,12 +90,19 @@ normalization:
     decimal:
       precision: 2
       rounding: true
+      tolerance: 0.001
+      relativeTolerance: 0.0001
+    timestamp:
+      format: yyyy-MM-dd HH:mm:ss
+      # 会话时区：连接级信息只能挂在某条规则上，core 侧会读它来统一两侧归一化时区
+      sessionTimeZone: "+08:00"
     date:
       format: yyyy-MM-dd
       comparisonMode: DATE_ONLY
     datetime:
       format: yyyy-MM-dd HH:mm:ss
       timezone: Asia/Shanghai
+      sessionTimeZone: "+08:00"
     binary:
       encoding: hex
       uppercase: true
@@ -104,12 +115,15 @@ normalization:
     decimal:
       precision: 2
       rounding: true
+      tolerance: 0.002
+      relativeTolerance: 0.0002
     date:
       format: yyyy-MM-dd
       comparisonMode: DATE_ONLY
     datetime:
       format: yyyy-MM-dd HH:mm:ss
       timezone: Asia/Shanghai
+      sessionTimeZone: "+08:00"
     binary:
       encoding: hex
       uppercase: true
@@ -118,6 +132,12 @@ normalization:
       falseValue: "N"
     varchar:
       nullValue: "<TGT_NULL>"
+
+  # 列级规则：当前只开放数值容差；优先级高于类型级规则，两侧同名列生效
+  columns:
+    price:
+      tolerance: 0.5
+      relativeTolerance: 0.0001
 
 result:
   failOnSinkError: false

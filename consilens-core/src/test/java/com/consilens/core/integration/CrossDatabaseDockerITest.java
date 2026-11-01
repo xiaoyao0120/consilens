@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Cross-database diff integration test using existing Docker databases.
- * Connects to the databases started via docker-compose in /Users/szh/soft/kuanilens/database.
+ * Connects to databases started by the developer's local docker-compose setup.
  *
  * This test verifies that data loaded into different databases can be compared
  * using the ChecksumDiffer.
@@ -42,18 +42,22 @@ class CrossDatabaseDockerITest {
 
     @BeforeAll
     static void setUp() throws Exception {
+        String mysqlPassword = IntegrationCredentials.require("CONSILENS_IT_MYSQL_PASSWORD");
+        String postgresPassword = IntegrationCredentials.require("CONSILENS_IT_POSTGRESQL_PASSWORD");
+        String clickhousePassword = IntegrationCredentials.require("CONSILENS_IT_CLICKHOUSE_PASSWORD");
+
         // MySQL (port 13306)
         mysqlAdapter = TestDatabaseHelper.createAdapter(
                 "mysql-source",
                 "jdbc:mysql://127.0.0.1:13306/consilens_demo?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true",
-                "root", "Kuanilens_MySQL_2026!",
+                "root", mysqlPassword,
                 "mysql", ChecksumAlgorithm.CONCAT);
 
         // PostgreSQL (port 5432)
         postgresAdapter = TestDatabaseHelper.createAdapter(
                 "pg-source",
                 "jdbc:postgresql://127.0.0.1:5432/consilens_demo",
-                "kuanilens", "Kuanilens_PostgreSQL_2026!",
+                "kuanilens", postgresPassword,
                 "postgresql", ChecksumAlgorithm.CONCAT);
 
         // Oracle (port 1521)
@@ -74,7 +78,7 @@ class CrossDatabaseDockerITest {
         clickhouseAdapter = TestDatabaseHelper.createAdapter(
                 "clickhouse-source",
                 "jdbc:clickhouse://127.0.0.1:8123/consilens_demo",
-                "default", "Kuanilens_ClickHouse_2026!",
+                "default", clickhousePassword,
                 "clickhouse", ChecksumAlgorithm.CONCAT);
 
         // Trino (port 8081) - skip validation query as Trino doesn't support SELECT 1

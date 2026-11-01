@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import java.util.Map;
 
@@ -32,5 +33,21 @@ public class CompareExecutionOptions {
 
     private Long maxDifferences;
 
+    /** 墙钟预算（毫秒）；null/非正数表示不限。分段边界与行批次检查。 */
+    private Long maxDurationMs;
+
+    /** 累计扫描行数预算；null/非正数表示不限。在已知取数点累计。 */
+    private Long maxRowsScanned;
+
+    /** 累计取回字节预算；null/非正数表示不限。在已知取数点累计（流式路径不含字节）。 */
+    private Long maxBytesFetched;
+
     private Map<String, Object> attributes;
+
+    /**
+     * Optional progress callback. Runtime-only: never serialized into cluster
+     * tasks or config artifacts.
+     */
+    @JsonIgnore
+    private transient ProgressListener progressListener;
 }

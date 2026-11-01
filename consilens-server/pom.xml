@@ -20,6 +20,8 @@
     <properties>
         <spring.boot.version>2.7.18</spring.boot.version>
         <mybatis-plus.version>3.5.8</mybatis-plus.version>
+        <!-- 服务端可执行包通过 GitHub Release/镜像分发，不发布到 Maven Central -->
+        <maven.deploy.skip>${consilens.deploy.skip.apps}</maven.deploy.skip>
     </properties>
 
     <dependencyManagement>
@@ -43,6 +45,11 @@
         <dependency>
             <groupId>com.consilens</groupId>
             <artifactId>consilens-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.consilens</groupId>
+            <artifactId>consilens-sdk</artifactId>
         </dependency>
 
         <dependency>
@@ -240,10 +247,6 @@
                 </exclusion>
             </exclusions>
         </dependency>
-        <dependency>
-            <groupId>com.fasterxml.jackson.dataformat</groupId>
-            <artifactId>jackson-dataformat-yaml</artifactId>
-        </dependency>
     </dependencies>
 
     <build>
@@ -258,8 +261,37 @@
                 <artifactId>maven-surefire-plugin</artifactId>
             </plugin>
 
+            <!-- Remove stale hashed UI assets before copying the current dist. -->
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <version>3.2.0</version>
+                <executions>
+                    <execution>
+                        <id>clean-ui-static</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>clean</goal>
+                        </goals>
+                        <configuration>
+                            <excludeDefaultDirectories>true</excludeDefaultDirectories>
+                            <filesets>
+                                <fileset>
+                                    <directory>${project.basedir}/src/main/resources/static</directory>
+                                </fileset>
+                                <fileset>
+                                    <directory>${project.build.outputDirectory}/static</directory>
+                                </fileset>
+                            </filesets>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
                 <executions>
                     <execution>
                         <id>copy ui frontend content</id>
@@ -286,9 +318,21 @@
                 <version>${spring.boot.version}</version>
                 <executions>
                     <execution>
+                        <id>repackage</id>
                         <goals>
                             <goal>repackage</goal>
                         </goals>
+                    </execution>
+                    <execution>
+                        <id>build-info</id>
+                        <goals>
+                            <goal>build-info</goal>
+                        </goals>
+                        <configuration>
+                            <!-- 放在 classpath 根：fat jar 中 META-INF/ 会被放在根目录，
+                                 运行时 classloader 不扫描根 META-INF。 -->
+                            <outputFile>${project.build.outputDirectory}/build-info.properties</outputFile>
+                        </configuration>
                     </execution>
                 </executions>
                 <configuration>

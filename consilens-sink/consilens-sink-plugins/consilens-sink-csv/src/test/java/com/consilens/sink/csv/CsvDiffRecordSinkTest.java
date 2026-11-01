@@ -22,6 +22,42 @@ class CsvDiffRecordSinkTest {
     Path tempDir;
 
     @Test
+    void shouldDefuseFormulaLookingCellsButKeepNumbersIntact() throws Exception {
+        Path output = tempDir.resolve("formula.csv");
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("path", output.toString());
+        properties.put("columns", List.of(
+                Map.of("name", "formula", "value", "${src.c1}"),
+                Map.of("name", "number", "value", "${src.c2}"),
+                Map.of("name", "negative", "value", "${src.c3}")));
+
+        SinkConfig config = new SinkConfig();
+        config.setFormat("csv");
+        config.setType("diff-record");
+        config.setProperties(new ObjectMapper().writeValueAsString(properties));
+
+        DiffContext context = DiffContext.builder().taskId("csv-formula").build();
+        DiffRow row = DiffRow.modified(List.of(1),
+                List.of("=cmd|'/c calc'!A1", "42", "-12.5"),
+                List.of("=cmd|'/c calc'!A1", "42", "-12.5"),
+                List.of("c1", "c2", "c3"), List.of("c1", "c2", "c3"));
+
+        CsvDiffRecordSink sink = new CsvDiffRecordSink();
+        try {
+            sink.open(config, context);
+            sink.onDiffRecords(List.of(row), context);
+        } finally {
+            sink.close();
+        }
+
+        String content = new String(Files.readAllBytes(output), StandardCharsets.UTF_8);
+        // 以 = 开头的单元格必须加前导单引号，避免被 Excel 当公式执行
+        assertTrue(content.contains("'=cmd|'/c calc'!A1"), content);
+        // 合法数字（含负数）不能被改写成文本
+        assertTrue(content.contains(",42,-12.5"), content);
+    }
+
+    @Test
     void shouldEscapeHeaderAndQuoteCarriageReturnValues() throws Exception {
         Path output = tempDir.resolve("diff.csv");
         Map<String, Object> properties = new LinkedHashMap<>();

@@ -16,10 +16,26 @@ const props = defineProps({
   showAllColumns: { type: Boolean, default: false },
 });
 
+// NULL 与空串必须可区分：后端把二者判为不同值（`compareValuesInternal` 里 null 与 "" 不等），
+// 前端若都渲染成 ""，用户会看到"两侧都是 ∅ 却标红"，或者反过来以为没差异。
+const NULL_TOKEN = { __null: true };
+
 function formatValue(value) {
-  if (value === null || value === undefined) return "";
+  if (value === null || value === undefined) return NULL_TOKEN;
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function sameValue(left, right) {
+  const a = formatValue(left);
+  const b = formatValue(right);
+  if (a === NULL_TOKEN || b === NULL_TOKEN) return a === b;
+  return a === b;
+}
+
+function valueText(formatted) {
+  if (formatted === NULL_TOKEN) return "NULL";
+  return formatted === "" ? "∅" : formatted;
 }
 
 function opKey(sample) {
@@ -59,7 +75,7 @@ function mismatchChangedIndices(sample) {
   const indices = [];
   const max = Math.max(names.length, source.length, target.length);
   for (let i = 0; i < max; i++) {
-    if (formatValue(source[i]) !== formatValue(target[i])) indices.push(i);
+    if (!sameValue(source[i], target[i])) indices.push(i);
   }
   return indices.filter((i) => i >= 0 && i < names.length);
 }
@@ -99,7 +115,7 @@ function allFieldPairs(sample) {
     name,
     source: formatValue(source[i]),
     target: formatValue(target[i]),
-    diff: formatValue(source[i]) !== formatValue(target[i]),
+    diff: !sameValue(source[i], target[i]),
   }));
 }
 
@@ -133,16 +149,18 @@ function pairOf(row, name) {
 function renderCell(row, name, side) {
   const pair = pairOf(row, name);
   if (!pair) return h("span", { class: "cell-muted" }, "-");
-  const value = side === "source" ? pair.source : pair.target;
-  const empty = value === "";
+  const value = valueText(side === "source" ? pair.source : pair.target);
+  const isNull = value === "NULL";
   const op = row.operationKey;
 
   if (op === "mismatch") {
-    if (!pair.diff) return h("span", { class: "cell-plain" }, empty ? "∅" : value);
+    if (!pair.diff) {
+      return h("span", { class: isNull ? "cell-plain cell-null" : "cell-plain" }, value);
+    }
     return h(
       "span",
-      { class: side === "source" ? "cell-old" : "cell-new" },
-      empty ? "∅" : value
+      { class: [side === "source" ? "cell-old" : "cell-new", isNull ? "cell-null" : ""] },
+      value
     );
   }
   // 新增行展示目标值、删除行展示源值
@@ -150,8 +168,8 @@ function renderCell(row, name, side) {
   if (!hasValue) return h("span", { class: "cell-muted" }, "—");
   return h(
     "span",
-    { class: op === "source_missing" ? "cell-new" : "cell-old" },
-    empty ? "∅" : value
+    { class: [op === "source_missing" ? "cell-new" : "cell-old", isNull ? "cell-null" : ""] },
+    value
   );
 }
 
@@ -312,6 +330,12 @@ function detailRowClass(row) {
   }
 
   :deep(.cell-muted) {
+    color: var(--text-muted);
+  }
+
+  // NULL 与空串在视觉上也要能分开：NULL 用斜体 + 弱色，空串保持 ∅
+  :deep(.cell-null) {
+    font-style: italic;
     color: var(--text-muted);
   }
 

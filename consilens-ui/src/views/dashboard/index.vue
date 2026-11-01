@@ -37,10 +37,21 @@ let trendChart = null;
 let disposed = false;
 
 // KPI 卡下钻入口
-const todayStart = new Date();
-todayStart.setHours(0, 0, 0, 0);
+// "今日"必须和卡片同口径（[今天0点, 明天0点)），而且要在**点击时**才计算：
+// 页面停留跨零点后再点，用模块初始化时的边界会查到昨天。
+function localDayBounds(at = new Date()) {
+  const start = new Date(at);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { startTime: String(start.getTime()), endTime: String(end.getTime()) };
+}
+
+function openTodayInstances() {
+  router.push({ path: "/instances", query: localDayBounds() });
+}
+
 const kpiLinks = {
-  today: { path: "/instances", query: { startTime: String(todayStart.getTime()) } },
   running: {
     path: "/instances",
     // KPI 计数包含待调度/已认领/执行中/取消中，下钻列表必须用同一组状态
@@ -61,15 +72,24 @@ const trendEmpty = computed(() => {
 // ECharts 是 canvas 渲染，解析不了 CSS var()：色值统一来自 common/theme（按主题取具体色值）
 const chartColors = computed(() => paletteFor(appStore.theme));
 
+// 概览加载失败要显式说出来：KPI 会退化成"-"、趋势图空白，
+// 不提示的话用户会以为"今天没有任务"。
+const summaryFailed = ref(false);
+
 async function loadSummary() {
   try {
     const result = await getDashboardSummary();
     if (disposed) return;
     summary.value = result;
+    summaryFailed.value = false;
+  } catch {
+    if (!disposed) summaryFailed.value = true;
   } finally {
     if (!disposed) summaryReady.value = true;
   }
 }
+
+const recentFailed = ref(false);
 
 async function loadRecentTasks() {
   recentLoading.value = true;
@@ -78,6 +98,9 @@ async function loadRecentTasks() {
     const result = await listTaskInstances({ page: 1, pageSize: 5, includeDiffSummary: true });
     if (disposed) return;
     recentTasks.items = result.items || [];
+    recentFailed.value = false;
+  } catch {
+    if (!disposed) recentFailed.value = true;
   } finally {
     if (!disposed) recentLoading.value = false;
   }
@@ -217,8 +240,19 @@ watch(
   }
 );
 
+function reloadAll() {
+  loadSummary().finally(() => {
+    if (disposed) return;
+    renderStatusChart();
+    renderTrendChart();
+  });
+  loadRecentTasks();
+}
+
 onMounted(() => {
-  loadSummary().then(() => {
+  // 失败也要画图：空态由 trendEmpty/statusEmpty 表达，不画会留一片白
+  loadSummary().finally(() => {
+    if (disposed) return;
     renderStatusChart();
     renderTrendChart();
   });
@@ -245,6 +279,17 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <n-alert
+      v-if="summaryFailed || recentFailed"
+      type="error"
+      :bordered="true"
+      class="mt-12"
+      title="概览数据加载失败"
+    >
+      {{ summaryFailed ? "统计与趋势图未能加载" : "最近任务列表未能加载" }}（不是“没有数据”）。
+      <n-button text type="primary" size="small" @click="reloadAll">重试</n-button>
+    </n-alert>
+
     <div class="stats-grid">
       <StatCard
         label="今日任务"
@@ -253,7 +298,7 @@ onBeforeUnmount(() => {
         :icon="TodayOutline"
         icon-color="var(--primary)"
         clickable
-        @click="router.push(kpiLinks.today)"
+        @click="openTodayInstances"
       />
       <StatCard
         label="运行中任务"
@@ -322,6 +367,14 @@ onBeforeUnmount(() => {
         </div>
       </template>
       <SkeletonTable v-if="recentLoading && !recentTasks.items.length" :rows="5" />
+      <EmptyState
+        v-else-if="!recentLoading && recentFailed && !recentTasks.items.length"
+        class="flex-1"
+        title="最近任务加载失败"
+        description="请求出错（不是“没有任务”），可重试"
+      >
+        <n-button size="small" :loading="recentLoading" @click="loadRecentTasks">重试</n-button>
+      </EmptyState>
       <EmptyState
         v-else-if="!recentLoading && !recentTasks.items.length"
         class="flex-1"

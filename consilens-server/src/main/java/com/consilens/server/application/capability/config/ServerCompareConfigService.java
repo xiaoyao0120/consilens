@@ -37,7 +37,13 @@ public class ServerCompareConfigService {
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<Map<String, Object>>() {
     };
 
-    private static final Pattern ENV_PLACEHOLDER = Pattern.compile("\\$\\{env\\.([^}]+)}");
+    /**
+     * 与 CLI 的 {@code EnvironmentPlaceholderResolver} 对齐：支持 {@code ${env.VAR}} 与
+     * {@code ${env.VAR:default}}。以前只认前者，文档里写了默认值写法的地方在服务端会原样把
+     * 占位符当值传下去（连库时报"未知的 URL"）。
+     */
+    private static final Pattern ENV_PLACEHOLDER =
+            Pattern.compile("\\$\\{env\\.([A-Za-z_][A-Za-z0-9_]*)(?::([^}]*))?}");
 
     private final ArtifactService artifactService;
     private final ObjectMapper objectMapper;
@@ -171,8 +177,14 @@ public class ServerCompareConfigService {
         if (content instanceof String) {
             return parse((String) content);
         }
-        ServerCompareConfig config = objectMapper.convertValue(content, ServerCompareConfig.class);
-        applyTopLevelNormalization(config, content instanceof Map ? (Map<String, Object>) content : Map.of());
+        // Submission normalizes YAML/JSON strings to Maps before execution, so
+        // the CLI-shaped config check must also run for Maps.
+        Map<String, Object> raw = resolveEnvironment(mapFrom(content));
+        if (isCliConfig(raw)) {
+            return fromCliConfig(raw);
+        }
+        ServerCompareConfig config = objectMapper.convertValue(raw, ServerCompareConfig.class);
+        applyTopLevelNormalization(config, raw);
         validate(config);
         return config;
     }
@@ -208,12 +220,21 @@ public class ServerCompareConfigService {
         }
     }
 
+    /** File sources resolve paths locally and do not need a connection block. */
+    private boolean requiresConnection(EndpointConfig endpoint) {
+        return endpoint != null && !"file".equalsIgnoreCase(endpoint.getType());
+    }
+
     public CompareRequest toCompareRequest(ServerCompareConfig config, RunRequest.Options options) {
         validate(config);
-        if (config.getSource().getConnection() == null || config.getSource().getConnection().isEmpty()) {
+        if (requiresConnection(config.getSource())
+                && (config.getSource().getConnection() == null
+                || config.getSource().getConnection().isEmpty())) {
             throw new InvalidInputException("config.source.connection is required for non-dry-run execution");
         }
-        if (config.getTarget().getConnection() == null || config.getTarget().getConnection().isEmpty()) {
+        if (requiresConnection(config.getTarget())
+                && (config.getTarget().getConnection() == null
+                || config.getTarget().getConnection().isEmpty())) {
             throw new InvalidInputException("config.target.connection is required for non-dry-run execution");
         }
         KeySpec keys = KeySpec.builder().fields(normalizedStrings(config.getKeys())).build();
@@ -272,10 +293,13 @@ public class ServerCompareConfigService {
             return null;
         }
         NormalizationConfig normalization = comparison.getNormalization();
-        return com.consilens.connector.api.normalization.NormalizationSpecs.fromTypeRules(
-                ruleMaps(normalization.getGlobal()),
-                ruleMaps(normalization.getSource()),
-                ruleMaps(normalization.getTarget()));
+        com.consilens.connector.api.normalization.NormalizationSpec spec =
+                com.consilens.connector.api.normalization.NormalizationSpecs.fromTypeRules(
+                        ruleMaps(normalization.getGlobal()),
+                        ruleMaps(normalization.getSource()),
+                        ruleMaps(normalization.getTarget()));
+        return com.consilens.connector.api.normalization.NormalizationSpecs.withColumnRules(
+                spec, ruleMaps(normalization.getColumns()));
     }
 
     private Map<String, Map<String, Object>> ruleMaps(Map<String, TypeNormalizationRule> rules) {
@@ -299,6 +323,9 @@ public class ServerCompareConfigService {
             putIfPresent(fields, "trueValue", rule.getTrueValue());
             putIfPresent(fields, "falseValue", rule.getFalseValue());
             putIfPresent(fields, "nullValue", rule.getNullValue());
+            putIfPresent(fields, "tolerance", rule.getTolerance());
+            putIfPresent(fields, "relativeTolerance", rule.getRelativeTolerance());
+            putIfPresent(fields, "sessionTimeZone", rule.getSessionTimeZone());
             result.put(entry.getKey(), fields);
         }
         return result;
@@ -348,6 +375,10 @@ public class ServerCompareConfigService {
             raw = yamlMapper.readValue(content, MAP_TYPE);
         } catch (JsonProcessingException exception) {
             throw new InvalidInputException("configContent is not valid YAML or JSON");
+        }
+        if (raw == null) {
+            // 只有注释或字面量 null 的文档会被解析成 null：这是非法输入，不是 500
+            throw new InvalidInputException("configContent does not contain a YAML/JSON object");
         }
 
         if (isCliConfig(raw)) {
@@ -441,6 +472,10 @@ public class ServerCompareConfigService {
         putIfPresent(executionOptions, "validateUniqueKeys", strategy.get("validateUniqueKeys"));
         putIfPresent(executionOptions, "allowNullableKeys", strategy.get("allowNullableKeys"));
         putIfPresent(executionOptions, "maxDifferences", strategy.get("maxDifferences"));
+        // 预算三个键同样在 CLI 的 strategy 块里，漏搬等于"设了预算但服务端不执行"
+        putIfPresent(executionOptions, "maxDurationMs", strategy.get("maxDurationMs"));
+        putIfPresent(executionOptions, "maxRowsScanned", strategy.get("maxRowsScanned"));
+        putIfPresent(executionOptions, "maxBytesFetched", strategy.get("maxBytesFetched"));
         putIfPresent(executionOptions, "localCompareMode", mapFrom(strategy.get("localCompare")).get("mode"));
 
         Map<String, Object> keysMap = mapFrom(comparison.get("keys"));
@@ -519,11 +554,29 @@ public class ServerCompareConfigService {
         Map<String, Object> resource = mapFrom(endpoint.get("resource"));
         String resourceType = string(resource.get("type"));
         String resourceName = string(resource.get("name"));
+        if (isBlank(resourceName)) {
+            resourceName = string(resource.get("path"));
+        }
         String query = string(resource.get("query"));
         if (isBlank(query) && "sql".equals(resourceType)) {
             query = resourceName;
         }
-        String table = isBlank(resourceType) || "table".equals(resourceType) ? resourceName : null;
+        String table = isBlank(resourceType) || "table".equals(resourceType)
+                || "file".equals(resourceType) ? resourceName : null;
+        Map<String, Object> readOptions = mapFrom(endpoint.get("readOptions"));
+        if ("file".equals(resourceType)) {
+            // CLI file options (format, delimiter, hasHeader, ...) live on the
+            // resource; expose them through ReadOptions so the file connector
+            // sees the same format/delimiter as a CLI run.
+            Map<String, Object> options = new LinkedHashMap<>(mapFrom(readOptions.get("options")));
+            for (Map.Entry<String, Object> entry : resource.entrySet()) {
+                String key = entry.getKey();
+                if (!"type".equals(key) && !"name".equals(key) && !"path".equals(key)) {
+                    options.putIfAbsent(key, entry.getValue());
+                }
+            }
+            readOptions.put("options", options);
+        }
         Map<String, Object> filters = mapFrom(comparison.get("filters"));
         return EndpointConfig.builder()
                 .type(string(endpoint.get("type")))
@@ -531,7 +584,7 @@ public class ServerCompareConfigService {
                 .query(query)
                 .filter(string(filters.get(side)))
                 .connection(mapFrom(endpoint.get("connection")))
-                .readOptions(mapFrom(endpoint.get("readOptions")))
+                .readOptions(readOptions)
                 .build();
     }
 
@@ -550,11 +603,69 @@ public class ServerCompareConfigService {
         if (value == null) {
             return new ResultConfig();
         }
+        ResultConfig config;
         try {
-            return objectMapper.convertValue(value, ResultConfig.class);
+            config = objectMapper.convertValue(value, ResultConfig.class);
         } catch (IllegalArgumentException exception) {
             throw new InvalidInputException("config.result is not valid");
         }
+        rejectUnsafeSinkPaths(config);
+        return config;
+    }
+
+    /**
+     * 服务端不接受"写到任意位置"的 sink 输出路径。
+     *
+     * <p>sink 的 {@code properties.path} 直接来自 API 请求，绝对路径或含 {@code ..} 的路径
+     * 可以让调用方覆盖进程有权限写的任意文件（配置、密钥、其它任务的产物）。相对路径仍然允许，
+     * 它落在服务进程自己的工作目录下。
+     */
+    private void rejectUnsafeSinkPaths(ResultConfig config) {
+        if (config == null || config.getSinks() == null) {
+            return;
+        }
+        for (com.consilens.sink.api.model.SinkConfig sink : config.getSinks()) {
+            if (sink == null || sink.getProperties() == null || sink.getProperties().isBlank()) {
+                continue;
+            }
+            String path;
+            try {
+                com.fasterxml.jackson.databind.JsonNode node =
+                        objectMapper.readTree(sink.getProperties());
+                com.fasterxml.jackson.databind.JsonNode pathNode = node.path("path");
+                path = pathNode.isMissingNode() || pathNode.isNull() ? null : pathNode.asText();
+            } catch (com.fasterxml.jackson.core.JsonProcessingException exception) {
+                // properties 不是 JSON：由 sink 自己的解析报错，这里只兜住能解析的形态
+                continue;
+            }
+            if (path == null || path.isBlank()) {
+                continue;
+            }
+            String problem = unsafePathProblem(path);
+            if (problem != null) {
+                throw new InvalidInputException("result.sinks[].properties.path " + problem
+                        + "; use a path relative to the server working directory");
+            }
+        }
+    }
+
+    private String unsafePathProblem(String path) {
+        java.nio.file.Path resolved;
+        try {
+            resolved = java.nio.file.Paths.get(path);
+        } catch (java.nio.file.InvalidPathException exception) {
+            return "is not a valid path: " + path;
+        }
+        if (resolved.isAbsolute() || path.startsWith("/") || path.startsWith("\\")
+                || path.matches("^[A-Za-z]:.*")) {
+            return "must be relative, got: " + path;
+        }
+        for (java.nio.file.Path segment : resolved) {
+            if ("..".equals(segment.toString())) {
+                return "must not contain '..', got: " + path;
+            }
+        }
+        return null;
     }
 
     @SuppressWarnings("unchecked")
@@ -592,9 +703,16 @@ public class ServerCompareConfigService {
         matcher.reset();
         StringBuffer resolved = new StringBuffer();
         while (matcher.find()) {
-            String replacement = System.getenv(matcher.group(1));
+            String variableName = matcher.group(1);
+            String defaultValue = matcher.group(2);
+            String replacement = System.getenv(variableName);
             if (replacement == null) {
-                replacement = matcher.group(0);
+                if (defaultValue == null) {
+                    // 没默认值也不猜：留着占位符比悄悄用空串安全（下游报错能看到原样内容）
+                    replacement = matcher.group(0);
+                } else {
+                    replacement = defaultValue;
+                }
             }
             matcher.appendReplacement(resolved, Matcher.quoteReplacement(replacement));
         }
@@ -671,6 +789,9 @@ public class ServerCompareConfigService {
                 .validateUniqueKeys(booleanValue(merged.get("validateUniqueKeys")))
                 .allowNullableKeys(booleanValue(merged.get("allowNullableKeys")))
                 .maxDifferences(longValue(merged.get("maxDifferences")))
+                .maxDurationMs(longValue(merged.get("maxDurationMs")))
+                .maxRowsScanned(longValue(merged.get("maxRowsScanned")))
+                .maxBytesFetched(longValue(merged.get("maxBytesFetched")))
                 .attributes(merged.isEmpty() ? null : merged)
                 .build();
     }

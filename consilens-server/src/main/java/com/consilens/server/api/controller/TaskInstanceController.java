@@ -122,18 +122,26 @@ public class TaskInstanceController {
                 runLogService.read(taskId, offset, tailLines, limit), traceId));
     }
 
-    /** 下载完整运行日志文件。 */
+    /**
+     * 下载完整运行日志文件。
+     *
+     * <p>用 {@code FileSystemResource} 流式返回：日志文件可能有几十 MB，整份读进堆再去响应
+     * 既浪费内存也会把并发下载变成 OOM 的入口。
+     */
     @GetMapping("/{taskId}/logs/download")
-    public ResponseEntity<byte[]> downloadLog(
+    public ResponseEntity<org.springframework.core.io.Resource> downloadLog(
             @PathVariable @Pattern(regexp = ApiValidationRules.SAFE_ID_PATTERN) String taskId) {
         RunLogService.LogFile file = runLogService.download(taskId);
+        org.springframework.core.io.Resource body = file.getPath() == null
+                ? new org.springframework.core.io.ByteArrayResource(new byte[0])
+                : new org.springframework.core.io.FileSystemResource(file.getPath());
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
                         .filename(file.getFileName(), StandardCharsets.UTF_8)
                         .build()
                         .toString())
                 .contentType(MediaType.TEXT_PLAIN)
-                .body(file.getContent());
+                .body(body);
     }
 
     @GetMapping("/{taskId}")

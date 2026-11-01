@@ -35,6 +35,7 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
     private final AtomicLong targetMissingCount = new AtomicLong(0);
     private final AtomicLong mismatchCount = new AtomicLong(0);
     private final AtomicLong segmentSequence = new AtomicLong(0);
+    private final BudgetGuard budgetGuard;
 
     public JoinDiffer(DifferConfig config, JoinDifferOptions options) {
         this(config, options, null);
@@ -46,6 +47,8 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
                 executorProvider == null);
         this.validateUniqueKeys = options.isValidateUniqueKeys();
         this.performanceMonitor = new JoinPerformanceMonitor();
+        this.budgetGuard = new BudgetGuard(config.getMaxDurationMs(), config.getMaxRowsScanned(),
+                config.getMaxBytesFetched());
     }
 
     @Override
@@ -145,6 +148,10 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
                         log.warn("JoinDiff refused: {}", cause.getMessage());
                         throw (ConnectorException) cause;
                     }
+                    if (cause instanceof com.consilens.core.exception.BudgetExceededException) {
+                        // 预算拒绝必须原样上抛：上层据此标成"结果不完整、不可重试"
+                        throw (com.consilens.core.exception.BudgetExceededException) cause;
+                    }
                     log.error("JoinDiff failed", e);
                     throw new RuntimeException("JoinDiff failed", e);
                 });
@@ -197,9 +204,22 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
                 log.warn("JoinDiff key bounds unavailable; keeping single-pass join");
                 return JoinBounds.unbounded(table1, table2);
             }
+            if (TableDiffer.mayContainNullKeys(table1) || TableDiffer.mayContainNullKeys(table2)) {
+                // 区间谓词对 NULL 行恒为 UNKNOWN：可空键存在 NULL 时先不分段，
+                // 保持单条 join（至少不会把 NULL 键行排除在所有分段之外）。
+                log.warn("JoinDiff nullable keys present; keeping single-pass join so NULL keys stay in scope");
+                return JoinBounds.unbounded(table1, table2);
+            }
             TableSegment bounded1 = withBounds(table1, bounds1.getMinKey(), bounds1.getMaxKey(), true);
             TableSegment bounded2 = withBounds(table2, bounds2.getMinKey(), bounds2.getMaxKey(), true);
             long maxRows = Math.max(bounds1.getCount(), bounds2.getCount());
+            // 空表或整侧被过滤掉时 MIN/MAX 为空，段依然"无边界"；此时必须回退单段，
+            // 否则 diffSegments 会在 level=0 反复进入本方法（无限递归 + 反复发 COUNT/边界查询）。
+            if (!bounded1.isBounded() || !bounded2.isBounded()) {
+                log.warn("JoinDiff key bounds unusable (empty or fully filtered side); "
+                        + "keeping single-pass join");
+                return JoinBounds.unbounded(table1, table2);
+            }
             log.info("JoinDiff bounds: table1 count={} min={} max={}, table2 count={} min={} max={}",
                     bounds1.getCount(), bounds1.getMinKey(), bounds1.getMaxKey(),
                     bounds2.getCount(), bounds2.getMinKey(), bounds2.getMaxKey());
@@ -373,7 +393,7 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
 
         // Execute all join operations in parallel
         // Execute all supporting queries alongside the main diff query so the segment finishes in one pass.
-        CompletableFuture<Void> statsFuture = collectStatistics(database, segmentPlan, segmentId, infoTreeRecorder);
+        CompletableFuture<long[]> statsFuture = collectStatistics(database, segmentPlan, segmentId, infoTreeRecorder);
 
         // Main join execution
         CompletableFuture<List<Object[]>> diffFuture = CompletableFuture.supplyAsync(
@@ -395,8 +415,15 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
                         int diffCount = processDiffResults(differences, segmentPlan, segmentId, infoTreeRecorder);
                         infoTreeRecorder.addRowsFetched(segmentId, differences.size());
                         infoTreeRecorder.addQueryCount(segmentId, 1);
+                        // 预算要按"扫过的行数"累计：join 输出的差异行数在内容一致的大表上是 0，
+                        // 永远触发不了 maxRowsScanned。statsFuture 里是两侧真实行数。
+                        long[] counts = statsFuture.getNow(new long[]{0L, 0L});
+                        budgetGuard.addRowsScanned(Math.max(0L, counts[0]) + Math.max(0L, counts[1]));
                         performanceMonitor.recordSegmentResults(segmentId, diffCount);
                     } catch (Exception e) {
+                        if (e instanceof com.consilens.core.exception.BudgetExceededException) {
+                            throw (com.consilens.core.exception.BudgetExceededException) e;
+                        }
                         log.error("Failed to process diff results for segment: {}", segmentId, e);
                         throw new RuntimeException("Failed to process diff results", e);
                     } finally {
@@ -713,35 +740,93 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
     /**
      * Collect statistics.
      */
-    private CompletableFuture<Void> collectStatistics(DatabaseAdapter database, JoinQueryPlan queryPlan,
+    private CompletableFuture<long[]> collectStatistics(DatabaseAdapter database, JoinQueryPlan queryPlan,
             String segmentId, InfoTreeRecorder infoTreeRecorder) {
-        return CompletableFuture.runAsync(() -> {
+        return CompletableFuture.supplyAsync(() -> {
+            long[] counts = new long[]{0L, 0L};
             try {
                 List<Object[]> stats = database.query(queryPlan.getCountQuery(), Object[].class);
                 if (!stats.isEmpty()) {
                     Object[] statRow = stats.get(0);
                     performanceMonitor.recordStatistics(segmentId, statRow);
+                    Long statsSource = statRow.length >= 5 ? toCount(statRow[0]) : null;
+                    Long statsTarget = statRow.length >= 5 ? toCount(statRow[1]) : null;
                     if (statRow.length >= 5
-                            && statRow[0] instanceof Number
-                            && statRow[1] instanceof Number
-                            && statRow[2] instanceof Number
-                            && statRow[3] instanceof Number
-                            && statRow[4] instanceof Number) {
-                        long sourceCount = ((Number) statRow[0]).longValue();
-                        long targetCount = ((Number) statRow[1]).longValue();
-                        long sourceMissing = ((Number) statRow[2]).longValue();
-                        long targetMissing = ((Number) statRow[3]).longValue();
-                        long mismatch = ((Number) statRow[4]).longValue();
+                            && statsSource != null && statsTarget != null
+                            && toCount(statRow[2]) != null
+                            && toCount(statRow[3]) != null
+                            && toCount(statRow[4]) != null) {
+                        long sourceCount = statsSource;
+                        long targetCount = statsTarget;
+                        counts[0] = sourceCount;
+                        counts[1] = targetCount;
                         infoTreeRecorder.recordCounts(segmentId, sourceCount, targetCount);
-                        infoTreeRecorder.addDiffCounts(segmentId,
-                                sourceMissing + targetMissing + mismatch,
-                                sourceMissing, targetMissing, mismatch);
+                        // 差异计数只由 processDiffResults（明细行）写入，与 ChecksumDiffer 一致。
+                        // 这里再写一次会让同一段的 diffCount/totalDifferences 翻倍：
+                        // 统计 SQL 与明细 SQL 描述的是同一批差异。
+                        long sourceMissing = toCount(statRow[2]);
+                        long targetMissing = toCount(statRow[3]);
+                        long mismatch = toCount(statRow[4]);
+                        log.debug("Join segments stats for {}: sourceMissing={}, targetMissing={}, mismatch={}",
+                                segmentId, sourceMissing, targetMissing, mismatch);
+                    } else {
+                        // 统计行存在但取不出 5 个数字（例如 SUM 全为 NULL、驱动给出非数值类型）：
+                        // 静默保留 {0,0} 会让"行数预算"永远累计 0、匹配分的分母变 0，
+                        // 报告会给出"100 分 / 无差异"。这种情况必须显式失败。
+                        throw new IllegalStateException("Row statistics for segment " + segmentId
+                                + " could not be read as five numbers (got "
+                                + java.util.Arrays.toString(statRow)
+                                + " of types " + java.util.Arrays.stream(statRow)
+                                        .map(v -> v == null ? "null" : v.getClass().getSimpleName())
+                                        .collect(java.util.stream.Collectors.joining(","))
+                                + "); row counts and the match score would be meaningless");
                     }
                 }
             } catch (Exception e) {
-                log.warn("Error collecting statistics for segment: {}", segmentId, e);
+                // 不能吞成 0：行数统计是报告里"差异占比/匹配分"的分母，0 行会被读成
+                // "两侧都空、100 分 EXCELLENT"。这里必须让本次比对按失败结束，并说清是哪一侧。
+                throw new IllegalStateException("Failed to count rows for segment " + segmentId
+                        + "; row counts and the match score would be meaningless without them", e);
             }
+            return counts;
         }, executorProvider.getIoExecutor());
+    }
+
+    /**
+     * 统计行的数值转换。
+     *
+     * <p>不能只认 {@code instanceof Number}：MySQL 的 {@code SUM()} 经驱动/适配层后可能拿到
+     * 字符串形态的数字，早先这种行会被整段丢弃，行数停在 {@code {0,0}}——于是
+     * ① 行数预算永远累计 0（join 模式下 maxRowsScanned 形同不存在）；
+     * ② 匹配分的分母变 0，报告给出"100 分 / 无差异"。
+     */
+    /**
+     * 统计行取数：SQL 的 {@code SUM()} 在空结果集上返回 {@code NULL}，这表示"没有行"而不是"读不懂"，
+     * 因此按 0 处理（两侧都是空表时应当得出 0 处差异，而不是失败）。
+     *
+     * <p>只有"有值但解析不出来"才返回 {@code null}，交给调用方按统计不可用失败。
+     */
+    static Long toCount(Object value) {
+        // 注意三元里不要混 long/Long：long 分支会让另一侧自动拆箱，toLong 返回 null 时直接 NPE
+        return value == null ? Long.valueOf(0L) : toLong(value);
+    }
+
+    static Long toLong(Object value) {
+        if (value instanceof Number) {
+            return ((Number) value).longValue();
+        }
+        if (value instanceof CharSequence) {
+            String text = value.toString().trim();
+            if (text.isEmpty()) {
+                return 0L;
+            }
+            try {
+                return new java.math.BigDecimal(text).longValue();
+            } catch (NumberFormatException exception) {
+                return null;
+            }
+        }
+        return null;
     }
 
     /**
@@ -1058,11 +1143,19 @@ public class JoinDiffer extends TableDiffer implements AutoCloseable {
             if (statRow == null || statRow.length < 5) {
                 return;
             }
-            metrics.put(segmentId + "_source_count", statRow[0]);
-            metrics.put(segmentId + "_target_count", statRow[1]);
-            metrics.put(segmentId + "_source_missing", statRow[2]);
-            metrics.put(segmentId + "_target_missing", statRow[3]);
-            metrics.put(segmentId + "_mismatch", statRow[4]);
+            // ConcurrentHashMap 不接受 null：空表时 SUM() 全是 NULL，直接 put 会在 putVal 里 NPE
+            //（表现为"两侧都是空表"的比对直接失败）。空值就是"没有数据"，跳过即可。
+            putIfPresent(segmentId, "source_count", statRow[0]);
+            putIfPresent(segmentId, "target_count", statRow[1]);
+            putIfPresent(segmentId, "source_missing", statRow[2]);
+            putIfPresent(segmentId, "target_missing", statRow[3]);
+            putIfPresent(segmentId, "mismatch", statRow[4]);
+        }
+
+        private void putIfPresent(String segmentId, String name, Object value) {
+            if (value != null) {
+                metrics.put(segmentId + "_" + name, value);
+            }
         }
 
         public void recordSegmentResults(String segmentId, int differenceCount) {

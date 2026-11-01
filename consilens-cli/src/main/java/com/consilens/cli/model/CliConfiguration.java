@@ -8,6 +8,7 @@ import com.consilens.connector.api.DatabaseDialects;
 import com.consilens.core.thread.ConcurrencyConfig;
 import com.consilens.core.validation.ValidationException;
 import com.consilens.core.validation.ValidationFramework;
+import com.consilens.sink.api.SinkRegistry;
 import com.consilens.sink.api.model.ResultConfig;
 import com.consilens.sink.api.model.SinkConfig;
 import com.consilens.sink.table.TableColumnNames;
@@ -25,7 +26,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -232,10 +232,10 @@ public class CliConfiguration {
 
     public void validate() throws ValidationException {
         ValidationFramework.forContext("CLI配置")
-                .validate(source, "source", Objects::nonNull, "source 配置不能为空")
-                .validate(target, "target", Objects::nonNull, "target 配置不能为空")
-                .validate(comparison, "comparison", Objects::nonNull, "comparison 配置不能为空")
-                .validate(strategy, "strategy", Objects::nonNull, "strategy 配置不能为空")
+                .required(source, "source", "source 配置不能为空")
+                .required(target, "target", "target 配置不能为空")
+                .required(comparison, "comparison", "comparison 配置不能为空")
+                .required(strategy, "strategy", "strategy 配置不能为空")
                 .throwIfInvalid();
 
         source.validate("source");
@@ -253,9 +253,32 @@ public class CliConfiguration {
         if (result == null || result.getSinks() == null) {
             return;
         }
+        SinkRegistry registry = new SinkRegistry();
         for (int i = 0; i < result.getSinks().size(); i++) {
             SinkConfig sink = result.getSinks().get(i);
-            if (sink == null || !"table".equalsIgnoreCase(sink.getFormat())) {
+            if (sink == null) {
+                throw ValidationException.simple("CONFIGURATION_VALIDATION",
+                        "result.sinks[" + i + "] 不能为空");
+            }
+            if (!sink.isEnabled()) {
+                continue;
+            }
+            String format = sink.getFormat();
+            String type = sink.getType();
+            if (format == null || format.isBlank()) {
+                throw ValidationException.simple("CONFIGURATION_VALIDATION",
+                        "result.sinks[" + i + "].format 不能为空");
+            }
+            if (type == null || type.isBlank()) {
+                throw ValidationException.simple("CONFIGURATION_VALIDATION",
+                        "result.sinks[" + i + "].type 不能为空");
+            }
+            if (!registry.supports(format, type)) {
+                throw ValidationException.simple("CONFIGURATION_VALIDATION",
+                        "result.sinks[" + i + "] has no SinkProvider for format=" + format
+                                + ", type=" + type + "; available: " + registry.availableKeys());
+            }
+            if (!"table".equalsIgnoreCase(format)) {
                 continue;
             }
             TableSinkConfig tableSinkConfig = parseTableSinkConfig(i, sink);

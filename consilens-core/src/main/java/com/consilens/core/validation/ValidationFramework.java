@@ -152,6 +152,22 @@ public class ValidationFramework {
     }
 
     /**
+     * Require a non-null value. Unlike {@link #validate(Object, String, Predicate, String)},
+     * this also fails when the value is null, so callers can report a field-specific
+     * message instead of dereferencing null afterwards.
+     * @param value value to validate
+     * @param fieldName field name
+     * @param errorMessage error message if the value is null
+     * @return this instance for chaining
+     */
+    public ValidationFramework required(Object value, String fieldName, String errorMessage) {
+        if (value == null) {
+            addError(fieldName, errorMessage);
+        }
+        return this;
+    }
+
+    /**
      * Validate HTTP/HTTPS URL format.
      * @param url URL to validate
      * @param fieldName field name

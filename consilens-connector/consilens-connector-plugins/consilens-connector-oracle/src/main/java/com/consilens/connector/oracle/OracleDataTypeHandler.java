@@ -253,10 +253,11 @@ public class OracleDataTypeHandler extends BaseDataTypeHandler {
         // If precision is 0, return integer format without decimal point
         if (precision == 0) {
             String roundFunction = rounding ? "ROUND" : "TRUNC";
-            return "COALESCE(TRIM(TO_CHAR(" + roundFunction + "(" + quotedCol + ", 0), 'FM999999999999990')), '')";
+            return "COALESCE(TRIM(TO_CHAR(" + roundFunction + "(" + quotedCol + ", 0), '"
+                    + decimalFormatMask(0).replace(".", "") + "')), '')";
         }
 
-        String formatPattern = "FM999999999999990." + "0".repeat(precision);
+        String formatPattern = decimalFormatMask(precision);
 
         if (rounding) {
             // Round half up: apply ROUND then format
@@ -282,10 +283,11 @@ public class OracleDataTypeHandler extends BaseDataTypeHandler {
         // If precision is 0, return integer format without decimal point
         if (precision == 0) {
             String roundFunction = rounding ? "ROUND" : "TRUNC";
-            return "COALESCE(TRIM(TO_CHAR(" + roundFunction + "(CAST(" + quotedCol + " AS BINARY_DOUBLE), 0), 'FM999999999999990')), '')";
+            return "COALESCE(TRIM(TO_CHAR(" + roundFunction + "(CAST(" + quotedCol
+                    + " AS BINARY_DOUBLE), 0), '" + decimalFormatMask(0).replace(".", "") + "')), '')";
         }
 
-        String formatPattern = "FM999999999999990." + "0".repeat(precision);
+        String formatPattern = decimalFormatMask(precision);
 
         if (rounding) {
             // Round half up: apply ROUND then format

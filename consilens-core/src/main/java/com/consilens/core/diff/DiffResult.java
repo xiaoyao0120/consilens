@@ -23,6 +23,12 @@ import java.util.stream.Collectors;
 public class DiffResult {
 
     /**
+     * Additive result/artifact schema version. Bumped only for breaking changes
+     * to field meaning or required fields.
+     */
+    public static final int RESULT_SCHEMA_VERSION = 1;
+
+    /**
      * List of differences found.
      */
     private List<DiffRow> differences;
@@ -31,6 +37,29 @@ public class DiffResult {
      * Statistics about the diff operation.
      */
     private DiffStatistics statistics;
+
+    /**
+     * Per-column statistics accumulated from the complete run result.
+     * Empty when the caller did not request column stats or the result was not post-processed.
+     */
+    @Builder.Default
+    private List<ColumnStats> columnStats = Collections.emptyList();
+
+    /**
+     * Structured schema compatibility report produced by the validation phase.
+     * Null for results created outside the standard TableDiffer flow.
+     */
+    private SchemaCompatibility schemaCompatibility;
+
+    /**
+     * Reproducibility fingerprint (safe configuration + engine version).
+     */
+    private RunFingerprint fingerprint;
+
+    /**
+     * Execution evidence derived from the existing InfoTree/metadata.
+     */
+    private DiffEvidence evidence;
 
     /**
      * Information tree tracking the diff process.

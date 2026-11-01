@@ -327,6 +327,8 @@ class RunTaskHandlerTest {
         Map<String, Object> content = handler.runResult(diffResult);
 
         assertThat(content.get("differenceCount")).isEqualTo(2500L);
+        assertThat(content.get("resultSchemaVersion"))
+                .isEqualTo(DiffResult.RESULT_SCHEMA_VERSION);
         assertThat(content.get("differenceSampleSize")).isEqualTo(1000);
         assertThat(content.get("differenceSampleTruncated")).isEqualTo(Boolean.TRUE);
         assertThat((List<?>) content.get("differences")).hasSize(1000);
@@ -648,5 +650,21 @@ class RunTaskHandlerTest {
         assertThat(handler.parseClusterStatistics(null)).isEmpty();
         assertThat(handler.parseClusterStatistics("not-json")).isEmpty();
         assertThat(handler.parseClusterStatistics("{\"submissionId\":\"s-1\"}")).isEmpty();
+    }
+
+    @Test
+    void deterministicFailuresAreNotRetryable() {
+        // 语法错/权限/约束/缺表：重跑一遍结论还是不变，不该占用集群重试
+        assertThat(RunTaskHandler.isRetryable(new java.sql.SQLSyntaxErrorException("bad sql",
+                "42000"))).isFalse();
+        assertThat(RunTaskHandler.isRetryable(new java.sql.SQLIntegrityConstraintViolationException(
+                "dup key", "23000"))).isFalse();
+        assertThat(RunTaskHandler.isRetryable(new IllegalArgumentException("bad config"))).isFalse();
+        assertThat(RunTaskHandler.isRetryable(new RuntimeException("wrapped",
+                new java.sql.SQLException("access denied", "42501")))).isFalse();
+        // 连接中断/超时仍然可重试
+        assertThat(RunTaskHandler.isRetryable(new java.sql.SQLException("connection reset", "08S01")))
+                .isTrue();
+        assertThat(RunTaskHandler.isRetryable(new RuntimeException("timeout"))).isTrue();
     }
 }

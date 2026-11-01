@@ -87,7 +87,9 @@ public class ConsilensServerClient {
                 .header("Content-Type", "application/json")
                 .header("X-Trace-Id", newTraceId());
         if (serverApiKey != null && !serverApiKey.isBlank()) {
-            builder.header("X-Api-Key", serverApiKey);
+            // 必须与服务端 ApiKeyAuthenticationFilter 读取的请求头一致，
+            // 否则默认安全配置下 MCP 的每个请求都会 401。
+            builder.header("X-Consilens-Api-Key", serverApiKey);
         }
         return builder;
     }

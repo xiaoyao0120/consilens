@@ -7,9 +7,43 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NormalizationSpecsTest {
+
+    @Test
+    void acceptsSessionTimeZoneOnFormatDatetimeRules() {
+        NormalizationSpec spec = NormalizationSpec.builder()
+                .global(List.of(rule("format_datetime", Map.of(
+                        "format", "yyyy-MM-dd HH:mm:ss",
+                        "sessionTimeZone", "+08:00"))))
+                .build();
+
+        // The documented sessionTimeZone knob must pass validation; otherwise
+        // CompareExecutionSettings can never read it from a rule.
+        new DefaultNormalizationSpecValidator().validate(spec);
+    }
+
+    @Test
+    void rejectsUnknownFormatDatetimeParameter() {
+        NormalizationSpec spec = NormalizationSpec.builder()
+                .global(List.of(rule("format_datetime", Map.of(
+                        "format", "yyyy-MM-dd HH:mm:ss",
+                        "sesionTimeZone", "+08:00"))))
+                .build();
+
+        assertThrows(com.consilens.connector.api.ConnectorException.class,
+                () -> new DefaultNormalizationSpecValidator().validate(spec));
+    }
+
+    private NormalizationRule rule(String operation, Map<String, Object> params) {
+        return NormalizationRule.builder()
+                .match(MatchSpec.builder().type("timestamp").build())
+                .operation(operation)
+                .params(params)
+                .build();
+    }
 
     @Test
     void mapsDecimalPrecisionToFormatNumberRule() {
@@ -88,5 +122,23 @@ class NormalizationSpecsTest {
                 .filter(rule -> type.equals(rule.getMatch().getType()))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    @Test
+    void rejectsInvalidSessionTimeZone() {
+        // 时区笔误必须报错：core 侧原本会静默忽略，导致两侧时区不同却没人发现
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+                () -> NormalizationSpecs.fromTypeRules(java.util.Map.of(
+                        "datetime", java.util.Map.of("sessionTimeZone", "Asia/Shanghaii")),
+                        java.util.Map.of(), java.util.Map.of()));
+    }
+
+    @Test
+    void acceptsValidSessionTimeZone() {
+        var spec = NormalizationSpecs.fromTypeRules(java.util.Map.of(
+                "datetime", java.util.Map.of("sessionTimeZone", "+08:00")),
+                java.util.Map.of(), java.util.Map.of());
+
+        org.junit.jupiter.api.Assertions.assertNotNull(spec);
     }
 }

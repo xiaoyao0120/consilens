@@ -228,7 +228,11 @@ public class ClusterSubmitSupport {
         descriptor.put("strategy", strategy);
 
         if (config.getResult() != null) {
-            descriptor.put("result", config.getResult());
+            // descriptor 会被 K8s ConfigMap / 挂载文件持久化：表 sink 的密码必须走
+            // secretEnv 注入（${env.SINK_PASSWORD}），不能明文写进描述符。
+            descriptor.put("result", redactPasswords
+                    ? redactedResult(config.getResult())
+                    : config.getResult());
         }
         return descriptor;
     }
@@ -254,6 +258,75 @@ public class ClusterSubmitSupport {
             }
         }
         return null;
+    }
+
+    /** 复制一份 result 配置，把每个 sink 的 password 换成 ${env.SINK_PASSWORD}。 */
+    private com.consilens.sink.api.model.ResultConfig redactedResult(
+            com.consilens.sink.api.model.ResultConfig result) {
+        if (result.getSinks() == null || result.getSinks().isEmpty()) {
+            return result;
+        }
+        List<com.consilens.sink.api.model.SinkConfig> sinks = new ArrayList<>(result.getSinks().size());
+        for (com.consilens.sink.api.model.SinkConfig sink : result.getSinks()) {
+            if (sink == null) {
+                continue;
+            }
+            sinks.add(com.consilens.sink.api.model.SinkConfig.builder()
+                    .format(sink.getFormat())
+                    .type(sink.getType())
+                    .enabled(sink.isEnabled())
+                    .properties(redactSinkProperties(sink.getProperties()))
+                    .build());
+        }
+        return com.consilens.sink.api.model.ResultConfig.builder()
+                .sinks(sinks)
+                .failOnSinkError(result.isFailOnSinkError())
+                .build();
+    }
+
+    /**
+     * sink properties 是 JSON 串：递归把 password 字段替换成 ${env.SINK_PASSWORD}。
+     * 解析失败时直接丢弃属性，宁可让集群侧用默认值，也不能把可能的密码写进 ConfigMap。
+     */
+    private String redactSinkProperties(String properties) {
+        if (properties == null || properties.isBlank()) {
+            return properties;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = new ObjectMapper().readTree(properties);
+            redactPasswordFields(node);
+            return new ObjectMapper().writeValueAsString(node);
+        } catch (Exception exception) {
+            log.warn("Unable to inspect sink properties for credential redaction; dropping them",
+                    exception);
+            return "{}";
+        }
+    }
+
+    private void redactPasswordFields(com.fasterxml.jackson.databind.JsonNode node) {
+        if (node instanceof com.fasterxml.jackson.databind.node.ObjectNode) {
+            com.fasterxml.jackson.databind.node.ObjectNode object =
+                    (com.fasterxml.jackson.databind.node.ObjectNode) node;
+            // 只替换值、不改结构：边遍历边 remove 容易踩到 ObjectNode 的字段顺序语义
+            List<String> credentials = new ArrayList<>();
+            object.fieldNames().forEachRemaining(name -> {
+                if ("password".equalsIgnoreCase(name)) {
+                    credentials.add(name);
+                }
+            });
+            for (String name : credentials) {
+                object.put(name, "${env.SINK_PASSWORD}");
+            }
+            object.fields().forEachRemaining(entry -> {
+                if (!credentials.contains(entry.getKey())) {
+                    redactPasswordFields(entry.getValue());
+                }
+            });
+        } else if (node != null && node.isArray()) {
+            for (com.fasterxml.jackson.databind.JsonNode child : node) {
+                redactPasswordFields(child);
+            }
+        }
     }
 
     private Map<String, Object> endpointDescriptor(com.consilens.server.application.capability.config.EndpointConfig endpoint,
@@ -311,11 +384,17 @@ public class ClusterSubmitSupport {
         if (!hostLoopback && !urlLoopback) {
             return;
         }
+        boolean hasPortField = connection.get("port") != null;
         int originalPort = intValue(connection.get("port"));
+        // 只写 url 的连接没有 port 字段：端口必须从 URL 里取，否则 host 改了、端口没改，
+        // 集群侧拿到的是半改写的 JDBC URL（连到集群内的宿主机端口）。
+        if (originalPort <= 0 && url != null) {
+            originalPort = jdbcPort(String.valueOf(url));
+        }
         if (hostLoopback && replacement != null && !replacement.isBlank()) {
             connection.put("host", replacement);
         }
-        if (replacementPort != null && originalPort > 0) {
+        if (replacementPort != null && hasPortField) {
             connection.put("port", replacementPort);
         }
         if (url != null) {
@@ -359,6 +438,24 @@ public class ClusterSubmitSupport {
         }
         return matcher.group(1) + matcher.group(2) + ":" + replacementPort
                 + tail.substring(prefix.length());
+    }
+
+    /** 提取 JDBC URL authority 里的端口；没有端口或非 JDBC 形态返回 0。 */
+    private static int jdbcPort(String url) {
+        java.util.regex.Matcher matcher = JDBC_AUTHORITY.matcher(url);
+        if (!matcher.matches()) {
+            return 0;
+        }
+        java.util.regex.Matcher port = java.util.regex.Pattern.compile("^:(\\d+)")
+                .matcher(matcher.group(3));
+        if (!port.find()) {
+            return 0;
+        }
+        try {
+            return Integer.parseInt(port.group(1));
+        } catch (NumberFormatException exception) {
+            return 0;
+        }
     }
 
     /** 提取 JDBC URL 的 host 段；非 JDBC 形态返回 null。 */

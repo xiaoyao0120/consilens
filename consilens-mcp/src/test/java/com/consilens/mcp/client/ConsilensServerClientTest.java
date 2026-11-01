@@ -43,7 +43,7 @@ class ConsilensServerClientTest {
             assertThat(result).containsKey("artifact");
             var request = server.takeRequest();
             assertThat(request.getPath()).isEqualTo("/v1/plan");
-            assertThat(request.getHeader("X-Api-Key")).isEqualTo("key-1");
+            assertThat(request.getHeader("X-Consilens-Api-Key")).isEqualTo("key-1");
         }
     }
 

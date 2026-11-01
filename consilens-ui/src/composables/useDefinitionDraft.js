@@ -19,7 +19,9 @@ export function useDefinitionDraft({
   const draftRestored = ref(false);
 
   function writeDraft() {
-    if (editId.value) return;
+    // draftSuspended 期间（清空草稿后的抑制窗口）不能写回：否则刚清掉的默认表单
+    // 会在 400ms 后被定时器重新存下来，下次进页面又提示"已恢复草稿"。
+    if (editId.value || draftSuspended) return;
     try {
       localStorage.setItem(
         DRAFT_KEY,
@@ -72,13 +74,18 @@ export function useDefinitionDraft({
     }
   }
 
-  // 保存成功后仅移除存储，不重置当前表单
+  // 保存成功后仅移除存储，不重置当前表单。
+  // 必须同时取消已排队的写入：保存成功后表单还在，挂着的定时器会把内容再写回存储。
   function removeStoredDraft() {
+    clearTimeout(draftTimer);
+    draftTimer = null;
     localStorage.removeItem(DRAFT_KEY);
   }
 
   function clearDraft() {
     draftSuspended = true;
+    clearTimeout(draftTimer);
+    draftTimer = null;
     localStorage.removeItem(DRAFT_KEY);
     resetForms();
     draftRestored.value = false;

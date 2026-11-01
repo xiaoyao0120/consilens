@@ -49,6 +49,39 @@ export function useDefinitionConfig({
     return hints;
   }
 
+  /**
+   * 提交前的映射自检：半填行、主键与比较列重叠、主键为空。
+   *
+   * <p>这三类问题服务端都会拒绝（`incomplete mapping` / `Comparison columns must not include
+   * key columns`），但在 UI 里提前拦住能说清是哪一行，而不是让用户面对一条运行期错误。
+   *
+   * @returns {string|null} 第一条错误说明，null 表示通过
+   */
+  function validateMappings() {
+    const halfFilled = [
+      ...compareForm.keyMappings.filter((m) => (m.source && !m.target) || (!m.source && m.target)),
+      ...compareForm.fieldMappings.filter((m) => (m.source && !m.target) || (!m.source && m.target)),
+    ];
+    if (halfFilled.length) {
+      return "有映射只填了一侧，请补齐或删除该行";
+    }
+    const keys = compareForm.keyMappings.filter((m) => m.source && m.target).map((m) => m.source);
+    if (!keys.length) {
+      return "请至少配置一个主键";
+    }
+    if (new Set(keys).size !== keys.length) {
+      return "主键列重复，请检查映射";
+    }
+    const overlap = compareForm.fieldMappings
+      .filter((m) => m.source && m.target)
+      .map((m) => m.source)
+      .filter((name) => keys.includes(name));
+    if (overlap.length) {
+      return `比较字段不能包含主键列：${[...new Set(overlap)].join(", ")}`;
+    }
+    return null;
+  }
+
   // 只序列化当前模式对应的资源：服务端 resource() 优先使用 query，
   // 同时写入 table 和 query 会让旧 SQL 悄悄覆盖用户刚选择的表。
   function buildResource(side) {
@@ -72,7 +105,9 @@ export function useDefinitionConfig({
       goal: planForm.goal,
       source: buildResource("source"),
       target: buildResource("target"),
-      keys: compareForm.keyMappings.map((m) => m.source).filter(Boolean),
+      // 只认**两端都填**的映射：半填行会让源端有、目标端没有的列也被当成键提交，
+      // 服务端拿同一份 keys 给两侧用，运行时报"列不存在"。
+      keys: compareForm.keyMappings.filter((m) => m.source && m.target).map((m) => m.source),
       comparison: {},
       executionOptions: {
         timeoutMs: runForm.timeoutMs || undefined,
@@ -136,5 +171,5 @@ export function useDefinitionConfig({
     { label: "试运行", value: runForm.dryRun ? "开启" : "关闭" },
   ]);
 
-  return { buildConfig, configDisplay, summary };
+  return { buildConfig, configDisplay, summary, validateMappings };
 }

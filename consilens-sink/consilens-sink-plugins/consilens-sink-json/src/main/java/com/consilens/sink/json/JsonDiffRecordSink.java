@@ -1,5 +1,6 @@
 package com.consilens.sink.json;
 
+import com.consilens.common.io.PathSupport;
 import com.consilens.core.diff.DiffRow;
 import com.consilens.core.lifecycle.DiffContext;
 import com.consilens.sink.api.ColumnValueInterpolator;
@@ -59,9 +60,7 @@ public class JsonDiffRecordSink implements Sink {
         resolvedPath = ColumnValueInterpolator.resolvePath(
                 path != null ? path : "diff-record-${taskId}.json", context);
         Path target = Paths.get(resolvedPath);
-        if (target.getParent() != null) {
-            Files.createDirectories(target.getParent());
-        }
+        PathSupport.ensureParent(target);
         writer = Files.newBufferedWriter(target);
         writer.write("[");
     }

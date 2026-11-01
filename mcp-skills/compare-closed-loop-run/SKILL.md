@@ -17,7 +17,7 @@ Use this skill when the user has a config artifact or inline config and wants th
 ## Workflow
 
 1. Call `consilens.validate.config` with exactly one of `configArtifactId` or `configContent`.
-2. If validation succeeds and a config artifact id is available, call `consilens.run.diff` with `serialNo`, `configArtifactId`, and `options`.
+2. If validation succeeds, call `consilens.run.diff` with `serialNo`, `configArtifactId`, and `options`. `configArtifactId` must reference a CONFIG artifact (from `consilens.plan.config` or the caller), not the VALIDATION_RESULT artifact returned by step 1.
 3. Wait for or obtain the RUN_RESULT artifact through the caller's task tracking flow.
 4. Call `consilens.diagnose.diff` with `runArtifactId`.
 5. Return task id, run artifact id, diagnosis artifact id, and next actions.

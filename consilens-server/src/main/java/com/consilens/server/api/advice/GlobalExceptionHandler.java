@@ -84,8 +84,16 @@ public class GlobalExceptionHandler {
         if (tooLarge != null) {
             return handleBodyTooLarge(tooLarge, request);
         }
+        // 参数错误的具体原因必须回显：否则校验失败只剩"Invalid request"，用户无从知道哪个字段错了。
+        // 框架解析类异常（JSON 反序列化失败等）保留笼统文案，避免把内部结构暴露出去。
+        String message = "Invalid request";
+        if (exception instanceof IllegalArgumentException
+                && exception.getMessage() != null
+                && !exception.getMessage().isBlank()) {
+            message = exception.getMessage();
+        }
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ApiResponse.error("Invalid request", "INVALID_REQUEST",
+                .body(ApiResponse.error(message, "INVALID_REQUEST",
                         TraceIdSupport.getOrCreateTraceId(request)));
     }
 

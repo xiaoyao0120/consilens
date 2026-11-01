@@ -480,6 +480,11 @@ class ExampleCoverageMatrixTest {
     private static Set<String> configurationFieldPaths() {
         Set<String> paths = new HashSet<>();
         collectConfigurationFieldPaths(CliConfiguration.class, "", paths, new HashSet<>());
+        // 列级归一化当前只开放数值容差（precision/timezone 等需要 SQL 侧同步实现）；
+        // 其余字段由 validator 明确拒绝，不要求示例覆盖。
+        paths.removeIf(path -> path.startsWith("normalization.columns.*.")
+                && !"normalization.columns.*.tolerance".equals(path)
+                && !"normalization.columns.*.relativeTolerance".equals(path));
         return paths;
     }
 

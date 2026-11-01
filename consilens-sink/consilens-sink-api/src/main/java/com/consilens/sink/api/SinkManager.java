@@ -144,7 +144,7 @@ public class SinkManager {
     private void handleSinkFailure(Exception exception) {
         failureCount.incrementAndGet();
         if (config != null && config.isFailOnSinkError()) {
-            throw new RuntimeException("Sink execution failed", exception);
+            throw new RuntimeException("Sink execution failed: " + exception.getMessage(), exception);
         }
         log.warn("Sink execution failed: {}", exception.getMessage(), exception);
     }

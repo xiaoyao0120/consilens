@@ -7,16 +7,22 @@ on:
       - main
     paths:
       - '.github/workflows/ci.yml'
+      - '.github/actions/**'
       - 'mcp-skills/**'
       - 'consilens-cli/**'
       - 'consilens-common/**'
       - 'consilens-connector/**'
+      - 'consilens-cluster/**'
       - 'consilens-core/**'
+      - 'consilens-sdk/**'
+      - 'consilens-benchmark/**'
       - 'consilens-mcp/**'
       - 'consilens-server/**'
       - 'consilens-sink/**'
       - 'consilens-spi/**'
+      - 'consilens-ui/**'
       - 'consilens-dist/**'
+      - 'examples/**'
       - 'scripts/**'
       - '.mvn/**'
       - 'mvnw'
@@ -61,6 +67,10 @@ jobs:
           java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: maven
+      - name: Check POM versions
+        run: python3 scripts/release/check-pom-versions.py
+      - name: Check documentation links
+        run: python3 scripts/check-doc-links.py
       - name: Package with regression tests on JDK ${{ matrix.java }}
         run: ./mvnw -B package
 
@@ -113,7 +123,8 @@ jobs:
           name: failsafe-testcontainers-reports
           path: |
             consilens-core/target/failsafe-reports/
-            target/release-checks/
+            .release-checks/
+          include-hidden-files: true
           if-no-files-found: error
 
   oceanbase-verify:
@@ -143,14 +154,39 @@ jobs:
           name: failsafe-oceanbase-reports
           path: |
             consilens-core/target/failsafe-reports/
-            target/release-checks/
+            .release-checks/
+          include-hidden-files: true
           if-no-files-found: error
+
+  jdk17-smoke:
+    name: CI-JDK17-Smoke
+    needs: paths-filter
+    if: ${{ (needs.paths-filter.outputs.not-ignore == 'true') || (github.event_name == 'push') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+      - name: Full compile on JDK 17
+        run: ./mvnw -B -DskipTests package
+      - name: CLI/DuckDB smoke on JDK 17
+        run: >
+          ./mvnw -B -pl :consilens-cli -am
+          -Dtest='DuckDbCompareRuntimeTest,VerifyCommandDuckDbTest,MetricDiffServiceTest'
+          -Dsurefire.failIfNoSpecifiedTests=false test
 
   result:
     name: Build
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [ build, mcp, docker-verify, oceanbase-verify, paths-filter ]
+    needs: [ build, mcp, docker-verify, oceanbase-verify, jdk17-smoke, paths-filter ]
     if: always()
     steps:
       - name: Status
@@ -173,5 +209,9 @@ jobs:
           fi
           if [[ '${{ needs.oceanbase-verify.result }}' != 'success' ]]; then
             echo "OceanBase Verify Failed!"
+            exit 1
+          fi
+          if [[ '${{ needs.jdk17-smoke.result }}' != 'success' ]]; then
+            echo "JDK 17 Smoke Failed!"
             exit 1
           fi

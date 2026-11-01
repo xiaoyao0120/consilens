@@ -16,6 +16,7 @@ import com.consilens.connector.api.planner.CompareSegment;
 import com.consilens.connector.api.record.CanonicalRecord;
 import com.consilens.connector.api.record.CanonicalValue;
 import com.consilens.connector.api.record.CloseableIterator;
+import com.consilens.core.algorithm.BudgetGuard;
 import com.consilens.core.algorithm.MultisetRowPairing;
 import com.consilens.core.algorithm.ValueNormalizer;
 import com.consilens.core.compare.CompareExecutionSettings;
@@ -44,6 +45,10 @@ final class ConnectorRecordDiffer {
     DiffResult diff(CompareSegment source, CompareSegment target, CompareExecutionSettings settings) {
         int decimalScale = settings != null ? settings.getDecimalScale() : ValueNormalizer.DEFAULT_DECIMAL_SCALE;
         java.time.ZoneId sessionZone = settings != null ? settings.getSessionZone() : null;
+        BudgetGuard budgetGuard = new BudgetGuard(
+                settings != null ? settings.getMaxDurationMs() : Long.MAX_VALUE,
+                settings != null ? settings.getMaxRowsScanned() : Long.MAX_VALUE,
+                Long.MAX_VALUE);
         PreparedSegment sourceData = prepare(source, decimalScale, sessionZone);
         PreparedSegment targetData = prepare(target, decimalScale, sessionZone);
         List<DiffRow> differences = new ArrayList<>();
@@ -51,10 +56,12 @@ final class ConnectorRecordDiffer {
         long targetMissingCount = 0L;
         long mismatchCount = 0L;
         long lastProgressLog = 0L;
+        long countedRows = 0L;
         long sourceRowCount = 0L;
         long targetRowCount = 0L;
         long duplicateKeyGroups = 0L;
         long duplicateKeyRows = 0L;
+        long startedAt = System.currentTimeMillis();
 
         log.info("Starting ordered streaming compare: {} <-> {}",
                 resolveTablePath(source.getResource(), source.getDataset()).getFullPath(),
@@ -175,11 +182,19 @@ final class ConnectorRecordDiffer {
                 }
 
                 long processedRows = sourceCursor.rowCount() + targetCursor.rowCount();
+                if (processedRows - countedRows > 0) {
+                    // 行数预算按累计扫描行数检查；流式路径不估算字节
+                    budgetGuard.addRowsScanned(processedRows - countedRows);
+                    budgetGuard.checkDuration();
+                    countedRows = processedRows;
+                }
                 if (processedRows - lastProgressLog >= PROGRESS_LOG_INTERVAL) {
                     log.info("Streaming compare progress: sourceRows={}, targetRows={}, differences={}",
                             sourceCursor.rowCount(),
                             targetCursor.rowCount(),
                             sourceMissingCount + targetMissingCount + mismatchCount);
+                    notifyProgress(settings, sourceCursor.rowCount(), targetCursor.rowCount(),
+                            sourceMissingCount + targetMissingCount + mismatchCount, startedAt);
                     lastProgressLog = processedRows;
                 }
             }
@@ -187,6 +202,11 @@ final class ConnectorRecordDiffer {
             targetRowCount = targetCursor.rowCount();
         } catch (Exception e) {
             log.error("Ordered streaming compare failed", e);
+            // 预算超限是"业务性拒绝"：上层（RunTaskHandler）靠 BudgetExceededException 映射
+            // BUDGET_EXCEEDED 且不重试。包成 ConnectorException 会被当成普通执行失败重试。
+            if (e instanceof com.consilens.core.exception.BudgetExceededException) {
+                throw (com.consilens.core.exception.BudgetExceededException) e;
+            }
             // 把根因带进消息：否则上层只看到"Failed during ordered streaming compare"，
             // 排查需要翻 DEBUG 日志（且部分驱动异常不会打栈）。
             throw e instanceof ConnectorException
@@ -202,6 +222,8 @@ final class ConnectorRecordDiffer {
                 sourceMissingCount + targetMissingCount + mismatchCount,
                 duplicateKeyGroups,
                 duplicateKeyRows);
+        notifyProgress(settings, sourceRowCount, targetRowCount,
+                sourceMissingCount + targetMissingCount + mismatchCount, startedAt);
         return DiffResult.builder()
                 .differences(differences)
                 .statistics(DiffResult.DiffStatistics.builder()
@@ -220,6 +242,24 @@ final class ConnectorRecordDiffer {
                 .sourceTablePath(resolveTablePath(source.getResource(), source.getDataset()))
                 .targetTablePath(resolveTablePath(target.getResource(), target.getDataset()))
                 .build();
+    }
+
+    private void notifyProgress(CompareExecutionSettings settings, long sourceRows,
+                                long targetRows, long differences, long startedAt) {
+        if (settings == null || settings.getProgressListener() == null) {
+            return;
+        }
+        try {
+            settings.getProgressListener().onProgress(
+                    com.consilens.connector.api.planner.CompareProgress.builder()
+                            .sourceRows(sourceRows)
+                            .targetRows(targetRows)
+                            .differences(differences)
+                            .elapsedMs(Math.max(0L, System.currentTimeMillis() - startedAt))
+                            .build());
+        } catch (RuntimeException ignored) {
+            // progress callbacks must not fail the comparison
+        }
     }
 
     private void addDifference(List<DiffRow> differences, DiffRow diffRow, CompareExecutionSettings settings) {
@@ -360,7 +400,10 @@ final class ConnectorRecordDiffer {
                 return field.getName();
             }
         }
-        return name;
+        if (DerivedCompareColumns.isDerived(name)) {
+            return name;
+        }
+        throw new ConnectorException("Column '" + name + "' is not present in the input schema");
     }
 
     private Set<String> excludedColumns(ComparisonSpec comparisons) {
@@ -435,15 +478,37 @@ final class ConnectorRecordDiffer {
             throw new ConnectorException("ResourceLocator cannot be null");
         }
         if (locator.getName() != null && !locator.getName().trim().isEmpty()) {
-            return TablePath.fromString(locator.getName().trim());
+            return tablePath(locator, locator.getName());
         }
         if (locator.getType() != null && "sql".equalsIgnoreCase(locator.getType())) {
             return TablePath.of("sql-resource");
         }
         if (locator.getPath() != null && !locator.getPath().trim().isEmpty()) {
-            return TablePath.fromString(locator.getPath().trim());
+            return tablePath(locator, locator.getPath());
         }
         throw new ConnectorException("ResourceLocator requires name or path");
+    }
+
+    /**
+     * File-like resource names are paths, not dot-separated table identifiers.
+     * Using {@link TablePath#fromString(String)} on "./data/source.csv" would
+     * split into empty components and fail.
+     */
+    private TablePath tablePath(ResourceLocator locator, String value) {
+        String trimmed = value.trim();
+        boolean fileLike = (locator.getType() != null
+                && "file".equalsIgnoreCase(locator.getType()))
+                || trimmed.indexOf('/') >= 0
+                || trimmed.indexOf('\\') >= 0;
+        if (!fileLike) {
+            return TablePath.fromString(trimmed);
+        }
+        String name = trimmed.replace('\\', '/');
+        int slash = name.lastIndexOf('/');
+        if (slash >= 0) {
+            name = name.substring(slash + 1);
+        }
+        return TablePath.of(name.isBlank() ? "file" : name);
     }
 
     private static final class PreparedSegment {

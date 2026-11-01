@@ -3,6 +3,7 @@ package com.consilens.benchmark.report;
 import com.consilens.benchmark.baseline.DriftReport;
 import com.consilens.benchmark.baseline.DriftReport.DriftItem;
 import com.consilens.benchmark.baseline.DriftReport.DriftStatus;
+import com.consilens.common.io.PathSupport;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -43,7 +44,7 @@ public class BenchmarkReportGenerator {
      */
     public void generate(List<BenchmarkResult> results, DriftReport drift, Path outputDir) {
         try {
-            Files.createDirectories(outputDir);
+            PathSupport.ensureDirectory(outputDir);
             Files.writeString(outputDir.resolve("report.md"), buildMarkdown(results, drift));
             mapper.writeValue(outputDir.resolve("results.json").toFile(), buildJson(results, drift));
             log.info("benchmark report generated: {}", outputDir);

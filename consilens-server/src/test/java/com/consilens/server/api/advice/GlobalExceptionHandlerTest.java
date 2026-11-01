@@ -29,6 +29,26 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void shouldKeepActionableMessageForIllegalArgument() {
+        ResponseEntity<ApiResponse<Void>> response = handler.handleBadRequest(
+                new IllegalArgumentException("config.comparison.keys must not be empty"), request());
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        // 只回 "Invalid request" 等于把校验原因藏起来
+        assertThat(response.getBody().getError()).contains("keys must not be empty");
+    }
+
+    @Test
+    void shouldNotEchoFrameworkParseMessages() {
+        ResponseEntity<ApiResponse<Void>> response = handler.handleBadRequest(
+                new HttpMessageNotReadableException("JSON parse error: unexpected token at [Source: ...]",
+                        new MockHttpInputMessage(new byte[0])),
+                request());
+
+        assertThat(response.getBody().getError()).isEqualTo("Invalid request");
+    }
+
+    @Test
     void shouldReturnPayloadTooLargeWhenJacksonWrapsBodyLimitException() {
         HttpMessageNotReadableException wrapped = new HttpMessageNotReadableException(
                 "too large", new RequestBodyTooLargeException(1024),

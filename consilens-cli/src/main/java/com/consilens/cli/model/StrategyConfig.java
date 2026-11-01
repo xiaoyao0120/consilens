@@ -66,6 +66,18 @@ public class StrategyConfig {
     @JsonProperty("allowNullableKeys")
     private Boolean allowNullableKeys = false;
 
+    /** 墙钟预算（毫秒）；null 表示不限。超限抛 BudgetExceededException 并保留部分结果。 */
+    @JsonProperty("maxDurationMs")
+    private Long maxDurationMs;
+
+    /** 累计扫描行数预算；null 表示不限。 */
+    @JsonProperty("maxRowsScanned")
+    private Long maxRowsScanned;
+
+    /** 累计取回字节预算；null 表示不限。 */
+    @JsonProperty("maxBytesFetched")
+    private Long maxBytesFetched;
+
     @JsonIgnore
     public ComparisonStrategy getModeEnum() {
         return ComparisonStrategy.fromString(mode);
@@ -84,6 +96,16 @@ public class StrategyConfig {
                 .positive(bisectionFactor, "strategy.bisectionFactor")
                 .positive(maxDifferences, "strategy.maxDifferences")
                 .throwIfInvalid();
+
+        if (maxDurationMs != null && maxDurationMs <= 0) {
+            throw ValidationException.simple("CONFIGURATION_VALIDATION", "strategy.maxDurationMs 必须为正数");
+        }
+        if (maxRowsScanned != null && maxRowsScanned <= 0) {
+            throw ValidationException.simple("CONFIGURATION_VALIDATION", "strategy.maxRowsScanned 必须为正数");
+        }
+        if (maxBytesFetched != null && maxBytesFetched <= 0) {
+            throw ValidationException.simple("CONFIGURATION_VALIDATION", "strategy.maxBytesFetched 必须为正数");
+        }
 
         String normalizedMode = mode == null ? null : mode.trim().toLowerCase();
         if ("local".equals(normalizedMode)) {

@@ -60,6 +60,15 @@ async function loadData() {
     data.total = result.total;
     data.items = result.items || [];
     pagination.itemCount = result.total;
+    // 页码越界（URL 手改、末页删光）时回退到最后一页：否则会停在 items=[] 的空态，
+    // 分页条随表格一起消失，用户连"上一页"都点不到。
+    const maxPage = Math.max(1, Math.ceil((result.total || 0) / pagination.pageSize));
+    if (pagination.page > maxPage) {
+      pagination.page = maxPage;
+      loadData();
+      return;
+    }
+
   } catch {
     if (seq !== loadSeq) return;
     loadError.value = true;
@@ -126,6 +135,10 @@ function handleDelete(row) {
       try {
         await deleteTaskDefinition(row.id);
         message.success("已删除");
+        // 末页只剩这一条时删完要把页码退一页，否则会落在越界页上
+        if (data.items.length === 1 && pagination.page > 1) {
+          pagination.page -= 1;
+        }
         loadData();
       } catch (error) {
         message.error(error?.response?.data?.error || "删除失败");

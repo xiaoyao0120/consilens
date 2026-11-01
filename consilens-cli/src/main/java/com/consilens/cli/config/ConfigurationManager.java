@@ -1,6 +1,7 @@
 package com.consilens.cli.config;
 
 import com.consilens.cli.model.CliConfiguration;
+import com.consilens.common.io.PathSupport;
 import com.consilens.core.exception.ExceptionHandler;
 import com.consilens.core.util.LogUtils;
 import com.consilens.core.validation.ValidationException;
@@ -99,7 +100,7 @@ public class ConfigurationManager {
         try {
             config = configNormalizer.normalize(config);
         } catch (ValidationException e) {
-            throw new ConfigurationException("Configuration validation failed: " + e.getMessage(), e);
+            throw new ConfigurationException(e.getMessage(), e);
         }
 
         // Cache configuration
@@ -138,7 +139,7 @@ public class ConfigurationManager {
                 try {
                     config = configNormalizer.normalize(config);
                 } catch (ValidationException e) {
-                    throw new ConfigurationException("Configuration validation failed: " + e.getMessage(), e);
+                    throw new ConfigurationException(e.getMessage(), e);
                 }
                 return config;
             }, "Load configuration from input stream");
@@ -170,9 +171,7 @@ public class ConfigurationManager {
             Path path = Paths.get(outputPath).toAbsolutePath().normalize();
 
             // Create parent directories
-            if (path.getParent() != null) {
-                Files.createDirectories(path.getParent());
-            }
+            PathSupport.ensureParent(path);
 
             // Configure output on a copy so the shared mapper stays immutable
             // and pretty-printing does not leak into other callers.
@@ -201,9 +200,10 @@ public class ConfigurationManager {
             CliConfiguration config = loadConfiguration(configPath, false); // skip cache for validation
             return ValidationResult.success("Configuration file is valid");
         } catch (ConfigurationException e) {
-            return ValidationResult.error("Configuration validation failed: " + e.getMessage());
+            return ValidationResult.error(e.getMessage());
         } catch (Exception e) {
-            return ValidationResult.error("Unexpected error during validation: " + e.getMessage());
+            return ValidationResult.error("Unexpected error during validation: "
+                    + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
         }
     }
 
@@ -307,7 +307,30 @@ public class ConfigurationManager {
         if (cause instanceof ConfigurationException) {
             return (ConfigurationException) cause;
         }
-        return new ConfigurationException(exception.getMessage(), exception);
+        String detail = deepestMessage(cause);
+        String message = exception.getMessage();
+        if (detail == null || message == null || message.contains(detail)) {
+            return new ConfigurationException(message, exception);
+        }
+        return new ConfigurationException(message + ": " + detail, exception);
+    }
+
+    /**
+     * Parse failures are wrapped as "Load configuration from <path>"; the useful
+     * Jackson/SnakeYAML message (including line/column) lives deeper in the cause
+     * chain.
+     */
+    private static String deepestMessage(Throwable cause) {
+        String best = null;
+        Throwable current = cause;
+        int depth = 0;
+        while (current != null && depth++ < 20) {
+            if (current.getMessage() != null && !current.getMessage().isBlank()) {
+                best = current.getMessage();
+            }
+            current = current.getCause();
+        }
+        return best;
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.consilens.core.segment;
 
 import com.consilens.connector.api.DatabaseDialect;
+import com.consilens.connector.api.SqlQueryGenerator;
 import com.consilens.core.database.adpter.DatabaseAdapter;
 import com.consilens.connector.api.model.TableSchema;
 import com.consilens.connector.api.model.DataType;
@@ -811,7 +812,16 @@ public class TableSegment {
         if (value == null) {
             return null;
         }
-        return value.replace("'", "''").replace("\\", "\\\\");
+        String escaped = value.replace("'", "''");
+        // 反斜杠是否是字符串转义符由方言决定（MySQL 族为是，PostgreSQL/Trino/Oracle/
+        // SQL Server 等标准实现为否）。无条件加倍会让这些库上的键边界变成另一个值，
+        // 使边界行落不进任何分段谓词。
+        DatabaseDialect dialect = database != null ? database.getDialect() : null;
+        SqlQueryGenerator generator = dialect != null ? dialect.getSqlQueryGenerator() : null;
+        if (generator == null || generator.backslashEscapesStringLiterals()) {
+            escaped = escaped.replace("\\", "\\\\");
+        }
+        return escaped;
     }
 
     /**

@@ -23,4 +23,7 @@ public class NormalizationConfig {
     private Map<String, TypeNormalizationRule> source;
 
     private Map<String, TypeNormalizationRule> target;
+
+    /** 列级规则（key 为列名，两侧同名生效），优先级高于类型级规则。 */
+    private Map<String, TypeNormalizationRule> columns;
 }

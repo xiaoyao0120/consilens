@@ -131,6 +131,54 @@ class CompareExecutionSettingsTest {
     }
 
     @Test
+    void shouldResolveBudgetFieldsFromOptionsAndClampInvalidLimits() {
+        CompareRequest request = CompareRequest.builder()
+                .executionOptions(CompareExecutionOptions.builder()
+                        .maxDurationMs(60_000L)
+                        .maxRowsScanned(500_000L)
+                        .maxBytesFetched(1024L)
+                        .build())
+                .build();
+
+        CompareExecutionSettings settings = CompareExecutionSettings.fromRequest(request);
+
+        assertEquals(60_000L, settings.getMaxDurationMs());
+        assertEquals(500_000L, settings.getMaxRowsScanned());
+        assertEquals(1024L, settings.getMaxBytesFetched());
+        assertEquals(60_000L, settings.toDifferConfig().getMaxDurationMs());
+        assertEquals(500_000L, settings.toDifferConfig().getMaxRowsScanned());
+        assertEquals(1024L, settings.toDifferConfig().getMaxBytesFetched());
+    }
+
+    @Test
+    void shouldDefaultBudgetsToUnlimited() {
+        CompareExecutionSettings settings = CompareExecutionSettings.fromRequest(null);
+
+        assertEquals(Long.MAX_VALUE, settings.getMaxDurationMs());
+        assertEquals(Long.MAX_VALUE, settings.getMaxRowsScanned());
+        assertEquals(Long.MAX_VALUE, settings.getMaxBytesFetched());
+        assertEquals(Long.MAX_VALUE, settings.toDifferConfig().getMaxRowsScanned());
+    }
+
+    @Test
+    void shouldResolveBudgetsFromAttributesAndIgnoreInvalidValues() {
+        CompareRequest request = CompareRequest.builder()
+                .executionOptions(CompareExecutionOptions.builder()
+                        .attributes(java.util.Map.of(
+                                "maxDurationMs", "30000",
+                                "maxRowsScanned", -5L,
+                                "maxBytesFetched", 2048))
+                        .build())
+                .build();
+
+        CompareExecutionSettings settings = CompareExecutionSettings.fromRequest(request);
+
+        assertEquals(30_000L, settings.getMaxDurationMs());
+        assertEquals(Long.MAX_VALUE, settings.getMaxRowsScanned());
+        assertEquals(2048L, settings.getMaxBytesFetched());
+    }
+
+    @Test
     void shouldUseNormalizationPrecisionFromRequest() {
         com.consilens.connector.api.normalization.NormalizationSpec spec =
                 com.consilens.connector.api.normalization.NormalizationSpec.builder()

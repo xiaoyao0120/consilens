@@ -16,6 +16,8 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CompareRequestFactoryTest {
 
@@ -261,6 +263,25 @@ class CompareRequestFactoryTest {
     }
 
     @Test
+    void shouldUseSideSpecificKeyNamesInLogicalColumns() {
+        CliConfiguration config = baseConfig();
+        config.setComparison(ComparisonConfig.builder()
+                .keys(ListPairConfig.builder()
+                        .source(List.of("user_id"))
+                        .target(List.of("uid"))
+                        .build())
+                .fields(ListPairConfig.builder()
+                        .source(List.of("name"))
+                        .target(List.of("full_name"))
+                        .build())
+                .build());
+
+        // 目标侧的逻辑列必须用 target 键名，否则生成的目标 SQL 会引用不存在的列
+        assertEquals(List.of("uid", "full_name"), factory.targetColumns(config));
+        assertEquals(List.of("user_id", "name"), factory.sourceColumns(config));
+    }
+
+    @Test
     void shouldCompileMappingKeysLiteralsAndDisabledCompareFields() {
         CliConfiguration config = baseConfig();
         config.setComparison(ComparisonConfig.builder()
@@ -332,6 +353,29 @@ class CompareRequestFactoryTest {
                 request.getSource().getResource().getPath());
         assertEquals("SELECT id AS logical_id, amount FROM target_table",
                 request.getTarget().getResource().getPath());
+    }
+
+    @Test
+    void shouldCarrySessionTimeZoneFromTypeRulesIntoNormalizationSpec() {
+        CliConfiguration config = baseConfig();
+        config.setComparison(ComparisonConfig.builder()
+                .keys(ListPairConfig.builder().source(List.of("id")).target(List.of("id")).build())
+                .fields(ListPairConfig.builder().source(List.of("amount")).target(List.of("amount")).build())
+                .build());
+        com.consilens.cli.model.normalization.TypeNormalizationRule rule =
+                new com.consilens.cli.model.normalization.TypeNormalizationRule();
+        rule.setSessionTimeZone("+08:00");
+        config.setNormalization(com.consilens.cli.model.normalization.NormalizationConfig.builder()
+                .global(java.util.Map.of("datetime", rule))
+                .build());
+
+        CompareRequest request = factory.create(config);
+
+        // 连接级时区只能挂在类型规则上，必须一路传到 spec，否则两侧会按不同时区归一化
+        assertNotNull(request.getNormalizationSpec());
+        assertTrue(request.getNormalizationSpec().getGlobal().stream()
+                        .anyMatch(each -> "+08:00".equals(each.getParams().get("sessionTimeZone"))),
+                "sessionTimeZone must survive the CLI type-rule -> spec conversion");
     }
 
     private CliConfiguration baseConfig() {

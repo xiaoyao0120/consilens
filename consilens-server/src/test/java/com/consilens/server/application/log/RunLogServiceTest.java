@@ -17,6 +17,7 @@ import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -55,11 +56,12 @@ class RunLogServiceTest {
 
         assertTrue(page.isAvailable());
         assertTrue(page.getContent().contains("run line"));
-        assertEquals(1L, page.getNextOffset());
+        // nextOffset 是字节偏移（文件长度），不再是行号
+        assertTrue(page.getNextOffset() > 1L);
     }
 
     @Test
-    void shouldDownloadWholeFile() {
+    void shouldDownloadWholeFile() throws java.io.IOException {
         store.beginRun("inst_1");
         store.append(Log4jLogEvent.newBuilder()
                 .setLoggerName("com.consilens.test")
@@ -73,7 +75,10 @@ class RunLogServiceTest {
         RunLogService.LogFile file = new RunLogService(taskRepository, store).download("inst_1");
 
         assertEquals("inst_1.log", file.getFileName());
-        assertTrue(new String(file.getContent()).contains("boom"));
+        // 不再把整份日志读成 byte[]：交给 Spring 流式返回，这里只验证路径可用
+        assertNotNull(file.getPath());
+        assertTrue(new String(java.nio.file.Files.readAllBytes(file.getPath()),
+                java.nio.charset.StandardCharsets.UTF_8).contains("boom"));
     }
 
     @Test

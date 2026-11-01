@@ -1,13 +1,20 @@
 package com.consilens.core.algorithm;
 
 import com.consilens.core.diff.DiffResult;
+import com.consilens.core.diff.SchemaCompatibility;
 import com.consilens.core.segment.TableSegment;
+import com.consilens.connector.api.model.ColumnInfo;
+import com.consilens.connector.api.model.DataType;
 import com.consilens.connector.api.model.TablePath;
+import com.consilens.connector.api.model.TableSchema;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -93,6 +100,69 @@ class TableDifferColumnValidationTest {
         assertTrue(error.getMessage().contains("is nullable"), error.getMessage());
     }
 
+    @Test
+    void shouldDetectNullableKeyThatRangePredicatesCannotCover() {
+        // 可空键 + 没有排除 NULL 的过滤条件：MIN/MAX 与区间谓词会漏掉 NULL 行
+        assertTrue(TableDiffer.mayContainNullKeys(nullableKeySegment("db.t")));
+
+        // 过滤条件显式排除 NULL 后可安全分段
+        assertFalse(TableDiffer.mayContainNullKeys(nullableKeySegment("db.t").toBuilder()
+                .whereClause(java.util.Optional.of("pk_id IS NOT NULL")).build()));
+
+        // 非空键列不受影响
+        assertFalse(TableDiffer.mayContainNullKeys(
+                segmentWithSchema("db.a", "id", DataType.BIGINT, "name", DataType.VARCHAR)));
+    }
+
+    @Test
+    void shouldReportNormalizationForCompatibleTypeFamilies() {
+        TableSegment left = segmentWithSchema("db.a", "id", DataType.BIGINT, "name", DataType.VARCHAR);
+        TableSegment right = segmentWithSchema("db.b", "id", DataType.BIGINT, "name", DataType.TEXT);
+
+        SchemaCompatibility report = new ExposedDiffer().validate(left, right);
+
+        assertEquals(SchemaCompatibility.Status.COMPATIBLE_WITH_NORMALIZATION, report.getStatus());
+        assertEquals(SchemaCompatibility.Action.DIRECT, report.getColumns().get(0).getAction());
+        assertEquals(SchemaCompatibility.Action.NORMALIZE, report.getColumns().get(1).getAction());
+        assertTrue(report.getColumns().get(1).getReason().contains("normalization"));
+    }
+
+    @Test
+    void shouldReportIncompatibleForDifferentTypeFamilies() {
+        TableSegment left = segmentWithSchema("db.a", "id", DataType.BIGINT, "created", DataType.VARCHAR);
+        TableSegment right = segmentWithSchema("db.b", "id", DataType.BIGINT, "created", DataType.TIMESTAMP);
+
+        SchemaCompatibility report = new ExposedDiffer().validate(left, right);
+
+        assertEquals(SchemaCompatibility.Status.INCOMPATIBLE, report.getStatus());
+        assertEquals(SchemaCompatibility.Action.INCOMPATIBLE, report.getColumns().get(1).getAction());
+    }
+
+    private TableSegment segmentWithSchema(String path,
+                                           String keyName, DataType keyType,
+                                           String extraName, DataType extraType) {
+        TablePath tablePath = TablePath.of(path);
+        ColumnInfo key = ColumnInfo.builder()
+                .name(keyName)
+                .type(keyType)
+                .nullable(false)
+                .ordinalPosition(1)
+                .build();
+        ColumnInfo extra = ColumnInfo.builder()
+                .name(extraName)
+                .type(extraType)
+                .nullable(true)
+                .ordinalPosition(2)
+                .build();
+        return TableSegment.builder()
+                .tablePath(tablePath)
+                .keyColumns(List.of(keyName))
+                .extraColumns(List.of(extraName))
+                .schema(java.util.Optional.of(TableSchema.of(tablePath,
+                        Map.of(keyName, key, extraName, extra))))
+                .build();
+    }
+
     private TableSegment nullableKeySegment(String path) {
         TablePath tablePath = TablePath.of(path);
         com.consilens.connector.api.model.ColumnInfo key =
@@ -130,8 +200,8 @@ class TableDifferColumnValidationTest {
                     com.consilens.core.algorithm.ValueNormalizer.DEFAULT_DECIMAL_SCALE, allowNullableKeys));
         }
 
-        void validate(TableSegment left, TableSegment right) {
-            validateAndAdjustColumns(left, right);
+        SchemaCompatibility validate(TableSegment left, TableSegment right) {
+            return validateAndAdjustColumns(left, right);
         }
 
         @Override
