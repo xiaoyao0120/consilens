@@ -18,6 +18,10 @@ public class CompareExecutionSettings {
     private static final int DEFAULT_BISECTION_FACTOR = 32;
     private static final long DEFAULT_BISECTION_THRESHOLD = 16384L;
     private static final long DEFAULT_MAX_DIFFERENCES = 1_000_000L;
+    /** 容差内行默认保留的样本上限：报告要"看得见"，但不能让大表把被吸收的行全灌进内存。 */
+    public static final int DEFAULT_WITHIN_TOLERANCE_SAMPLES = 100;
+    /** 样本上限硬顶（与 CLI 校验一致）：防止误配的大数字把被吸收的行全灌进内存。 */
+    public static final int MAX_WITHIN_TOLERANCE_SAMPLES = 10_000;
 
     private final int bisectionFactor;
     private final long bisectionThreshold;
@@ -60,6 +64,17 @@ public class CompareExecutionSettings {
     /** 原始归一化 spec：终局本地比较据此解析列级/类型级数值容差。 */
     private final com.consilens.connector.api.normalization.NormalizationSpec normalizationSpec;
 
+    /**
+     * 容差内行的处置口径：默认 IGNORE（判等、不计差异、报告单列）。
+     * SQL 侧哈希表达不了容差，因此只在终局本地比较生效。
+     */
+    @Builder.Default
+    private final WithinToleranceMode withinToleranceMode = WithinToleranceMode.IGNORE;
+
+    /** 容差内行随结果保留的样本上限（0 表示只计数不保留行）。 */
+    @Builder.Default
+    private final int withinToleranceSamples = DEFAULT_WITHIN_TOLERANCE_SAMPLES;
+
     /** 可选进度回调；流式合并路径会周期性上报。 */
     private final com.consilens.connector.api.planner.ProgressListener progressListener;
 
@@ -96,6 +111,9 @@ public class CompareExecutionSettings {
                 .maxBytesFetched(resolvePositiveLong(executionOptions != null
                         ? executionOptions.getMaxBytesFetched() : null, attributes, "maxBytesFetched"))
                 .normalizationSpec(request != null ? request.getNormalizationSpec() : null)
+                .withinToleranceMode(WithinToleranceMode.fromString(executionOptions != null
+                        ? executionOptions.getWithinTolerance() : null))
+                .withinToleranceSamples(resolveWithinToleranceSamples(executionOptions))
                 .progressListener(executionOptions != null
                         ? executionOptions.getProgressListener() : null)
                 .build();
@@ -177,7 +195,9 @@ public class CompareExecutionSettings {
                 maxDurationMs,
                 maxRowsScanned,
                 maxBytesFetched,
-                normalizationSpec);
+                normalizationSpec,
+                withinToleranceMode,
+                withinToleranceSamples);
     }
 
     public CompareExecutionSettings withChecksumAlgorithm(ChecksumAlgorithm checksumAlgorithm) {
@@ -201,6 +221,8 @@ public class CompareExecutionSettings {
                 .maxRowsScanned(maxRowsScanned)
                 .maxBytesFetched(maxBytesFetched)
                 .normalizationSpec(normalizationSpec)
+                .withinToleranceMode(withinToleranceMode)
+                .withinToleranceSamples(withinToleranceSamples)
                 .build();
     }
 
@@ -212,6 +234,14 @@ public class CompareExecutionSettings {
             }
         }
         return ConcurrencyConfig.defaultConfig();
+    }
+
+    /** 样本上限：未配置用默认值，负数按 0（只计数不保留行）处理，避免负上限造成意外截断。 */
+    private static int resolveWithinToleranceSamples(CompareExecutionOptions options) {
+        if (options == null || options.getWithinToleranceSamples() == null) {
+            return DEFAULT_WITHIN_TOLERANCE_SAMPLES;
+        }
+        return Math.min(MAX_WITHIN_TOLERANCE_SAMPLES, Math.max(0, options.getWithinToleranceSamples()));
     }
 
     private static long resolvePositiveLong(Long explicit, Map<String, Object> attributes, String attributeName) {

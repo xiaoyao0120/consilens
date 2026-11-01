@@ -22,6 +22,64 @@ class CsvDiffRecordSinkTest {
     Path tempDir;
 
     @Test
+    void shouldRemoveStaleWithinToleranceReportOnReopen() throws Exception {
+        Path output = tempDir.resolve("stale.csv");
+        Path sibling = tempDir.resolve("stale.within-tolerance.csv");
+        Files.writeString(sibling, "MISMATCH,1,[1, 10.5],[1, 10.504]\n", StandardCharsets.UTF_8);
+
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("path", output.toString());
+        SinkConfig config = new SinkConfig();
+        config.setFormat("csv");
+        config.setType("diff-record");
+        config.setProperties(new ObjectMapper().writeValueAsString(properties));
+
+        CsvDiffRecordSink sink = new CsvDiffRecordSink();
+        try {
+            sink.open(config, DiffContext.builder().taskId("csv-stale").build());
+        } finally {
+            sink.close();
+        }
+
+        assertTrue(!Files.exists(sibling), "重跑后不应残留上一轮的容差内报告");
+    }
+
+    @Test
+    void shouldWriteWithinToleranceRowsToSiblingFile() throws Exception {
+        Path output = tempDir.resolve("orders.csv");
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("path", output.toString());
+
+        SinkConfig config = new SinkConfig();
+        config.setFormat("csv");
+        config.setType("diff-record");
+        config.setProperties(new ObjectMapper().writeValueAsString(properties));
+
+        DiffContext context = DiffContext.builder().taskId("csv-within-tolerance").build();
+        DiffRow within = DiffRow.withinTolerance(List.of(1),
+                List.of("1", "10.500000"), List.of("1", "10.504000"),
+                List.of("id", "amount"), List.of("id", "amount"),
+                List.of("amount"), List.of("amount"), Map.of("amount", 0.004));
+
+        CsvDiffRecordSink sink = new CsvDiffRecordSink();
+        try {
+            sink.open(config, context);
+            sink.onWithinToleranceRecords(List.of(within), context);
+        } finally {
+            sink.close();
+        }
+
+        Path sibling = tempDir.resolve("orders.within-tolerance.csv");
+        assertTrue(Files.exists(sibling), "容差内行应写到旁挂文件，而不是混进差异文件");
+        String content = new String(Files.readAllBytes(sibling), StandardCharsets.UTF_8);
+        assertTrue(content.contains("operation,primaryKey,sourceValues,targetValues"), content);
+        assertTrue(content.contains("MISMATCH"), content);
+        // 主文件只应有表头：容差内行不能算进差异文件
+        String main = new String(Files.readAllBytes(output), StandardCharsets.UTF_8);
+        assertTrue(!main.contains("MISMATCH"), main);
+    }
+
+    @Test
     void shouldDefuseFormulaLookingCellsButKeepNumbersIntact() throws Exception {
         Path output = tempDir.resolve("formula.csv");
         Map<String, Object> properties = new LinkedHashMap<>();

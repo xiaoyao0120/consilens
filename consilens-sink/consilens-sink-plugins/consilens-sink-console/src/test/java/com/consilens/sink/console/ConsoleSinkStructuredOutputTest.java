@@ -74,6 +74,43 @@ class ConsoleSinkStructuredOutputTest {
     }
 
     @Test
+    void shouldListWithinToleranceRowsSeparatelyFromDifferences() throws Exception {
+        ConsoleResultSink sink = new ConsoleResultSink();
+        DiffContext context = diffContext();
+        DiffRow within = DiffRow.withinTolerance(List.of(1),
+                List.of("1", "10.500000"), List.of("1", "10.504000"),
+                List.of("id", "amount"), List.of("id", "amount"),
+                List.of("amount"), List.of("amount"), Map.of("amount", 0.004));
+
+        sink.open(resultSinkConfig(), context);
+        sink.onResult(DiffResult.builder()
+                .differences(List.of())
+                .withinToleranceDifferences(List.of(within))
+                .statistics(DiffResult.DiffStatistics.builder()
+                        .sourceRowCount(1)
+                        .targetRowCount(1)
+                        .mismatchCount(0)
+                        .unchangedCount(1)
+                        .totalDifferences(0)
+                        .withinToleranceCount(1)
+                        .build())
+                .infoTree(Optional.empty())
+                .sourceTablePath(TablePath.fromString("mydb.users"))
+                .targetTablePath(TablePath.fromString("public.users"))
+                .build(), context);
+
+        JsonNode resultNode = readFirstJsonLine(out);
+        assertEquals("EQUAL", resultNode.get("status").asText());
+        assertEquals(0, resultNode.get("statistics").get("totalDifferences").asInt());
+        assertEquals(1, resultNode.get("statistics").get("withinToleranceCount").asInt());
+        JsonNode block = resultNode.get("withinTolerance");
+        assertTrue(block != null, "容差内行必须在结果里单列，不能因为不计入总数就消失");
+        assertEquals(1, block.get("count").asInt());
+        assertEquals(1, block.get("rows").size());
+        assertEquals("amount", block.get("rows").get(0).get("columns").get(0).asText());
+    }
+
+    @Test
     void shouldPrintStructuredDiffRecordsAndRespectMaxRows() throws Exception {
         ConsoleDiffRecordSink sink = new ConsoleDiffRecordSink();
         DiffContext context = diffContext();

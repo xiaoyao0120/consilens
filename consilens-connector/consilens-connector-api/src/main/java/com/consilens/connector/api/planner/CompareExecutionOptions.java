@@ -42,6 +42,15 @@ public class CompareExecutionOptions {
     /** 累计取回字节预算；null/非正数表示不限。在已知取数点累计（流式路径不含字节）。 */
     private Long maxBytesFetched;
 
+    /**
+     * 容差内行的处置口径：{@code ignore}（默认，判等、不计差异、报告单列）或
+     * {@code report}（仍算差异）。未配置时按 ignore。
+     */
+    private String withinTolerance;
+
+    /** 容差内行随结果保留的样本上限；null 表示用引擎默认值。0 表示只计数、不保留行。 */
+    private Integer withinToleranceSamples;
+
     private Map<String, Object> attributes;
 
     /**

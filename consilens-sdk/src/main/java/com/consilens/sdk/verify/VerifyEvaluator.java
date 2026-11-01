@@ -148,6 +148,8 @@ public final class VerifyEvaluator {
                 .summary(statistics)
                 .delta(delta)
                 .checks(checks)
+                .withinToleranceDifferences(result.getWithinToleranceDifferences() == null
+                        ? java.util.List.of() : result.getWithinToleranceDifferences())
                 .message(message)
                 .build();
     }

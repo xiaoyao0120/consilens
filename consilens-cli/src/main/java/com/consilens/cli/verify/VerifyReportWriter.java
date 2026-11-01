@@ -134,6 +134,10 @@ public final class VerifyReportWriter {
             markdown.append("- mismatchCount: ").append(result.getSummary().getMismatchCount()).append("\n");
             markdown.append("- sourceRows: ").append(result.getSummary().getSourceRowCount()).append("\n");
             markdown.append("- targetRows: ").append(result.getSummary().getTargetRowCount()).append("\n");
+            if (result.getSummary().getWithinToleranceCount() > 0) {
+                markdown.append("- withinToleranceCount: ")
+                        .append(result.getSummary().getWithinToleranceCount()).append("\n");
+            }
         }
         if (result.getDelta() != null) {
             markdown.append("- delta: new=").append(result.getDelta().getNewDifferences())
@@ -146,6 +150,22 @@ public final class VerifyReportWriter {
                     .append(check.getPassed()).append(" | ")
                     .append(check.getActual()).append(" | ")
                     .append(check.getLimit()).append(" |\n");
+        }
+        List<com.consilens.core.diff.DiffRow> withinTolerance = result.getWithinToleranceDifferences();
+        if (withinTolerance != null && !withinTolerance.isEmpty()) {
+            markdown.append("\n## 容差内（未计入差异）\n\n");
+            markdown.append("| primaryKey | changedColumns | source | target |\n");
+            markdown.append("| --- | --- | --- | --- |\n");
+            for (com.consilens.core.diff.DiffRow row : withinTolerance) {
+                Object columns = row.getMetadata() == null ? null
+                        : row.getMetadata().get(com.consilens.core.diff.DiffRow.METADATA_TOLERANCE_COLUMNS);
+                markdown.append("| ").append(markdownCell(row.getPrimaryKeyString()))
+                        .append(" | ").append(markdownCell(String.valueOf(columns)))
+                        .append(" | ").append(markdownCell(String.valueOf(row.getAllSourceValues())))
+                        .append(" | ").append(markdownCell(String.valueOf(row.getAllTargetValues())))
+                        .append(" |\n");
+            }
+            markdown.append("\n这些行精确值不等但落在容差内，不计入 totalDifferences。\n");
         }
         if (result.getMessage() != null) {
             markdown.append("\n").append(result.getMessage()).append("\n");
@@ -186,6 +206,16 @@ public final class VerifyReportWriter {
             return check.getMessage();
         }
         return check.getName() + " failed: actual=" + check.getActual() + ", limit=" + check.getLimit();
+    }
+
+    /** 表格单元格转义：`|` 会截断列、换行会截断行；HTML 实体转义挡不住这两种。 */
+    private static String markdownCell(String value) {
+        if (value == null) {
+            return "";
+        }
+        // 先转义反斜杠再转义管道：否则值里的 "\\|" 会变成 "\\\|"，GFM 仍把管道当列分隔
+        return escape(value).replace("\\", "\\\\").replace("|", "\\|")
+                .replace("\r", " ").replace("\n", " ");
     }
 
     private static String escape(String value) {

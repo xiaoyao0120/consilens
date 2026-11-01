@@ -36,6 +36,14 @@ public class DefaultDiffLifecycle implements DiffLifecycle {
     }
 
     @Override
+    public void onWithinToleranceFound(List<DiffRow> rows, DiffContext context) throws Exception {
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        sinkManager.onWithinToleranceRecords(rows, context);
+    }
+
+    @Override
     public void onDiffComplete(DiffResult result, DiffContext context) throws Exception {
         sinkManager.onResult(result, context);
     }

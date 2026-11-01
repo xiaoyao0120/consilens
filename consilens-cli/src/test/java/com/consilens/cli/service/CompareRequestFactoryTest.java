@@ -378,6 +378,55 @@ class CompareRequestFactoryTest {
                 "sessionTimeZone must survive the CLI type-rule -> spec conversion");
     }
 
+    @Test
+    void shouldDefaultWithinToleranceToIgnoreWhenNotConfigured() {
+        CompareRequest request = factory.create(configWithComparison());
+
+        assertEquals("ignore", request.getExecutionOptions().getWithinTolerance(),
+                "没配 tolerance 策略时默认口径是 ignore（容差内不算差异）");
+        assertEquals(100, request.getExecutionOptions().getWithinToleranceSamples());
+    }
+
+    @Test
+    void shouldCarryTolerancePolicyIntoExecutionOptions() {
+        CliConfiguration config = configWithComparison();
+        config.setNormalization(com.consilens.cli.model.normalization.NormalizationConfig.builder()
+                .tolerance(com.consilens.cli.model.normalization.TolerancePolicyConfig.builder()
+                        .withinTolerance("report")
+                        .reportSamples(5)
+                        .build())
+                .build());
+
+        CompareRequest request = factory.create(config);
+
+        assertEquals("report", request.getExecutionOptions().getWithinTolerance());
+        assertEquals(5, request.getExecutionOptions().getWithinToleranceSamples());
+    }
+
+    @Test
+    void shouldRejectUnknownWithinToleranceMode() {
+        CliConfiguration config = configWithComparison();
+        config.setNormalization(com.consilens.cli.model.normalization.NormalizationConfig.builder()
+                .tolerance(com.consilens.cli.model.normalization.TolerancePolicyConfig.builder()
+                        .withinTolerance("ignore-diff")
+                        .build())
+                .build());
+
+        IllegalArgumentException failure = org.junit.jupiter.api.Assertions.assertThrows(
+                IllegalArgumentException.class, () -> factory.create(config));
+        assertTrue(failure.getMessage().contains("withinTolerance"),
+                "拼错的口径值必须报错，不能静默按默认值跑");
+    }
+
+    private CliConfiguration configWithComparison() {
+        CliConfiguration config = baseConfig();
+        config.setComparison(ComparisonConfig.builder()
+                .keys(ListPairConfig.builder().source(List.of("id")).target(List.of("id")).build())
+                .fields(ListPairConfig.builder().source(List.of("amount")).target(List.of("amount")).build())
+                .build());
+        return config;
+    }
+
     private CliConfiguration baseConfig() {
         return CliConfiguration.builder()
                 .source(ConnectionConfig.builder()

@@ -99,6 +99,33 @@ public class LocalDiffEngine {
             DataTypeHandler dataTypeHandler1,
             DataTypeHandler dataTypeHandler2,
             com.consilens.connector.api.normalization.NormalizationSpec spec) {
+        return findDifferencesWithToleranceOutcome(rows1, rows2, keyColumns1, extraColumns1, keyColumns2,
+                extraColumns2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2, spec, false)
+                .getDifferences();
+    }
+
+    /**
+     * 与 {@link #findDifferencesWithTolerance} 同一套判定，额外保留"容差内"的行。
+     *
+     * <p>为什么需要单独一路：容差判等的行若直接丢弃，报告里就看不到"这里差了 0.004 但被容差吸收"，
+     * 一旦容差配宽了（比如 1.0），只能看到"完全一致"，没有任何审计线索。调用方按
+     * {@code withinTolerance} 口径决定这些行是计数还是只列出。
+     *
+     * @param captureWithinTolerance false 时不采集样本，行为与旧方法完全一致（省去一次行构造）
+     */
+    public static ToleranceOutcome findDifferencesWithToleranceOutcome(
+            List<Object[]> rows1,
+            List<Object[]> rows2,
+            List<String> keyColumns1,
+            List<String> extraColumns1,
+            List<String> keyColumns2,
+            List<String> extraColumns2,
+            Map<String, DataType> columnTypes1,
+            Map<String, DataType> columnTypes2,
+            DataTypeHandler dataTypeHandler1,
+            DataTypeHandler dataTypeHandler2,
+            com.consilens.connector.api.normalization.NormalizationSpec spec,
+            boolean captureWithinTolerance) {
 
         // 容差只作用于非键列：键必须精确相等，否则键分组/去重语义会被破坏
         List<String> comparedColumns1 = new ArrayList<>(keyColumns1);
@@ -111,8 +138,28 @@ public class LocalDiffEngine {
                 withoutKeys(comparedColumns2, keyColumns2),
                 columnTypes1, columnTypes2);
 
-        return findDifferences(rows1, rows2, keyColumns1, extraColumns1, keyColumns2, extraColumns2,
-                columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2, tolerances);
+        return findDifferencesInternal(rows1, rows2, keyColumns1, extraColumns1, keyColumns2, extraColumns2,
+                columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2, tolerances,
+                captureWithinTolerance);
+    }
+
+    /** 容差判等的行与真正的差异分开返回。 */
+    public static final class ToleranceOutcome {
+        private final List<DiffRow> differences;
+        private final List<DiffRow> withinTolerance;
+
+        ToleranceOutcome(List<DiffRow> differences, List<DiffRow> withinTolerance) {
+            this.differences = differences;
+            this.withinTolerance = withinTolerance;
+        }
+
+        public List<DiffRow> getDifferences() {
+            return differences;
+        }
+
+        public List<DiffRow> getWithinTolerance() {
+            return withinTolerance;
+        }
     }
 
     private static List<String> withoutKeys(List<String> columns, List<String> keys) {
@@ -143,6 +190,24 @@ public class LocalDiffEngine {
             DataTypeHandler dataTypeHandler1,
             DataTypeHandler dataTypeHandler2,
             Map<String, ColumnTolerance> tolerances) {
+        return findDifferencesInternal(rows1, rows2, keyColumns1, extraColumns1, keyColumns2, extraColumns2,
+                columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2, tolerances, false)
+                .getDifferences();
+    }
+
+    private static ToleranceOutcome findDifferencesInternal(
+            List<Object[]> rows1,
+            List<Object[]> rows2,
+            List<String> keyColumns1,
+            List<String> extraColumns1,
+            List<String> keyColumns2,
+            List<String> extraColumns2,
+            Map<String, DataType> columnTypes1,
+            Map<String, DataType> columnTypes2,
+            DataTypeHandler dataTypeHandler1,
+            DataTypeHandler dataTypeHandler2,
+            Map<String, ColumnTolerance> tolerances,
+            boolean captureWithinTolerance) {
 
         log.info("Finding differences between {} and {} rows", rows1.size(), rows2.size());
 
@@ -155,6 +220,7 @@ public class LocalDiffEngine {
         Map<String, PrimaryKeyGroup> rowsByPk2 = groupRowsByPrimaryKey(rows2, keyColumns2, columnTypes2, dataTypeHandler2);
 
         List<DiffRow> differences = new ArrayList<>();
+        List<DiffRow> withinTolerance = captureWithinTolerance ? new ArrayList<>() : null;
 
         // Process keys from table1, then keys that only exist in table2, so we
         // do not need a third full-size collection for all primary keys.
@@ -176,7 +242,7 @@ public class LocalDiffEngine {
             columnNames2.addAll(extraColumns2);
             List<DiffRow> pkDifferences = findPrimaryKeyDifferences(pk, pkRows1, pkRows2, relevantRows1, relevantRows2,
                     columnNames1, columnNames2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2,
-                    tolerances);
+                    tolerances, withinTolerance);
             differences.addAll(pkDifferences);
         }
 
@@ -193,12 +259,14 @@ public class LocalDiffEngine {
             columnNames2.addAll(extraColumns2);
             List<DiffRow> pkDifferences = findPrimaryKeyDifferences(group2.rawKey, Collections.emptyList(), pkRows2,
                     Collections.emptyList(), relevantRows2, columnNames1, columnNames2, columnTypes1, columnTypes2,
-                    dataTypeHandler1, dataTypeHandler2, tolerances);
+                    dataTypeHandler1, dataTypeHandler2, tolerances, withinTolerance);
             differences.addAll(pkDifferences);
         }
 
-        log.info("Found {} total differences", differences.size());
-        return differences;
+        log.info("Found {} total differences ({} within tolerance)", differences.size(),
+                withinTolerance == null ? 0 : withinTolerance.size());
+        return new ToleranceOutcome(differences,
+                withinTolerance == null ? Collections.emptyList() : withinTolerance);
     }
 
     /**
@@ -293,7 +361,8 @@ public class LocalDiffEngine {
             Map<String, DataType> columnTypes2,
             DataTypeHandler dataTypeHandler1,
             DataTypeHandler dataTypeHandler2,
-            Map<String, ColumnTolerance> tolerances) {
+            Map<String, ColumnTolerance> tolerances,
+            List<DiffRow> withinTolerance) {
 
         List<DiffRow> differences = new ArrayList<>();
 
@@ -323,19 +392,21 @@ public class LocalDiffEngine {
         } else if (!relevantRows1.isEmpty()) {
             // Rows exist in both tables
             if (relevantRows1.size() == 1 && relevantRows2.size() == 1) {
-                // Single row in each - compare values
+                // Single row in each - compare values once,同时收集"精确不等但容差判等"的列：
+                // 原来先 rowsEqualNormalized 再 findChangedColumnsWithDetails 会把同一行列比较跑两遍，
+                // 且拿不到"被容差吸收"的证据。
                 Object[] row1 = relevantRows1.get(0);
                 Object[] row2 = relevantRows2.get(0);
-                if (!rowsEqualNormalized(row1, row2, columnNames1, columnNames2, columnTypes1, columnTypes2,
-                        dataTypeHandler1, dataTypeHandler2, tolerances)) {
-                    // Values differ - identify which columns changed separately for each table
-                    List<String> changedColumns1 = new ArrayList<>();
-                    List<String> changedColumns2 = new ArrayList<>();
-                    // Use columnNames1 for finding changed columns since both tables should have
-                    // same structure for comparison
-                    findChangedColumnsWithDetails(row1, row2, columnNames1, columnNames2, changedColumns1,
-                            changedColumns2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2,
-                            tolerances);
+                List<String> changedColumns1 = new ArrayList<>();
+                List<String> changedColumns2 = new ArrayList<>();
+                List<String> toleranceColumns1 = new ArrayList<>();
+                List<String> toleranceColumns2 = new ArrayList<>();
+                Map<String, Double> toleranceDeltas = new LinkedHashMap<>();
+                List<Integer> changedIndices = findChangedColumnsWithDetails(row1, row2, columnNames1, columnNames2,
+                        changedColumns1, changedColumns2, toleranceColumns1, toleranceColumns2, toleranceDeltas,
+                        columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2, tolerances);
+                // 必须以"变了几个下标"为准：列名缺失时 changedColumns 可能是空的，但行长度不同仍是差异
+                if (!changedIndices.isEmpty()) {
                     log.debug("Creating modified diff row with changed columns1: {}, columns2: {} for PK: {}",
                             changedColumns1, changedColumns2, primaryKey);
                     // Normalize values for output to ensure consistent formatting
@@ -343,6 +414,13 @@ public class LocalDiffEngine {
                     List<Object> targetValues = normalizeRowValues(row2, columnNames2, columnTypes2);
                     differences.add(DiffRow.modified(primaryKey, sourceValues, targetValues, columnNames1, columnNames2,
                             changedColumns1, changedColumns2));
+                } else if (withinTolerance != null
+                        && (!toleranceColumns1.isEmpty() || !toleranceColumns2.isEmpty())) {
+                    // 整行没有真差异，但存在被容差吸收的列：留作报告样本，是否计数由调用方口径决定
+                    withinTolerance.add(DiffRow.withinTolerance(primaryKey,
+                            normalizeRowValues(row1, columnNames1, columnTypes1),
+                            normalizeRowValues(row2, columnNames2, columnTypes2),
+                            columnNames1, columnNames2, toleranceColumns1, toleranceColumns2, toleranceDeltas));
                 }
             } else {
                 /*
@@ -372,8 +450,8 @@ public class LocalDiffEngine {
                     List<String> changedColumns1 = new ArrayList<>();
                     List<String> changedColumns2 = new ArrayList<>();
                     findChangedColumnsWithDetails(row1, row2, columnNames1, columnNames2, changedColumns1,
-                            changedColumns2, columnTypes1, columnTypes2, dataTypeHandler1, dataTypeHandler2,
-                            tolerances);
+                            changedColumns2, null, null, null, columnTypes1, columnTypes2, dataTypeHandler1,
+                            dataTypeHandler2, tolerances);
                     DiffRow diff = DiffRow.modified(primaryKey,
                             normalizeRowValues(row1, columnNames1, columnTypes1),
                             normalizeRowValues(row2, columnNames2, columnTypes2),
@@ -404,6 +482,7 @@ public class LocalDiffEngine {
     private static List<Integer> findChangedColumnsWithDetails(
             Object[] row1, Object[] row2, List<String> columnNames1, List<String> columnNames2,
             List<String> changedColumns1, List<String> changedColumns2,
+            List<String> toleranceColumns1, List<String> toleranceColumns2, Map<String, Double> toleranceDeltas,
             Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2,
             DataTypeHandler dataTypeHandler1, DataTypeHandler dataTypeHandler2,
             Map<String, ColumnTolerance> tolerances) {
@@ -448,6 +527,10 @@ public class LocalDiffEngine {
                     changedColumns2.add(columnName2);
                 }
                 log.trace("Column {} values differ: '{}' vs '{}'", columnName1 != null ? columnName1 : i, val1, val2);
+            } else if (toleranceColumns1 != null) {
+                // 判等成功，但要区分"本来就相等"和"靠容差才相等"：后者才是报告里要单列的
+                recordToleranceSuppressedColumn(val1, val2, columnName1, columnName2, dataType1, dataType2,
+                        tolerances, toleranceColumns1, toleranceColumns2, toleranceDeltas);
             }
         }
 
@@ -467,24 +550,110 @@ public class LocalDiffEngine {
     }
 
     /**
-     * Value comparison with optional per-column numeric tolerance. Tolerance only
-     * applies when both values are numbers, the column resolves a tolerance, and
-     * the type is not an exact-comparison numeric (integer/decimal).
+     * Value comparison with optional per-column numeric tolerance.
+     *
+     * <p>容差只在"浮点列 + 该列解析出容差 + 两侧都能当数值读"时生效。**必须接受字符串形态**：
+     * checksum 路径的行值是 SQL 侧归一化后渲染的文本（如 MySQL 的 {@code FORMAT(...,6)}），
+     * 原先只认 {@link Number}，导致容差配置解析成功却永远不参与判定（P1-5）。
+     * 读不成数值（非数值文本、NULL 等）时回落到普通比较，不抛异常。
      */
     private static boolean valuesEqual(Object val1, Object val2, DataType dataType,
                                        Map<String, ColumnTolerance> tolerances,
                                        String columnName1, String columnName2,
                                        DataType dataType1, DataType dataType2) {
         ColumnTolerance tolerance = resolveTolerance(tolerances, columnName1, columnName2);
-        if (tolerance != null && val1 instanceof Number && val2 instanceof Number
-                && !requiresExactNumericComparison(preferExactType(dataType1, dataType2))) {
-            boolean equal = tolerance.isEqual(((Number) val1).doubleValue(), ((Number) val2).doubleValue());
-            log.trace("Comparing values with tolerance: '{}' vs '{}' = {}", val1, val2, equal);
-            return equal;
+        DataType comparisonType = preferExactType(dataType1, dataType2);
+        if (tolerance != null && !requiresExactNumericComparison(comparisonType)) {
+            Double numeric1 = numericForTolerance(val1, dataType1, dataType2);
+            Double numeric2 = numericForTolerance(val2, dataType1, dataType2);
+            if (numeric1 != null && numeric2 != null) {
+                boolean equal = tolerance.isEqual(numeric1, numeric2);
+                log.trace("Comparing values with tolerance: '{}' vs '{}' = {}", val1, val2, equal);
+                return equal;
+            }
         }
         boolean result = compareValuesInternal(val1, val2, dataType);
         log.trace("Comparing values: '{}' vs '{}' = {}", val1, val2, result);
         return result;
+    }
+
+    /**
+     * 记录"精确不等、但被容差判等"的列：只有这种列才会出现在报告的容差内样本里。
+     * 数值相同的不同渲染（如 {@code 10.5} vs {@code 10.500}）不算，避免把纯格式差异当审计线索。
+     */
+    private static void recordToleranceSuppressedColumn(Object val1, Object val2,
+                                                        String columnName1, String columnName2,
+                                                        DataType dataType1, DataType dataType2,
+                                                        Map<String, ColumnTolerance> tolerances,
+                                                        List<String> toleranceColumns1,
+                                                        List<String> toleranceColumns2,
+                                                        Map<String, Double> toleranceDeltas) {
+        ColumnTolerance tolerance = resolveTolerance(tolerances, columnName1, columnName2);
+        if (tolerance == null || requiresExactNumericComparison(preferExactType(dataType1, dataType2))) {
+            return;
+        }
+        Double numeric1 = numericForTolerance(val1, dataType1, dataType2);
+        Double numeric2 = numericForTolerance(val2, dataType1, dataType2);
+        if (numeric1 == null || numeric2 == null || numeric1.doubleValue() == numeric2.doubleValue()) {
+            return;
+        }
+        if (!tolerance.isEqual(numeric1, numeric2)) {
+            return;
+        }
+        String column = columnName1 != null ? columnName1 : columnName2;
+        if (columnName1 != null && !toleranceColumns1.contains(columnName1)) {
+            toleranceColumns1.add(columnName1);
+        }
+        if (columnName2 != null && toleranceColumns2 != null && !toleranceColumns2.contains(columnName2)) {
+            toleranceColumns2.add(columnName2);
+        }
+        if (toleranceDeltas != null && column != null) {
+            toleranceDeltas.put(column, Math.abs(numeric1 - numeric2));
+        }
+    }
+
+    /**
+     * 容差比较可用的数值：Number 直接可用；文本只有在**已知是浮点列**时才转成数值。
+     * schema 不可用时列类型是 UNKNOWN，此时把 "12.34" 当数值会顺带放宽 DECIMAL 列
+     * （DECIMAL 语义要求精确比较），所以文本形态必须有明确的浮点类型背书。
+     */
+    private static Double numericForTolerance(Object value, DataType type1, DataType type2) {
+        if (value instanceof Number) {
+            return toToleranceDouble(value);
+        }
+        // 任一侧确知是浮点即可：两侧 schema 可能只有一侧可用，按 preferExactType 取单侧会让结论随机
+        if (value instanceof CharSequence && (isFloatingType(type1) || isFloatingType(type2))) {
+            return toToleranceDouble(value);
+        }
+        return null;
+    }
+
+    private static boolean isFloatingType(DataType type) {
+        return type == DataType.FLOAT || type == DataType.DOUBLE || type == DataType.REAL;
+    }
+
+    /**
+     * 把数值或数值文本转成 double；读不出来返回 null（由调用方回落普通比较）。
+     * SQL 归一化会把 DOUBLE 渲染成 "10.500000"，这是容差在 checksum 路径失效的直接原因。
+     */
+    static Double toToleranceDouble(Object value) {
+        if (value instanceof Number) {
+            double parsed = ((Number) value).doubleValue();
+            return Double.isFinite(parsed) ? parsed : null;
+        }
+        if (value instanceof CharSequence) {
+            String text = value.toString().trim();
+            if (text.isEmpty()) {
+                return null;
+            }
+            try {
+                double parsed = Double.parseDouble(text);
+                return Double.isFinite(parsed) ? parsed : null;
+            } catch (NumberFormatException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private static ColumnTolerance resolveTolerance(Map<String, ColumnTolerance> tolerances,
@@ -731,51 +900,4 @@ public class LocalDiffEngine {
         return normalizedValues;
     }
 
-    /**
-     * Compare two rows with type-aware normalization.
-     * CRITICAL: In NONE mode, rows already contain database-normalized values (strings).
-     * Direct comparison is sufficient - no need for ValueNormalizer.
-     *
-     * @param row1         First row
-     * @param row2         Second row
-     * @param columnNames  Column names (used to match column types)
-     * @param columnTypes1 Column data types for table 1
-     * @param columnTypes2 Column data types for table 2
-     * @return true if rows are equal after normalization
-     */
-    private static boolean rowsEqualNormalized(
-            Object[] row1,
-            Object[] row2,
-            List<String> columnNames1,
-            List<String> columnNames2,
-            Map<String, DataType> columnTypes1,
-            Map<String, DataType> columnTypes2,
-            DataTypeHandler dataTypeHandler1,
-            DataTypeHandler dataTypeHandler2,
-            Map<String, ColumnTolerance> tolerances) {
-
-        if (row1.length != row2.length) {
-            return false;
-        }
-
-        // CRITICAL: Rows already contain database-normalized values
-        // Direct comparison is sufficient
-        for (int i = 0; i < row1.length; i++) {
-            String columnName1 = i < columnNames1.size() ? columnNames1.get(i) : null;
-            String columnName2 = i < columnNames2.size() ? columnNames2.get(i) : null;
-            DataType dataType1 = columnTypes1 != null && columnName1 != null ? columnTypes1.get(columnName1) : null;
-            DataType dataType2 = columnTypes2 != null && columnName2 != null ? columnTypes2.get(columnName2) : null;
-            Object val1 = normalizeForComparison(row1[i], dataType1, dataTypeHandler1);
-            Object val2 = normalizeForComparison(row2[i], dataType2, dataTypeHandler2);
-
-            if (!valuesEqual(val1, val2, preferExactType(dataType1, dataType2), tolerances, columnName1, columnName2,
-                    dataType1, dataType2)) {
-                String logColumn = columnName1 != null ? columnName1 : String.valueOf(i);
-                log.trace("Column {} values differ: '{}' vs '{}'", logColumn, val1, val2);
-                return false;
-            }
-        }
-
-        return true;
-    }
 }

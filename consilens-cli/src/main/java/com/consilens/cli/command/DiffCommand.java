@@ -271,6 +271,9 @@ public class DiffCommand implements Callable<Integer> {
             log.info("  Target missing rows: " + result.getTargetMissingCount());
             log.info("  Mismatched rows: " + result.getMismatchCount());
             log.info("  Total differences: " + result.getTotalDifferences());
+            if (result.getWithinToleranceCount() > 0) {
+                log.info("  Within tolerance (excluded from total): " + result.getWithinToleranceCount());
+            }
 
             if (result.getTotalDifferences() == 0) {
                 log.info("No differences found! The tables are identical.");

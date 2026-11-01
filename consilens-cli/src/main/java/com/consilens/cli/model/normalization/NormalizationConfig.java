@@ -44,7 +44,14 @@ public class NormalizationConfig {
      */
     @JsonProperty("columns")
     private Map<String, TypeNormalizationRule> columns;
-    
+
+    /**
+     * 容差内差异的处置策略（ignore|report）。与具体类型规则分开：它不是一个归一化操作，
+     * 而是"判定后怎么记"的口径。
+     */
+    @JsonProperty("tolerance")
+    private TolerancePolicyConfig tolerance;
+
     /**
      * Validate configuration validity
      */
@@ -52,6 +59,9 @@ public class NormalizationConfig {
         validatePrecision("global", global);
         validatePrecision("source", source);
         validatePrecision("target", target);
+        if (tolerance != null) {
+            tolerance.validate();
+        }
     }
     
     private void validatePrecision(String configName, Map<String, TypeNormalizationRule> rules) {

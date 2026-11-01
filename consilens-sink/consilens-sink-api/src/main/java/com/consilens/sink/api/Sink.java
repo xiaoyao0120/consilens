@@ -16,6 +16,12 @@ public interface Sink extends AutoCloseable {
 
     default void onDiffRecords(List<DiffRow> rows, DiffContext context) throws Exception {}
 
+    /**
+     * 容差内（未计入差异）的行。默认实现忽略：只有需要在报告里单列的实现
+     * （console / csv）才覆写，避免把"不是差异"的行混进 diff-record 流。
+     */
+    default void onWithinToleranceRecords(List<DiffRow> rows, DiffContext context) throws Exception {}
+
     default void onResult(DiffResult result, DiffContext context) throws Exception {}
 
     default void onError(DiffContext context, Throwable error) throws Exception {}

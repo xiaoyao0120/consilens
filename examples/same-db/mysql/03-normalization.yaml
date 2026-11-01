@@ -139,6 +139,12 @@ normalization:
       tolerance: 0.5
       relativeTolerance: 0.0001
 
+  # 容差内差异的记账口径：ignore（默认）= 判等、不计入 totalDifferences、报告里单独列出；
+  # report = 仍然算差异（审计档，用于核对容差是否过宽）。
+  tolerance:
+    withinTolerance: ignore
+    reportSamples: 100
+
 result:
   failOnSinkError: false
   sinks:

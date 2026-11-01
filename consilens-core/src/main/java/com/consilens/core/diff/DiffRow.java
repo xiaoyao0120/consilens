@@ -163,7 +163,54 @@ public class DiffRow {
     }
 
     /**
-     * 两侧值数组同序（键列 + 比对列）时适用的列名：一侧缺失的行只在另一侧带列名，
+     * 容差内行的 metadata 标记：{@code true} 表示"精确比较不等、但按容差判等"。
+     * 默认口径下这类行不计入差异，只作为报告样本保留。
+     */
+    public static final String METADATA_WITHIN_TOLERANCE = "withinTolerance";
+
+    /** 触发容差判等的列名（报告里单列时说明"为什么不算差异"）。 */
+    public static final String METADATA_TOLERANCE_COLUMNS = "toleranceColumns";
+
+    /** 各列的实际差值（列名 → 绝对差），供报告展示"差多少但在容差内"。 */
+    public static final String METADATA_TOLERANCE_DELTAS = "toleranceDeltas";
+
+    /**
+     * 构造一行"容差内"记录：操作仍是 MISMATCH，但带 {@link #METADATA_WITHIN_TOLERANCE} 标记，
+     * 由调用方按 {@code withinTolerance} 口径决定计数还是只列出。
+     */
+    public static DiffRow withinTolerance(List<Object> primaryKey, List<Object> sourceValues,
+                                          List<Object> targetValues, List<String> columnNames1,
+                                          List<String> columnNames2, List<String> toleranceColumns1,
+                                          List<String> toleranceColumns2,
+                                          java.util.Map<String, Double> toleranceDeltas) {
+        java.util.Map<String, Object> metadata = new java.util.HashMap<>();
+        metadata.put(METADATA_WITHIN_TOLERANCE, Boolean.TRUE);
+        metadata.put(METADATA_TOLERANCE_COLUMNS, toleranceColumns1);
+        // REPORT 口径下这行会被当普通差异输出，changedColumns 必须齐全，否则报告只说"变了"不说是哪列；
+        // 两侧列名可能不同（comparison.mappings 改名），必须各写各的
+        metadata.put("changedColumns1", toleranceColumns1);
+        metadata.put("changedColumns2", toleranceColumns2);
+        if (toleranceDeltas != null && !toleranceDeltas.isEmpty()) {
+            metadata.put(METADATA_TOLERANCE_DELTAS, toleranceDeltas);
+        }
+        return builder()
+                .operation(DiffOperation.MISMATCH)
+                .primaryKey(primaryKey)
+                .sourceValues(Optional.of(sourceValues))
+                .targetValues(Optional.of(targetValues))
+                .columnNames1(columnNames1)
+                .columnNames2(columnNames2)
+                .metadata(metadata)
+                .build();
+    }
+
+    /** 是否为"容差内"记录（metadata 标记；空 metadata 视为否）。 */
+    @JsonIgnore
+    public boolean isWithinTolerance() {
+        return metadata != null && Boolean.TRUE.equals(metadata.get(METADATA_WITHIN_TOLERANCE));
+    }
+
+    /** 两侧值数组同序（键列 + 比对列）时适用的列名：一侧缺失的行只在另一侧带列名，
      * 因此空集合表示"这一侧没有列名"，不能等同于 null。
      */
     public List<String> resolvedColumnNames() {

@@ -569,6 +569,11 @@ public abstract class TableDiffer implements DiffEmitter {
      */
     @Getter
     public static class DifferConfig {
+        /** 容差内样本默认上限：与执行层默认值保持一致（报告要看得见，又不能无界占内存）。 */
+        static final int DEFAULT_WITHIN_TOLERANCE_SAMPLES = 100;
+        /** 与执行层一致的硬顶，避免 SDK 调用方传一个天文数字把样本灌满内存。 */
+        static final int MAX_WITHIN_TOLERANCE_SAMPLES = 10_000;
+
         private final int bisectionFactor;
         private final long bisectionThreshold;
         private final int maxDepth;
@@ -584,6 +589,10 @@ public abstract class TableDiffer implements DiffEmitter {
         private final long maxBytesFetched;
         /** 原始归一化 spec：容差等"取数点之后"的规则由终局比较解析。 */
         private final com.consilens.connector.api.normalization.NormalizationSpec normalizationSpec;
+        /** 容差内行是否计入差异：IGNORE（默认，不计入、报告单列）或 REPORT（仍计入）。 */
+        private final com.consilens.core.compare.WithinToleranceMode withinToleranceMode;
+        /** 容差内行随结果保留的样本上限；0 表示只计数不保留行。 */
+        private final int withinToleranceSamples;
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,
                            ChecksumAlgorithm checksumAlgorithm,
@@ -616,6 +625,23 @@ public abstract class TableDiffer implements DiffEmitter {
                            int decimalScale, boolean allowNullableKeys,
                            long maxDurationMs, long maxRowsScanned, long maxBytesFetched,
                            com.consilens.connector.api.normalization.NormalizationSpec normalizationSpec) {
+            this(bisectionFactor, bisectionThreshold, checksumAlgorithm, localCompareMode, concurrencyConfig,
+                    maxDifferences, validateUniqueKeys, decimalScale, allowNullableKeys, maxDurationMs,
+                    maxRowsScanned, maxBytesFetched, normalizationSpec,
+                    com.consilens.core.compare.WithinToleranceMode.IGNORE,
+                    DEFAULT_WITHIN_TOLERANCE_SAMPLES);
+        }
+
+        public DifferConfig(int bisectionFactor, long bisectionThreshold,
+                           ChecksumAlgorithm checksumAlgorithm,
+                           LocalCompareMode localCompareMode,
+                           ConcurrencyConfig concurrencyConfig,
+                           long maxDifferences, boolean validateUniqueKeys,
+                           int decimalScale, boolean allowNullableKeys,
+                           long maxDurationMs, long maxRowsScanned, long maxBytesFetched,
+                           com.consilens.connector.api.normalization.NormalizationSpec normalizationSpec,
+                           com.consilens.core.compare.WithinToleranceMode withinToleranceMode,
+                           int withinToleranceSamples) {
             this.bisectionFactor = bisectionFactor;
             this.bisectionThreshold = bisectionThreshold;
             this.maxDepth = 10;
@@ -631,6 +657,11 @@ public abstract class TableDiffer implements DiffEmitter {
             this.maxRowsScanned = maxRowsScanned > 0 ? maxRowsScanned : Long.MAX_VALUE;
             this.maxBytesFetched = maxBytesFetched > 0 ? maxBytesFetched : Long.MAX_VALUE;
             this.normalizationSpec = normalizationSpec;
+            this.withinToleranceMode = withinToleranceMode != null
+                    ? withinToleranceMode : com.consilens.core.compare.WithinToleranceMode.IGNORE;
+            this.withinToleranceSamples = withinToleranceSamples >= 0
+                    ? Math.min(withinToleranceSamples, MAX_WITHIN_TOLERANCE_SAMPLES)
+                    : DEFAULT_WITHIN_TOLERANCE_SAMPLES;
         }
 
         public DifferConfig(int bisectionFactor, long bisectionThreshold,

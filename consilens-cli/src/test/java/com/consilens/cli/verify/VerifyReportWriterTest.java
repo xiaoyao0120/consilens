@@ -19,6 +19,56 @@ class VerifyReportWriterTest {
     Path tempDir;
 
     @Test
+    void shouldListWithinToleranceRowsInMarkdownReport() throws Exception {
+        VerifyResult result = VerifyResult.builder()
+                .verdict(Verdict.PASS)
+                .exitCode(0)
+                .summary(com.consilens.core.diff.DiffResult.DiffStatistics.builder()
+                        .sourceRowCount(1)
+                        .targetRowCount(1)
+                        .totalDifferences(0)
+                        .withinToleranceCount(1)
+                        .build())
+                .withinToleranceDifferences(List.of(com.consilens.core.diff.DiffRow.withinTolerance(List.of(1), List.of("1", "10.500000"), List.of("1", "10.504000"),
+                        List.of("id", "amount"), List.of("id", "amount"),
+                        List.of("amount"), List.of("amount"), java.util.Map.of("amount", 0.004))))
+                .build();
+
+        List<Path> written = VerifyReportWriter.write(result, List.of("markdown"), tempDir);
+
+        String markdown = Files.readString(written.get(0), StandardCharsets.UTF_8);
+        assertThat(markdown).contains("withinToleranceCount: 1");
+        assertThat(markdown).contains("容差内（未计入差异）");
+        assertThat(markdown).contains("amount");
+    }
+
+    @Test
+    void shouldEscapePipesAndNewlinesInWithinToleranceTable() throws Exception {
+        VerifyResult result = VerifyResult.builder()
+                .verdict(Verdict.PASS)
+                .exitCode(0)
+                .summary(com.consilens.core.diff.DiffResult.DiffStatistics.builder()
+                        .sourceRowCount(1)
+                        .targetRowCount(1)
+                        .totalDifferences(0)
+                        .withinToleranceCount(1)
+                        .build())
+                .withinToleranceDifferences(List.of(com.consilens.core.diff.DiffRow.withinTolerance(
+                        List.of("a|b"), List.of("x\ny"), List.of("x\ny"),
+                        List.of("amount"), List.of("amount"),
+                        List.of("amount"), List.of("amount"), java.util.Map.of("amount", 0.004))))
+                .build();
+
+        List<Path> written = VerifyReportWriter.write(result, List.of("markdown"), tempDir);
+
+        String markdown = Files.readString(written.get(0), StandardCharsets.UTF_8);
+        assertThat(markdown).contains("a\\|b");
+        assertThat(markdown).doesNotContain("a|b");
+        // 表格行不能被换行截断：原值里的 \n 必须变成空格
+        assertThat(markdown.lines().filter(line -> line.startsWith("| a")).count()).isEqualTo(1);
+    }
+
+    @Test
     void shouldRenderInconclusiveChecksAsSkippedWithReason() throws Exception {
         VerifyResult result = VerifyResult.builder()
                 .verdict(Verdict.INCONCLUSIVE)

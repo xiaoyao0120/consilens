@@ -34,6 +34,13 @@ public class DiffResult {
     private List<DiffRow> differences;
 
     /**
+     * 容差内（精确不等、但按 tolerance/relativeTolerance 判等）的行样本。
+     * 默认口径下这些行不计入 {@link #differences} 与 totalDifferences，只用于报告单列。
+     */
+    @Builder.Default
+    private List<DiffRow> withinToleranceDifferences = Collections.emptyList();
+
+    /**
      * Statistics about the diff operation.
      */
     private DiffStatistics statistics;
@@ -170,7 +177,7 @@ public class DiffResult {
             return "No statistics available";
         }
 
-        return String.format(
+        String summary = String.format(
                 "Source: %s (%d rows), Target: %s (%d rows), Differences: %d (source missing: %d, target missing: %d, mismatched: %d), %.2f%% difference",
                 sourceTablePath.getTableName(),
                 statistics.getSourceRowCount(),
@@ -182,6 +189,10 @@ public class DiffResult {
                 statistics.getMismatchCount(),
                 statistics.getDifferencePercentage()
         );
+        if (statistics.getWithinToleranceCount() > 0) {
+            summary += " (" + statistics.getWithinToleranceCount() + " within tolerance, not counted)";
+        }
+        return summary;
     }
 
     /**
@@ -202,6 +213,7 @@ public class DiffResult {
             statsMap.put("processingTimeMs", statistics.getProcessingTimeMs());
         }
 
+        statsMap.put("withinToleranceCount", statistics == null ? 0L : statistics.getWithinToleranceCount());
         statsMap.put("differenceCount", getDifferenceCount());
         statsMap.put("hasDifferences", hasDifferences());
         statsMap.put("completedAt", completedAt == null ? null : completedAt.toString());
@@ -236,6 +248,12 @@ public class DiffResult {
             mergedDifferences.addAll(other.differences);
         }
 
+        List<DiffRow> mergedWithinTolerance = new ArrayList<>(
+                this.withinToleranceDifferences == null ? List.of() : this.withinToleranceDifferences);
+        if (other.withinToleranceDifferences != null) {
+            mergedWithinTolerance.addAll(other.withinToleranceDifferences);
+        }
+
         DiffStatistics mergedStats = statistics == null ? other.statistics : statistics.merge(other.statistics);
 
         Map<String, Object> mergedMetadata = new HashMap<>(
@@ -250,6 +268,7 @@ public class DiffResult {
 
         return builder()
                 .differences(mergedDifferences)
+                .withinToleranceDifferences(mergedWithinTolerance)
                 .statistics(mergedStats)
                 .infoTree(Optional.empty()) // Would need to merge info trees
                 .completedAt(mergedCompletedAt)
@@ -305,6 +324,9 @@ public class DiffResult {
         private final long totalDifferences;
         private final long processingTimeMs;
         private final long unchangedCount;
+        /** 容差内行数（默认口径下不计入 totalDifferences，仅报告展示）。 */
+        @Builder.Default
+        private final long withinToleranceCount = 0L;
 
         public static DiffStatistics empty() {
             return builder()
@@ -316,6 +338,7 @@ public class DiffResult {
                     .totalDifferences(0)
                     .processingTimeMs(0)
                     .unchangedCount(0)
+                    .withinToleranceCount(0)
                     .build();
         }
 
@@ -355,6 +378,7 @@ public class DiffResult {
                     .mismatchCount(mismatchCount + other.mismatchCount)
                     .processingTimeMs(Math.max(processingTimeMs, other.processingTimeMs))
                     .unchangedCount(unchangedCount + other.unchangedCount)
+                    .withinToleranceCount(withinToleranceCount + other.withinToleranceCount)
                     .build();
         }
     }

@@ -95,6 +95,7 @@ public class DiffService {
             }
 
             publishDifferences(coreResult, lifecycle, diffContext);
+            publishWithinTolerance(coreResult, lifecycle, diffContext);
             lifecycle.onDiffComplete(coreResult, diffContext);
 
             // Convert core result to CLI result
@@ -185,6 +186,19 @@ public class DiffService {
     }
 
     /**
+     * 容差内行走单独事件：它们不是差异，混进 {@code onDifferencesFound} 会污染 sink 的
+     * 行数统计、截断标记与"已写差异数"。
+     */
+    private void publishWithinTolerance(DiffResult coreResult, DiffLifecycle lifecycle, DiffContext diffContext)
+            throws Exception {
+        if (coreResult == null || coreResult.getWithinToleranceDifferences() == null
+                || coreResult.getWithinToleranceDifferences().isEmpty()) {
+            return;
+        }
+        lifecycle.onWithinToleranceFound(coreResult.getWithinToleranceDifferences(), diffContext);
+    }
+
+    /**
      * Convert core DiffResult to CLI DiffResult.
      */
     private CliDiffResult convertToCLIResult(DiffResult coreResult, String strategy, CliConfiguration config) {
@@ -213,6 +227,8 @@ public class DiffService {
                 .sourceRowCount(stats.getSourceRowCount())
                 .targetRowCount(stats.getTargetRowCount())
                 .differences(convertDiffRows(coreResult.getDifferences()))
+                .withinToleranceDifferences(convertDiffRows(coreResult.getWithinToleranceDifferences()))
+                .withinToleranceCount(stats.getWithinToleranceCount())
                 .tableMetadata(tableMetadata)
                 .infoTree(coreResult.getInfoTree() != null && coreResult.getInfoTree().isPresent()
                         ? coreResult.getInfoTree().orElse(null)

@@ -68,6 +68,11 @@ public class SinkManager {
         diffRecordSinks.forEach(sink -> safeRun(() -> sink.onDiffRecords(rows, context)));
     }
 
+    /** 容差内行只给 diff-record 类 sink：result sink 负责统计，行级输出走记录通道。 */
+    public void onWithinToleranceRecords(List<DiffRow> rows, DiffContext context) {
+        diffRecordSinks.forEach(sink -> safeRun(() -> sink.onWithinToleranceRecords(rows, context)));
+    }
+
     public void onResult(DiffResult result, DiffContext context) {
         resultSinks.forEach(sink -> safeRun(() -> sink.onResult(result, context)));
     }

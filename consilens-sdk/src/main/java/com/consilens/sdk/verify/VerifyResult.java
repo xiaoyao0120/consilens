@@ -24,6 +24,10 @@ public class VerifyResult {
     @Builder.Default
     private List<PolicyCheck> checks = Collections.emptyList();
 
+    /** 容差内（未计入差异）的行样本；报告里单列，不参与 verdict 判定。 */
+    @Builder.Default
+    private List<com.consilens.core.diff.DiffRow> withinToleranceDifferences = Collections.emptyList();
+
     /** Populated when the verdict is FAIL/INCONCLUSIVE to explain the outcome. */
     private String message;
 }

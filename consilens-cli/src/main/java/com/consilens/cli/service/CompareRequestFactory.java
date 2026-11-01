@@ -6,6 +6,7 @@ import com.consilens.cli.model.ComparisonConfig;
 import com.consilens.cli.model.ConnectionConfig;
 import com.consilens.cli.model.FieldExpressionConfig;
 import com.consilens.cli.model.normalization.NormalizationConfig;
+import com.consilens.cli.model.normalization.TolerancePolicyConfig;
 import com.consilens.cli.model.normalization.TypeNormalizationRule;
 import com.consilens.connector.api.config.ConnectorConfig;
 import com.consilens.connector.api.model.ComparisonSpec;
@@ -480,8 +481,19 @@ public class CompareRequestFactory {
                 .maxDurationMs(config.getStrategy().getMaxDurationMs())
                 .maxRowsScanned(config.getStrategy().getMaxRowsScanned())
                 .maxBytesFetched(config.getStrategy().getMaxBytesFetched())
+                // 容差内行怎么处置：默认 ignore（判等、不计差异、报告单列）；
+                // report 是审计档，回到"容差内也报差异"的旧口径。这里显式写出生效值，
+                // 让 artifact / 集群任务里能直接看到本次执行用的是哪个口径。
+                .withinTolerance(tolerancePolicy(config).normalizedMode())
+                .withinToleranceSamples(tolerancePolicy(config).effectiveReportSamples())
                 .attributes(attributes.isEmpty() ? null : attributes)
                 .build();
+    }
+
+    private TolerancePolicyConfig tolerancePolicy(CliConfiguration config) {
+        return config.getNormalization() != null && config.getNormalization().getTolerance() != null
+                ? config.getNormalization().getTolerance()
+                : new TolerancePolicyConfig();
     }
 
     private long resolveBisectionThreshold(CliConfiguration config) {

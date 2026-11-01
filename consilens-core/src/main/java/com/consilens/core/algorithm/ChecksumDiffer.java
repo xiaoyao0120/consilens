@@ -54,6 +54,12 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     private InfoTreeRecorder tailInfoRecorder;
     private final AtomicLong targetMissingCount = new AtomicLong(0);
     private final AtomicLong mismatchCount = new AtomicLong(0);
+    /** 容差内行数（默认口径不计入 totalDifferences，只在报告里单列）。 */
+    private final AtomicLong withinToleranceCount = new AtomicLong(0);
+    /** 容差内行样本（受 withinToleranceSamples 上限约束；跨分段串行写入）。 */
+    private final List<DiffRow> withinToleranceRows = java.util.Collections.synchronizedList(new ArrayList<>());
+    /** 容差内行的去重身份（与差异行分开，互不吞并）。 */
+    private final Set<String> reportedWithinToleranceKeys = ConcurrentHashMap.newKeySet();
     private final ProgressReporter progressReporter;
     private final AtomicLong segmentSequence = new AtomicLong(0);
     private final Map<DatabaseAdapter, TableSegmenter> segmenterCache = new ConcurrentHashMap<>();
@@ -911,6 +917,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
             try {
                 RowHashSnapshot snapshot = diffData.plan;
                 List<DiffRow> differences = new ArrayList<>();
+                List<DiffRow> withinTolerance = new ArrayList<>();
 
                 if (snapshot.totalDifferences() > 0) {
                     // 行哈希只是"候选"筛选：不同方言/格式下同一行可能哈希不同（反之
@@ -925,7 +932,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                             differences.addAll(compareKeyRows(
                                     Collections.singletonList(row), Collections.emptyList(),
                                     table1, table2, diffData.columnTypes1, diffData.columnTypes2,
-                                    handler1, handler2));
+                                    handler1, handler2, withinTolerance));
                         }
                     }
 
@@ -935,7 +942,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                             differences.addAll(compareKeyRows(
                                     Collections.emptyList(), Collections.singletonList(row),
                                     table1, table2, diffData.columnTypes1, diffData.columnTypes2,
-                                    handler1, handler2));
+                                    handler1, handler2, withinTolerance));
                         }
                     }
 
@@ -946,7 +953,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                             differences.addAll(compareKeyRows(
                                     Collections.singletonList(row1), Collections.singletonList(row2),
                                     table1, table2, diffData.columnTypes1, diffData.columnTypes2,
-                                    handler1, handler2));
+                                    handler1, handler2, withinTolerance));
                         }
                     }
                 }
@@ -956,6 +963,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                         (int) Math.min(snapshot.table2RowCount, Integer.MAX_VALUE),
                         differences.size());
 
+                storeWithinToleranceRows(infoTreeRecorder, differences, withinTolerance, segmentId);
                 storeDifferences(infoTreeRecorder, differences, segmentId);
                 infoTreeRecorder.addRowsFetched(segmentId,
                         snapshot.table1RowCount + snapshot.table2RowCount);
@@ -993,14 +1001,20 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     private List<DiffRow> compareKeyRows(List<Object[]> rows1, List<Object[]> rows2,
             TableSegment table1, TableSegment table2,
             Map<String, DataType> columnTypes1, Map<String, DataType> columnTypes2,
-            DataTypeHandler handler1, DataTypeHandler handler2) {
-        return LocalDiffEngine.findDifferencesWithTolerance(
+            DataTypeHandler handler1, DataTypeHandler handler2,
+            List<DiffRow> withinTolerance) {
+        LocalDiffEngine.ToleranceOutcome outcome = LocalDiffEngine.findDifferencesWithToleranceOutcome(
                 rows1, rows2,
                 table1.getKeyColumns(), table1.getExtraColumns(),
                 table2.getKeyColumns(), table2.getExtraColumns(),
                 columnTypes1, columnTypes2,
                 handler1, handler2,
-                config.getNormalizationSpec());
+                config.getNormalizationSpec(),
+                true);
+        if (withinTolerance != null) {
+            withinTolerance.addAll(outcome.getWithinTolerance());
+        }
+        return outcome.getDifferences();
     }
 
     private CompletableFuture<Void> performFullDataComparison(
@@ -1021,7 +1035,7 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                         Map<String, DataType> columnTypes1 = extractColumnTypes(table1);
                         Map<String, DataType> columnTypes2 = extractColumnTypes(table2);
 
-                        List<DiffRow> differences = LocalDiffEngine.findDifferencesWithTolerance(
+                        LocalDiffEngine.ToleranceOutcome outcome = LocalDiffEngine.findDifferencesWithToleranceOutcome(
                                 snapshot.rows1, snapshot.rows2,
                                 table1.getKeyColumns(),
                                 table1.getExtraColumns(),
@@ -1031,11 +1045,14 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                                 columnTypes2,
                                 dataTypeHandler(table1),
                                 dataTypeHandler(table2),
-                                config.getNormalizationSpec());
+                                config.getNormalizationSpec(),
+                                true);
+                        List<DiffRow> differences = outcome.getDifferences();
 
                         performanceMonitor.recordLocalComparison(segmentId,
                                 snapshot.rows1.size(), snapshot.rows2.size(), differences.size());
 
+                        storeWithinToleranceRows(infoTreeRecorder, differences, outcome.getWithinTolerance(), segmentId);
                         storeDifferences(infoTreeRecorder, differences, segmentId);
                         infoTreeRecorder.addRowsFetched(segmentId, snapshot.rows1.size() + snapshot.rows2.size());
                         budgetGuard.addRowsScanned(snapshot.rows1.size() + snapshot.rows2.size());
@@ -1587,10 +1604,95 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
     }
 
     /**
+     * 把容差内行从差异列表里分走：默认口径下它们不计入 totalDifferences，也不落差异 sink。
+     * REPORT 口径原样返回（仍然算差异），只靠 metadata 让报告能标出来。
+     * 单独抽出来是为了让"谁计数"这件事只有一个入口，也便于直接单测。
+     */
+    List<DiffRow> partitionWithinTolerance(List<DiffRow> rows) {
+        if (rows == null || rows.isEmpty()) {
+            return rows == null ? List.of() : rows;
+        }
+        if (config.getWithinToleranceMode() != com.consilens.core.compare.WithinToleranceMode.IGNORE) {
+            return rows;
+        }
+        List<DiffRow> realDifferences = new ArrayList<>(rows.size());
+        for (DiffRow row : rows) {
+            if (row != null && row.isWithinTolerance()) {
+                collectWithinToleranceRow(row);
+            } else {
+                realDifferences.add(row);
+            }
+        }
+        return realDifferences;
+    }
+
+    /** 容差内行数（含因样本上限未保留的部分）。 */
+    long withinToleranceCount() {
+        return withinToleranceCount.get();
+    }
+
+    /** 已保留的容差内行样本（上限由 withinToleranceSamples 控制）。 */
+    List<DiffRow> withinToleranceRows() {
+        synchronized (withinToleranceRows) {
+            return new ArrayList<>(withinToleranceRows);
+        }
+    }
+
+    /**
+     * 收集容差内行：计数永远累加（报告里要显示"有几行被容差吸收"），行样本按上限保留。
+     * 去重身份与差异行分开，避免同一把键既算差异又算"容差内"时互相吞并。
+     */
+    private void collectWithinToleranceRow(DiffRow row) {
+        Object occurrence = row.getMetadata() == null ? null : row.getMetadata().get("occurrence");
+        String identity = row.getOperation() + "\u0001" + row.getPrimaryKey()
+                + "\u0001" + (occurrence == null ? "" : occurrence);
+        if (!reportedWithinToleranceKeys.add(identity)) {
+            return;
+        }
+        withinToleranceCount.incrementAndGet();
+        int limit = config.getWithinToleranceSamples();
+        if (limit <= 0) {
+            return;
+        }
+        synchronized (withinToleranceRows) {
+            if (withinToleranceRows.size() < limit) {
+                withinToleranceRows.add(row);
+            }
+        }
+    }
+
+    /**
+     * 容差内行的统一入口：
+     * <ul>
+     *   <li>任何口径都计数并保留样本——报告要能说"这 1 行是容差吸收的"；</li>
+     *   <li>REPORT 口径下同时把它们并入差异列表（回到"容差内也报差异"的旧口径）。</li>
+     * </ul>
+     * IGNORE 口径下不并入，因此它们不会落 diff sink、也不会进入 totalDifferences。
+     */
+    void storeWithinToleranceRows(InfoTreeRecorder infoTreeRecorder, List<DiffRow> differences,
+                                  List<DiffRow> rows, String segmentId) {
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        for (DiffRow row : rows) {
+            collectWithinToleranceRow(row);
+        }
+        if (config.getWithinToleranceMode() == com.consilens.core.compare.WithinToleranceMode.REPORT) {
+            differences.addAll(rows);
+            return;
+        }
+        infoTreeRecorder.addMetric(segmentId, "withinTolerance", rows.size());
+    }
+
+    /**
      * Store differences in the internal collection for final result.
      */
     private void storeDifferences(InfoTreeRecorder infoTreeRecorder, List<DiffRow> differences, String segmentId) {
         if (differences == null || differences.isEmpty()) {
+            return;
+        }
+        differences = partitionWithinTolerance(differences);
+        if (differences.isEmpty()) {
             return;
         }
         // 主扫描与尾部补扫可能对同一把键各报一次（实测 dq_cmp_edge_* 的 'abc' 被报两次），
@@ -1953,12 +2055,19 @@ public class ChecksumDiffer extends TableDiffer implements AutoCloseable {
                 .totalDifferences(totalDifferences)
                 .processingTimeMs(durationMs)
                 .unchangedCount(Math.max(0, Math.min(sourceRowCount, targetRowCount) - mismatched))
+                .withinToleranceCount(withinToleranceCount.get())
                 .build();
 
         completeDiff(statistics);
 
+        // REPORT 口径下容差内行已经作为普通差异进入 differences，不能再作为"样本"重复下发，
+        // 否则消费方（CSV 旁挂文件 / console 块）会把同一行列两遍。
+        List<DiffRow> withinTolerance = config.getWithinToleranceMode()
+                == com.consilens.core.compare.WithinToleranceMode.IGNORE
+                ? withinToleranceRows() : List.of();
         return DiffResult.builder()
                 .differences(getCollectedDifferences())
+                .withinToleranceDifferences(withinTolerance)
                 .statistics(statistics)
                 .sourceTablePath(table1.getTablePath())
                 .targetTablePath(table2.getTablePath())
