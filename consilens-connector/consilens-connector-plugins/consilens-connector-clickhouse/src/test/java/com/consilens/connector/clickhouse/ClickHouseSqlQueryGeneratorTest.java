@@ -114,4 +114,12 @@ class ClickHouseSqlQueryGeneratorTest {
             generator.getBatchInsertSQL("users", columns, 0);
         });
     }
+    @Test
+    void keyMultiplicityFilterIsDisabledBecauseClickHouseRejectsCorrelatedSubqueries() {
+        // 键多重性过滤器依赖关联子查询；ClickHouse 不支持，硬用会把重复键重复计入 presence
+        // （真机 join-edge-dup 期望 (6,3,1,2) 实测 (11,6,3,2)），因此与 Doris/Trino 一致退化为
+        // 整表本地多重集配对。
+        assertFalse(generator.supportsKeyMultiplicityFilter());
+    }
+
 }

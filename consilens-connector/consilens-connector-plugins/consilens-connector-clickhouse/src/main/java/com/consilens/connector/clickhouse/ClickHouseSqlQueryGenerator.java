@@ -30,6 +30,20 @@ public class ClickHouseSqlQueryGenerator extends BaseSqlQueryGenerator {
         return true;
     }
 
+    /**
+     * ClickHouse 不支持常规关联子查询（correlated subquery 需实验开关），而键多重性过滤器
+     * （{@code EXISTS (SELECT 1 FROM t WHERE t.k = outer.k GROUP BY ... HAVING COUNT(*) > 1)}）
+     * 依赖它：子查询里的外层列会被当成自身列/常量解析，导致重复键集合判别错误。
+     *
+     * <p>真机表现：`clickhouse-dqcmp-09-join-edge-dup` 期望 {@code (6,3,1,2)}，实际
+     * {@code (11,6,3,2)}——重复键被重复计入 presence。与其他不支持的方言（Doris/Trino）一致，
+     * 这里退化为**整表本地多重集配对**：结果与 checksum/streaming 路径一致，只是少了 SQL 侧过滤。
+     */
+    @Override
+    public boolean supportsKeyMultiplicityFilter() {
+        return false;
+    }
+
     private final CapabilityProvider capabilityProvider;
     private final DataTypeHandler dataTypeHandler;
 
