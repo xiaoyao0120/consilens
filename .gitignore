@@ -163,3 +163,21 @@ consilens-ui/.vite
 test-results
 consilens-ui/e2e
 devlop
+# 真机回归产物（develop/consilens-test）
+__pycache__/
+*.pyc
+develop/consilens-test/runs/
+develop/consilens-test/.consilens-regression/
+develop/consilens-test/datasources.json
+develop/consilens-test/logs/*.log
+develop/consilens-test/server.log
+# 历史证据与临时产物不入库：备份卷、服务端 artifact、运行日志、结果 JSON
+develop/consilens-test/backup/
+develop/consilens-test/.consilens-server/
+develop/consilens-test/logs/
+develop/consilens-test/*.json
+develop/consilens-test/*.log
+develop/consilens-test/*.log.*
+!develop/consilens-test/regression-*/**/*.json
+!develop/consilens-test/regression-*/**/*.jsonl
+
