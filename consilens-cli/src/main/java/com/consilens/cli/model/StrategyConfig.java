@@ -12,6 +12,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 /**
  * Comparison strategy configuration.
  */
@@ -77,6 +79,19 @@ public class StrategyConfig {
     /** 累计取回字节预算；null 表示不限。 */
     @JsonProperty("maxBytesFetched")
     private Long maxBytesFetched;
+
+    /**
+     * 显式计划偏好（可选）。为空时按 {@link #mode} 推导：{@code join} → server-join 且禁止回退，
+     * 其余 → pushdown-checksum / streaming-merge 且允许回退。
+     *
+     * <p>用于表达"只允许某条计划、不允许回退"的场景（例如专门校验 pushdown-checksum 本身）。
+     */
+    @JsonProperty("preferredPlans")
+    private List<String> preferredPlans;
+
+    /** 与 {@link #preferredPlans} 配套；显式给了计划但没给该值时，默认不允许回退。 */
+    @JsonProperty("allowFallback")
+    private Boolean allowFallback;
 
     @JsonIgnore
     public ComparisonStrategy getModeEnum() {

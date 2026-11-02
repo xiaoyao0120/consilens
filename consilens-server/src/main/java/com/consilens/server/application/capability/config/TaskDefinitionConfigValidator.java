@@ -10,6 +10,10 @@ import java.util.Map;
  * Config-level validation before a task definition write: both endpoints must
  * reference existing datasources via datasourceId (no inline connections) and
  * the declared endpoint type, when present, must match the datasource type.
+ *
+ * <p>任务定义与 CLI 配置同构（{@code source/target} + {@code resource}），数据源引用允许写在
+ * endpoint 上（{@code source.datasourceId}），也允许写在 CLI 风格的
+ * {@code source.connection.datasourceId} 里。
  */
 @Component
 public class TaskDefinitionConfigValidator {
@@ -34,7 +38,15 @@ public class TaskDefinitionConfigValidator {
         Map<String, Object> endpoint = (Map<String, Object>) raw;
         Object id = endpoint.get("datasourceId");
         if (id == null || String.valueOf(id).isBlank()) {
-            throw new IllegalArgumentException("config." + side + ".datasourceId is required");
+            Object connection = endpoint.get("connection");
+            if (connection instanceof Map) {
+                id = ((Map<String, Object>) connection).get("datasourceId");
+            }
+        }
+        if (id == null || String.valueOf(id).isBlank()) {
+            throw new IllegalArgumentException(
+                    "config." + side + ".datasourceId is required"
+                            + "（可写在 endpoint 上，或 CLI 风格的 " + side + ".connection.datasourceId）");
         }
         Long datasourceId;
         try {

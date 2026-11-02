@@ -524,9 +524,16 @@ public class TaskDefinitionServiceImpl implements TaskDefinitionService {
         return false;
     }
 
+    /**
+     * 用**执行期同一套解析**校验定义，而不是再走一次 objectMapper 直转。
+     *
+     * <p>此前这里固定 {@code convertValue(config, ServerCompareConfig.class)}，只认老的服务端形状；
+     * 与 CLI 同构的配置（{@code source/target} + {@code resource}、{@code comparison.keys/fields} 成对）
+     * 会在写入阶段直接反序列化失败，逼得调用方维护两套 schema。
+     */
     private void validateConfigSchema(Map<String, Object> config) {
         try {
-            ServerCompareConfig parsed = objectMapper.convertValue(config, ServerCompareConfig.class);
+            ServerCompareConfig parsed = configService.fromContent(config);
             configService.validate(parsed);
         } catch (IllegalArgumentException exception) {
             throw exception;

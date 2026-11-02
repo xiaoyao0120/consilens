@@ -140,9 +140,13 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
             endpoint.setConnection(fixed);
             return;
         }
-        // 情况2：connection 缺失且引用数据源 → 数据源注入
-        boolean needsInjection = connection == null || connection.isEmpty();
-        if (!needsInjection || endpoint.getDatasourceId() == null) {
+        // 情况2：引用数据源且 connection 里没有 url → 注入数据源的连接参数。
+        // CLI 同构配置的 connection 可能只写了 datasourceId/database（非空但没有 url），
+        // 旧判断 `connection.isEmpty()` 会把这种写法漏掉，最终报 "JDBC connector requires connection.url"。
+        boolean hasUrl = connection != null && connection.get("url") instanceof String
+                && !((String) connection.get("url")).isBlank();
+        boolean needsInjection = endpoint.getDatasourceId() != null && !hasUrl;
+        if (!needsInjection) {
             return;
         }
         dataSourceRepository.findById(endpoint.getDatasourceId()).ifPresentOrElse(ds -> {

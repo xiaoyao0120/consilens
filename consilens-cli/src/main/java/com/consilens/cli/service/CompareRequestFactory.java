@@ -439,6 +439,17 @@ public class CompareRequestFactory {
     }
 
     private CompareStrategyPreference toStrategyPreference(CliConfiguration config) {
+        List<String> explicitPlans = config.getStrategy() == null
+                ? null : config.getStrategy().getPreferredPlans();
+        if (explicitPlans != null && !explicitPlans.isEmpty()) {
+            // 显式计划优先：支持"只跑 pushdown-checksum / 只跑 server-join 且不许回退"。
+            Boolean allowFallback = config.getStrategy().getAllowFallback();
+            return CompareStrategyPreference.builder()
+                    .preferredPlans(List.copyOf(explicitPlans))
+                    .allowFallback(allowFallback != null && allowFallback)
+                    .build();
+        }
+
         List<String> preferredPlans;
         boolean allowFallback;
         if ("join".equalsIgnoreCase(config.getStrategyMode())) {

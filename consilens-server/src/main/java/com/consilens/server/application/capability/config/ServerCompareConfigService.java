@@ -503,11 +503,9 @@ public class ServerCompareConfigService {
         }
 
         Map<String, Object> hints = new LinkedHashMap<>();
-        String mode = string(strategy.get("mode"));
-        if (!isBlank(mode)) {
-            hints.put("strategyPreference", Map.of(
-                    "preferredPlans", List.of(mode.trim().toLowerCase()),
-                    "allowFallback", true));
+        Map<String, Object> strategyPreference = strategyPreferenceFromStrategy(strategy);
+        if (strategyPreference != null) {
+            hints.put("strategyPreference", strategyPreference);
         }
 
         ServerCompareConfig config = ServerCompareConfig.builder()
@@ -578,14 +576,44 @@ public class ServerCompareConfigService {
             readOptions.put("options", options);
         }
         Map<String, Object> filters = mapFrom(comparison.get("filters"));
+        Map<String, Object> connection = mapFrom(endpoint.get("connection"));
+        // 统一形状：CLI 的 source/target + resource 结构，加上服务端的数据源引用。
+        // datasourceId/database 允许写在 endpoint 上，也允许写在 connection 块里（更贴近 CLI 的 connection 语义）。
+        Long datasourceId = datasourceId(endpoint.get("datasourceId") != null
+                ? endpoint.get("datasourceId") : connection.get("datasourceId"));
+        String database = trim(string(endpoint.get("database")));
+        if (isBlank(database)) {
+            database = trim(string(connection.get("database")));
+        }
         return EndpointConfig.builder()
                 .type(string(endpoint.get("type")))
                 .table(table)
                 .query(query)
                 .filter(string(filters.get(side)))
-                .connection(mapFrom(endpoint.get("connection")))
+                .datasourceId(datasourceId)
+                .database(database)
+                .connection(connection)
                 .readOptions(readOptions)
                 .build();
+    }
+
+    /** 解析 datasourceId：支持数字/字符串；非法值要报错，不能静默当成未配置。 */
+    private Long datasourceId(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        if (raw instanceof Number) {
+            return ((Number) raw).longValue();
+        }
+        String text = String.valueOf(raw).trim();
+        if (text.isEmpty()) {
+            return null;
+        }
+        try {
+            return Long.valueOf(text);
+        } catch (NumberFormatException exception) {
+            throw new InvalidInputException("datasourceId is not a number: " + text);
+        }
     }
 
     private List<String> cliIgnoreColumns(Map<String, Object> comparison) {
@@ -794,6 +822,36 @@ public class ServerCompareConfigService {
                 .maxBytesFetched(longValue(merged.get("maxBytesFetched")))
                 .attributes(merged.isEmpty() ? null : merged)
                 .build();
+    }
+
+    /**
+     * CLI 的 {@code strategy.mode} → 计划偏好，口径与 CLI 的
+     * {@code CompareRequestFactory#toStrategyPreference} 完全一致：
+     * {@code join} 强制 {@code server-join} 且禁止回退，其余（checksum）优先
+     * {@code pushdown-checksum}/{@code streaming-merge} 且允许回退。
+     *
+     * <p>此前这里直接拿 mode 当计划名（{@code "checksum"}）并统一 {@code allowFallback=true}，
+     * 与 CLI 行为不一致：join 任务可能悄悄回退到 checksum，结论看似一样、实际测的不是目标计划。
+     */
+    private Map<String, Object> strategyPreferenceFromStrategy(Map<String, Object> strategy) {
+        List<String> explicit = listFrom(strategy.get("preferredPlans"));
+        if (!explicit.isEmpty()) {
+            Object fallback = strategy.get("allowFallback");
+            boolean allow = fallback instanceof Boolean && (Boolean) fallback;
+            return Map.of("preferredPlans", explicit, "allowFallback", allow);
+        }
+        return strategyPreferenceFromMode(string(strategy.get("mode")));
+    }
+
+    private Map<String, Object> strategyPreferenceFromMode(String mode) {
+        if (isBlank(mode)) {
+            return null;
+        }
+        if ("join".equalsIgnoreCase(mode.trim())) {
+            return Map.of("preferredPlans", List.of("server-join"), "allowFallback", false);
+        }
+        return Map.of("preferredPlans", List.of("pushdown-checksum", "streaming-merge"),
+                "allowFallback", true);
     }
 
     private CompareStrategyPreference strategyPreference(Map<String, Object> hints) {
