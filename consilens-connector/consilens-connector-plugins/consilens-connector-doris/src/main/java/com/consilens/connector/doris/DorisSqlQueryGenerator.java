@@ -25,6 +25,17 @@ import java.util.Map;
  */
 public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
 
+    /**
+     * 派生表里的 ORDER BY 必须带 LIMIT，否则 MySQL 系优化器会丢弃排序，GROUP_CONCAT 顺序不稳定，
+     * checksum 会随机变化。
+     *
+     * <p>Doris 解析 LIMIT 参数时按有符号 BIGINT 处理，沿用 MySQL 的 ULONG 上限
+     * （18446744073709551615）会直接抛
+     * {@code NumberFormatException: For input string: "18446744073709551615"}，
+     * 因此这里改用 BIGINT 上限，语义上同样是“不设上限”。
+     */
+    private static final String UNBOUNDED_LIMIT = "9223372036854775807";
+
     @Override
     public boolean backslashEscapesStringLiterals() {
         return true;
@@ -131,9 +142,9 @@ public class DorisSqlQueryGenerator extends BaseSqlQueryGenerator {
             }
 
             // Order by pk_key to ensure deterministic checksum。
-            // 派生表里的 ORDER BY 没有 LIMIT 会被 MySQL 系优化器直接丢弃（TiDB/ClickHouse
-            // 生成器同样用这个写法），GROUP_CONCAT 的顺序就不再保证，checksum 会随机变化。
-            sql.append(" ORDER BY pk_key, row_checksum LIMIT 18446744073709551615");
+            // 派生表里的 ORDER BY 没有 LIMIT 会被 MySQL 系优化器直接丢弃，GROUP_CONCAT
+            // 的顺序就不再保证，checksum 会随机变化；Doris 不接受 ULONG 上限，用 UNBOUNDED_LIMIT。
+            sql.append(" ORDER BY pk_key, row_checksum LIMIT ").append(UNBOUNDED_LIMIT);
             sql.append(") AS ordered_data) AS data");
         }
 
