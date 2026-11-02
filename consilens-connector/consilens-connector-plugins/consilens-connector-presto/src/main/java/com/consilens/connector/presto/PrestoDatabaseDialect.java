@@ -37,6 +37,16 @@ public class PrestoDatabaseDialect extends AbstractDatabaseDialect {
         return ConnectorTypes.PRESTO;
     }
 
+    /**
+     * Presto 的 {@code DatabaseMetaData.getColumns} 在并发查询下会偶发挂起（无超时可设），
+     * 真机表现为 schema 发现阶段卡住 600s+（presto-dqcmp-03-edge 等任务 TIMEOUT），
+     * 而服务端 {@code SHOW COLUMNS} 同样数据是毫秒级返回。这里改为走 result-set 发现。
+     */
+    @Override
+    public boolean supportsJdbcMetadata() {
+        return false;
+    }
+
     @Override
     public String getJdbcDriverClassName() {
         return "io.prestosql.jdbc.PrestoDriver";

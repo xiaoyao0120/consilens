@@ -446,7 +446,10 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
         log.debug("Discovering JDBC schema for {}", tablePath.getFullPath());
         try (Connection jdbcConnection = openConnection()) {
             SchemaDescriptor viaMetadata = null;
-            try (ResultSet columns = metadataColumns(jdbcConnection, tablePath)) {
+            // 部分方言的 DatabaseMetaData.getColumns 会偶发挂起且无法设超时（典型：Presto），
+            // 由方言声明能否安全使用 JDBC 元数据；不支持时直接走 result-set 发现。
+            if (dialect.supportsJdbcMetadata()) {
+                try (ResultSet columns = metadataColumns(jdbcConnection, tablePath)) {
                 List<FieldDescriptor> fields = new ArrayList<>();
                 while (columns.next()) {
                     String columnName = columns.getString("COLUMN_NAME");
@@ -483,6 +486,7 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
                 // blow up mid-iteration; fall back to the result-set based discovery.
                 log.info("DatabaseMetaData.getColumns failed for {} ({}), falling back to result-set discovery",
                         tablePath.getFullPath(), e.getMessage());
+                }
             }
             if (viaMetadata == null) {
                 return discoverSchemaFromResultSet(jdbcConnection, tablePath);

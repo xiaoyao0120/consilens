@@ -148,6 +148,18 @@ public interface DatabaseDialect {
     }
 
     /**
+     * 是否可以用 JDBC {@link java.sql.DatabaseMetaData} 做 schema 发现。
+     *
+     * <p>绝大多数方言可以，且元数据比 result-set 更完整（能给出 DECIMAL 精度等）。
+     * 但个别驱动的 {@code getColumns} 在并发查询下会**偶发挂起且无法设置超时**（典型：Presto），
+     * 这类方言应返回 {@code false}，让 schema 发现直接走
+     * {@code SELECT * FROM t WHERE 1=0} 的 result-set 路径。
+     */
+    default boolean supportsJdbcMetadata() {
+        return true;
+    }
+
+    /**
      * 是否支持 ANSI 时间字面量（{@code DATE '2026-01-01'} / {@code TIMESTAMP '...'}）。
      * SQL Server 不接受这两种字面量，只接受可隐式转换的普通字符串；其余方言默认支持。
      *
