@@ -667,4 +667,34 @@ class RunTaskHandlerTest {
                 .isTrue();
         assertThat(RunTaskHandler.isRetryable(new RuntimeException("timeout"))).isTrue();
     }
+    @Test
+    void rootCauseMessageIsAppendedSoCallersSeeActionableHint() {
+        RuntimeException wrapped = new RuntimeException("Table diff failed",
+                new IllegalArgumentException("Key column 'k1' is nullable; set allowNullableKeys=true"));
+
+        assertThat(RunTaskHandler.withRootCauseMessage(wrapped, 2000))
+                .isEqualTo("Table diff failed: Key column 'k1' is nullable; set allowNullableKeys=true");
+    }
+
+    @Test
+    void rootCauseMessageIsNotDuplicatedOrInvented() {
+        assertThat(RunTaskHandler.withRootCauseMessage(new RuntimeException("table not found"), 2000))
+                .isEqualTo("table not found");
+
+        RuntimeException alreadyIncluded = new RuntimeException("outer: inner detail",
+                new IllegalStateException("inner detail"));
+        assertThat(RunTaskHandler.withRootCauseMessage(alreadyIncluded, 2000))
+                .isEqualTo("outer: inner detail");
+    }
+
+    @Test
+    void rootCauseMessageIsTruncatedToConfiguredLimit() {
+        RuntimeException longMessage = new RuntimeException("outer",
+                new IllegalStateException("0123456789012345678901234567890123456789"));
+
+        String message = RunTaskHandler.withRootCauseMessage(longMessage, 20);
+
+        assertThat(message).hasSize(23).endsWith("...");
+    }
+
 }

@@ -45,11 +45,13 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -289,7 +291,8 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
             }
             throw exception;
         } catch (Exception exception) {
-            String safeMessage = JdbcConnectionSupport.maskMessage(exception.getMessage());
+            String safeMessage = JdbcConnectionSupport.maskMessage(
+                    withRootCauseMessage(exception, ERROR_MESSAGE_MAX_LENGTH));
             log.error("run failed: instanceKey={}, errorCode={}, reason={}",
                     context.getInstanceKey(), "RUN_EXECUTION_ERROR", safeMessage, exception);
             ArtifactRefDto artifact = writeFailure(context, request, startedAt, "RUN_EXECUTION_ERROR", safeMessage);
@@ -299,6 +302,50 @@ public class RunTaskHandler implements CapabilityHandler<RunRequest> {
             log.info("run finished: instanceKey={}, elapsedMs={}",
                     context.getInstanceKey(), Duration.between(startedAt, Instant.now()).toMillis());
         }
+    }
+
+    /**
+     * 执行失败信息里保留根因。
+     *
+     * <p>引擎在比对失败时会把底层异常包装成 {@code RuntimeException("Table diff failed")} 这类
+     * 只描述“哪一步失败”的信息，真正可操作的提示（例如
+     * {@code Key column ... is nullable ... allowNullableKeys=true}）只存在于 cause 链里，
+     * 调用方/负向探针只能拿到外层文案，排障必须翻服务端日志。
+     *
+     * <p>这里把最深层 cause 的 message 追加到外层 message 之后（去重、限长），保持原有前缀不变。
+     */
+    static final int ERROR_MESSAGE_MAX_LENGTH = 2000;
+
+    static String withRootCauseMessage(Throwable exception, int maxLength) {
+        if (exception == null) {
+            return null;
+        }
+        String outer = exception.getMessage();
+        StringBuilder text = new StringBuilder(outer == null ? "" : outer);
+
+        String deepest = null;
+        Set<String> visited = new HashSet<>();
+        Throwable current = exception;
+        while (current != null) {
+            String key = current.getClass().getName() + "#" + current.getMessage();
+            if (!visited.add(key)) {
+                break;
+            }
+            String message = current.getMessage();
+            if (message != null && !message.isBlank()) {
+                deepest = message;
+            }
+            current = current.getCause();
+        }
+        if (deepest != null && (outer == null || !outer.contains(deepest))) {
+            if (text.length() > 0) {
+                text.append(": ");
+            }
+            text.append(deepest);
+        }
+
+        String result = text.toString();
+        return result.length() <= maxLength ? result : result.substring(0, maxLength) + "...";
     }
 
     /** 集群提交执行：descriptor 渲染 + 提交/等待/取消，摘要入执行详情 */
