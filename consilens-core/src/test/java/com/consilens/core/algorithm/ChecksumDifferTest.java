@@ -308,7 +308,9 @@ class ChecksumDifferTest {
 
                         // When
                         CompletableFuture<DiffResult> future = differ.diffTables(segment1, segment2);
-                        DiffResult result = future.get(5, TimeUnit.SECONDS);
+                        // 这里的预算只是“防挂死”，不是性能断言：mock 的 10w 行分块在慢机上要几秒，
+                        // 原来的 5s 会把正常执行误判成超时（本机实测该用例 >5s）。
+                        DiffResult result = future.get(60, TimeUnit.SECONDS);
 
                         // Then
                         assertNotNull(result);
