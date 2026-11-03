@@ -39,15 +39,63 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DisplayName("跨数据库 MySQL vs Doris Checksum Diff 集成测试")
 class CrossDatabaseMysqlDorisITest {
 
-    private static final String DORIS_FE_IP = "172.30.0.2";
-    private static final String DORIS_BE_IP = "172.30.0.3";
+    /**
+     * Doris 的 FE/BE 必须互相知道 IP，所以这里要固定地址；但子网不能写死：
+     * 本机 data-lab 的 hive-net(172.30.0.0/16)、impala-net(172.31.0.0/16) 等已经占了不少网段，
+     * 写死 172.30.0.0/24 会直接 "invalid pool request: Pool overlaps"。
+     *
+     * <p>做法：向 Docker 探测一个能创建成功的 /24（创建后立即删除），再把它用于正式网络；
+     * 需要固定时用 -Ddoris.it.subnet=... 或环境变量 DORIS_IT_SUBNET 覆盖。
+     */
+    private static final String SUBNET = pickSubnet();
+    private static final String DORIS_FE_IP = ipInSubnet(2);
+    private static final String DORIS_BE_IP = ipInSubnet(3);
 
     private static final Network DORIS_NETWORK = Network.builder()
             .createNetworkCmdModifier(command -> command.withIpam(
                     new com.github.dockerjava.api.model.Network.Ipam()
                             .withConfig(new com.github.dockerjava.api.model.Network.Ipam.Config()
-                                    .withSubnet("172.30.0.0/24"))))
+                                    .withSubnet(SUBNET))))
             .build();
+
+    private static String pickSubnet() {
+        String override = System.getProperty("doris.it.subnet");
+        if (override == null || override.isBlank()) {
+            override = System.getenv("DORIS_IT_SUBNET");
+        }
+        if (override != null && !override.isBlank()) {
+            return override.trim();
+        }
+        java.util.Random random = new java.util.Random();
+        try {
+            var client = org.testcontainers.DockerClientFactory.instance().client();
+            for (int attempt = 0; attempt < 25; attempt++) {
+                String candidate = "10." + (180 + random.nextInt(60)) + "."
+                        + (1 + random.nextInt(250)) + ".0/24";
+                String name = "doris-it-probe-" + System.nanoTime();
+                try {
+                    var response = client.createNetworkCmd()
+                            .withName(name)
+                            .withIpam(new com.github.dockerjava.api.model.Network.Ipam()
+                                    .withConfig(new com.github.dockerjava.api.model.Network.Ipam.Config()
+                                            .withSubnet(candidate)))
+                            .exec();
+                    client.removeNetworkCmd(response.getId()).exec();
+                    return candidate;
+                } catch (RuntimeException clashOrError) {
+                    // 该网段被占用：换一个再试
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // 连不上 Docker 时不阻塞：真正的 Docker 缺失由 @Testcontainers 处理
+        }
+        return "10.213.7.0/24";
+    }
+
+    private static String ipInSubnet(int host) {
+        String base = SUBNET.substring(0, SUBNET.indexOf('/'));
+        return base.substring(0, base.lastIndexOf('.')) + "." + host;
+    }
 
     @Container
     private static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0")
@@ -114,6 +162,7 @@ class CrossDatabaseMysqlDorisITest {
         // Now connect with database
         String dorisUrl = "jdbc:mysql://" + dorisHost + ":" + dorisPort + "/consilens_demo?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=UTC";
         dorisAdapter = CrossDatabaseITestBase.createAdapter("doris-target", dorisUrl, "root", "", "doris");
+        waitForDorisStorage(dorisAdapter);
 
         createTestTable(mysqlAdapter, "cross_source");
         createTestTable(dorisAdapter, "cross_target");
@@ -140,6 +189,29 @@ class CrossDatabaseMysqlDorisITest {
             Thread.sleep(2000);
         }
         throw new IllegalStateException("Doris BE not alive after 120s");
+    }
+
+    /**
+     * BE 注册（Alive=true）之后还要等它的存储盘就绪，否则建表会报
+     * "Failed to find enough backend ... disks count={}"。
+     * 这里直接用一次“建空表 + 删表”探针判断，比解析 SHOW BACKENDS 的列序更稳。
+     */
+    private static void waitForDorisStorage(DatabaseAdapter adapter) throws Exception {
+        String ddl = "CREATE TABLE IF NOT EXISTS storage_probe (id INT) ENGINE=OLAP "
+                + "DUPLICATE KEY(id) DISTRIBUTED BY HASH(id) BUCKETS 1 "
+                + "PROPERTIES (\"replication_num\" = \"1\")";
+        Exception last = null;
+        for (int i = 0; i < 90; i++) {
+            try {
+                CrossDatabaseITestBase.executeSql(adapter, ddl);
+                CrossDatabaseITestBase.executeSql(adapter, "DROP TABLE IF EXISTS storage_probe");
+                return;
+            } catch (Exception exception) {
+                last = exception;
+                Thread.sleep(2000);
+            }
+        }
+        throw new IllegalStateException("Doris backend storage not ready after 180s", last);
     }
 
     private static void createTestTable(DatabaseAdapter adapter, String tableName) throws Exception {
