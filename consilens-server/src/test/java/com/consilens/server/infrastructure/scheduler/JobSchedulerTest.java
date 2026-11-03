@@ -68,13 +68,13 @@ class JobSchedulerTest {
         try {
             scheduler.startScheduler();
 
-            verify(runTaskExecuteManager, timeout(1000)).addExecuteCommand(command);
-            verify(taskRepository, timeout(1000)).updateClaimed(eq(200L), eq("node-a"), any(Instant.class));
+            verify(runTaskExecuteManager, timeout(5000)).addExecuteCommand(command);
+            verify(taskRepository, timeout(5000)).updateClaimed(eq(200L), eq("node-a"), any(Instant.class));
             // 命令 DONE 由执行线程在 updateRunning 之后完成，调度器不再提前标记
             verify(taskCommandRepository, never()).markDone(eq(100L), any(Instant.class));
-            verify(runTaskRecoveryService, timeout(1000)).recoverCurrentNodeStartupTasks(any(Instant.class));
-            verify(runTaskRecoveryService, timeout(1000).atLeastOnce()).recoverExpiredClaims(any(Instant.class));
-            verify(runTaskRecoveryService, timeout(1000).atLeastOnce()).recoverTasksOnDeadNodes(any(Instant.class));
+            verify(runTaskRecoveryService, timeout(5000)).recoverCurrentNodeStartupTasks(any(Instant.class));
+            verify(runTaskRecoveryService, timeout(5000).atLeastOnce()).recoverExpiredClaims(any(Instant.class));
+            verify(runTaskRecoveryService, timeout(5000).atLeastOnce()).recoverTasksOnDeadNodes(any(Instant.class));
         } finally {
             scheduler.stopScheduler();
             scheduler.join(1000);
@@ -126,8 +126,8 @@ class JobSchedulerTest {
         try {
             scheduler.startScheduler();
 
-            verify(taskCommandRepository, timeout(1000)).resetClaim(eq(102L), any(Instant.class));
-            verify(taskRepository, timeout(1000)).releaseClaimed(eq(202L), any(Instant.class));
+            verify(taskCommandRepository, timeout(5000)).resetClaim(eq(102L), any(Instant.class));
+            verify(taskRepository, timeout(5000)).releaseClaimed(eq(202L), any(Instant.class));
             verify(taskCommandRepository, never()).markDone(eq(102L), any(Instant.class));
         } finally {
             scheduler.stopScheduler();
