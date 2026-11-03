@@ -180,4 +180,3 @@ develop/consilens-test/*.log
 develop/consilens-test/*.log.*
 !develop/consilens-test/regression-*/**/*.json
 !develop/consilens-test/regression-*/**/*.jsonl
-
