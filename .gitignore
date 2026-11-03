@@ -180,3 +180,12 @@ develop/consilens-test/*.log
 develop/consilens-test/*.log.*
 !develop/consilens-test/regression-*/**/*.json
 !develop/consilens-test/regression-*/**/*.jsonl
+
+# AWR local runtime state
+.awr/state.db
+.awr/state.db-*
+.awr/artifacts/
+.awr/mutations/
+.awr/cache/
+.awr/clients/
+.awr/executions/
