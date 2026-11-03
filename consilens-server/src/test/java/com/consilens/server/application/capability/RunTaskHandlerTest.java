@@ -37,6 +37,26 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class RunTaskHandlerTest {
+    /** 统一形状（CLI）：connection + resource；keys 成对。 */
+    private static java.util.Map<String, Object> cliEndpoint(String type, String table,
+                                                             Long datasourceId, String database) {
+        java.util.Map<String, Object> connection = new java.util.LinkedHashMap<>();
+        if (datasourceId != null) {
+            connection.put("datasourceId", datasourceId);
+        }
+        if (database != null) {
+            connection.put("database", database);
+        }
+        return java.util.Map.of("type", type, "connection", connection,
+                "resource", java.util.Map.of("type", "table", "name", table));
+    }
+
+    /** 统一形状（CLI）：comparison.keys 成对。 */
+    private static java.util.Map<String, Object> cliKeys(String key) {
+        return java.util.Map.of("keys",
+                java.util.Map.of("source", java.util.List.of(key), "target", java.util.List.of(key)));
+    }
+
 
     @Test
     void missingDatasourceFailsLoudlyDuringInjection() {
@@ -57,9 +77,9 @@ class RunTaskHandlerTest {
         com.consilens.server.application.capability.config.ServerCompareConfig config =
                 configService.fromContent(java.util.Map.of(
                         "version", "1.0",
-                        "source", java.util.Map.of("type", "mysql", "table", "t", "datasourceId", 404),
-                        "target", java.util.Map.of("type", "mysql", "table", "t", "datasourceId", 404),
-                        "keys", java.util.List.of("id")));
+                        "source", cliEndpoint("mysql", "t", 404L, null),
+                        "target", cliEndpoint("mysql", "t", 404L, null),
+                        "comparison", cliKeys("id")));
 
         assertThrows(com.consilens.server.domain.exception.ResourceNotFoundException.class,
                 () -> handler.injectConnections(config));
@@ -175,9 +195,9 @@ class RunTaskHandlerTest {
                 configService.fromContent(java.util.Map.of(
                         "version", "1.0",
                         "goal", "check",
-                        "source", java.util.Map.of("type", "oracle", "table", "EMP", "datasourceId", 6),
-                        "target", java.util.Map.of("type", "oracle", "table", "EMP", "datasourceId", 6),
-                        "keys", java.util.List.of("EMPNO")));
+                        "source", cliEndpoint("oracle", "EMP", 6L, null),
+                        "target", cliEndpoint("oracle", "EMP", 6L, null),
+                        "comparison", cliKeys("EMPNO")));
 
         handler.injectConnections(config);
 
@@ -219,9 +239,9 @@ class RunTaskHandlerTest {
                 configService.fromContent(java.util.Map.of(
                         "version", "1.0",
                         "goal", "check",
-                        "source", java.util.Map.of("type", "mysql", "table", "orders", "datasourceId", 5),
-                        "target", java.util.Map.of("type", "mysql", "table", "orders", "datasourceId", 5),
-                        "keys", java.util.List.of("id")));
+                        "source", cliEndpoint("mysql", "orders", 5L, null),
+                        "target", cliEndpoint("mysql", "orders", 5L, null),
+                        "comparison", cliKeys("id")));
 
         handler.injectConnections(config);
 
@@ -261,10 +281,9 @@ class RunTaskHandlerTest {
         com.consilens.server.application.capability.config.ServerCompareConfig config =
                 configService.fromContent(java.util.Map.of(
                         "version", "1.0",
-                        "source", java.util.Map.of("type", "mysql", "table", "t",
-                                "datasourceId", 5, "database", "endpoint-db"),
-                        "target", java.util.Map.of("type", "mysql", "table", "t"),
-                        "keys", java.util.List.of("id")));
+                        "source", cliEndpoint("mysql", "t", 5L, "endpoint-db"),
+                        "target", cliEndpoint("mysql", "t", null, null),
+                        "comparison", cliKeys("id")));
 
         handler.injectConnections(config);
 
@@ -294,12 +313,13 @@ class RunTaskHandlerTest {
         com.consilens.server.application.capability.config.ServerCompareConfig config =
                 configService.fromContent(java.util.Map.of(
                         "version", "1.0",
-                        "source", java.util.Map.of("type", "mysql", "table", "t",
+                        "source", java.util.Map.of("type", "mysql",
                                 "connection", java.util.Map.of(
                                         "url", "jdbc:mysql://10.0.0.5:3306/db",
-                                        "password", crypto.protect("real-pass"))),
-                        "target", java.util.Map.of("type", "mysql", "table", "t"),
-                        "keys", java.util.List.of("id")));
+                                        "password", crypto.protect("real-pass")),
+                                "resource", java.util.Map.of("type", "table", "name", "t")),
+                        "target", cliEndpoint("mysql", "t", null, null),
+                        "comparison", cliKeys("id")));
 
         handler.injectConnections(config);
 

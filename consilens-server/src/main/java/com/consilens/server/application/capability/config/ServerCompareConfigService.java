@@ -160,12 +160,29 @@ public class ServerCompareConfigService {
         return hasArtifact ? fromArtifact(request.getConfigArtifactId()) : fromContent(request.getConfigContent());
     }
 
+    /**
+     * 读取 CONFIG artifact。
+     *
+     * <p>artifact 里存的是**引擎内部**的规范化配置（{@link ServerCompareConfig} 的 JSON），
+     * 不是面向用户的 CLI 配置，所以这里直接按类型反序列化，不走 {@code fromContent} 的形状解析；
+     * 用户侧仍然只有 CLI 形状一种写法。
+     */
     public ServerCompareConfig fromArtifact(String artifactId) {
         ArtifactContentDto content = artifactService.getArtifactContent(artifactId);
         if (!"CONFIG".equals(content.getArtifactType())) {
             throw new InvalidInputException("Artifact is not a CONFIG artifact: " + artifactId);
         }
-        return parse(content.getContent());
+        try {
+            ServerCompareConfig config = objectMapper.readValue(content.getContent(),
+                    ServerCompareConfig.class);
+            validate(config);
+            return config;
+        } catch (InvalidInputException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new InvalidInputException("CONFIG artifact content is not a valid compare config: "
+                    + exception.getMessage());
+        }
     }
 
     public ServerCompareConfig fromContent(Object content) {
@@ -177,16 +194,9 @@ public class ServerCompareConfigService {
         if (content instanceof String) {
             return parse((String) content);
         }
-        // Submission normalizes YAML/JSON strings to Maps before execution, so
-        // the CLI-shaped config check must also run for Maps.
-        Map<String, Object> raw = resolveEnvironment(mapFrom(content));
-        if (isCliConfig(raw)) {
-            return fromCliConfig(raw);
-        }
-        ServerCompareConfig config = objectMapper.convertValue(raw, ServerCompareConfig.class);
-        applyTopLevelNormalization(config, raw);
-        validate(config);
-        return config;
+        // 统一形状：任务定义与 CLI 配置同构（source/target + resource、comparison.keys/fields 成对、
+        // strategy），不再维护第二套"服务端形状"，也就不需要任何形状嗅探或二次转换。
+        return fromCliConfig(resolveEnvironment(mapFrom(content)));
     }
 
     public void validate(ServerCompareConfig config) {
@@ -381,58 +391,8 @@ public class ServerCompareConfigService {
             throw new InvalidInputException("configContent does not contain a YAML/JSON object");
         }
 
-        if (isCliConfig(raw)) {
-            return fromCliConfig(resolveEnvironment(raw));
-        }
-
-        ServerCompareConfig config;
-        try {
-            config = objectMapper.convertValue(raw, ServerCompareConfig.class);
-            applyTopLevelNormalization(config, raw);
-            validate(config);
-            return config;
-        } catch (IllegalArgumentException exception) {
-            throw new InvalidInputException("configContent is not valid server config JSON");
-        }
-    }
-
-    private boolean isCliConfig(Map<String, Object> raw) {
-        Map<String, Object> comparison = raw.get("comparison") instanceof Map
-                ? (Map<String, Object>) raw.get("comparison") : Map.of();
-        Map<String, Object> source = raw.get("source") instanceof Map
-                ? (Map<String, Object>) raw.get("source") : Map.of();
-        Map<String, Object> target = raw.get("target") instanceof Map
-                ? (Map<String, Object>) raw.get("target") : Map.of();
-        return source.containsKey("resource")
-                || target.containsKey("resource")
-                || comparison.get("keys") instanceof Map
-                || comparison.get("fields") instanceof Map;
-    }
-
-    /**
-     * UI 定义（CLI 形配置）把 normalization 放在顶层；直接绑定到 ServerCompareConfig 会丢字段，
-     * 这里补一次到 comparison.normalization（hints 里的同名字段作为兜底）。
-     */
-    private void applyTopLevelNormalization(ServerCompareConfig config, Map<String, Object> raw) {
-        if (config == null) {
-            return;
-        }
-        if (config.getComparison() == null) {
-            config.setComparison(ComparisonConfig.builder().build());
-        }
-        if (config.getComparison().getNormalization() != null) {
-            return;
-        }
-        NormalizationConfig normalization = config.getNormalization();
-        if (normalization == null && raw != null) {
-            normalization = normalizationFrom(raw.get("normalization"));
-        }
-        if (normalization == null && raw != null) {
-            normalization = normalizationFrom(mapFrom(raw.get("hints")).get("normalization"));
-        }
-        if (normalization != null) {
-            config.getComparison().setNormalization(normalization);
-        }
+        // 只有一种形状：CLI 形状（含 datasourceId 的服务端扩展），不再做形状嗅探。
+        return fromCliConfig(resolveEnvironment(raw));
     }
 
     private NormalizationConfig cliNormalization(Map<String, Object> raw) {

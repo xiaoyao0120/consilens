@@ -39,6 +39,18 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class DefaultTaskDefinitionServiceTest {
+    /** 统一形状（CLI）：connection + resource。 */
+    private static Map<String, Object> cliEndpoint(String type, String table,
+                                                   Map<String, Object> connection) {
+        return Map.of("type", type, "connection", connection,
+                "resource", Map.of("type", "table", "name", table));
+    }
+
+    /** 统一形状（CLI）：comparison.keys 成对。 */
+    private static Map<String, Object> cliKeys(String key) {
+        return Map.of("keys", Map.of("source", List.of(key), "target", List.of(key)));
+    }
+
 
     private static final Long DEF_ID = 1L;
 
@@ -151,13 +163,13 @@ class DefaultTaskDefinitionServiceTest {
         connection.put("properties", "useSSL=false&password=******&ApplicationName=consilens");
         Map<String, Object> source = new java.util.LinkedHashMap<>();
         source.put("type", "mysql");
-        source.put("table", "orders");
+        source.put("resource", Map.of("type", "table", "name", "orders"));
         source.put("connection", connection);
         TaskDefinitionCreateRequest request = validRequest();
         request.setConfig(Map.of(
                 "source", source,
-                "target", Map.of("type", "mysql", "table", "orders"),
-                "keys", List.of("id")));
+                "target", cliEndpoint("mysql", "orders", Map.of()),
+                "comparison", cliKeys("id")));
 
         service.update(DEF_ID, request);
 
@@ -185,15 +197,12 @@ class DefaultTaskDefinitionServiceTest {
         connection.put("password", "******");
         Map<String, Object> source = new java.util.LinkedHashMap<>();
         source.put("type", "mysql");
-        source.put("table", "orders");
+        source.put("resource", Map.of("type", "table", "name", "orders"));
         source.put("connection", connection);
-        Map<String, Object> target = new java.util.LinkedHashMap<>();
-        target.put("type", "mysql");
-        target.put("table", "orders");
         Map<String, Object> config = new java.util.LinkedHashMap<>();
         config.put("source", source);
-        config.put("target", target);
-        config.put("keys", List.of("id"));
+        config.put("target", cliEndpoint("mysql", "orders", Map.of()));
+        config.put("comparison", cliKeys("id"));
 
         TaskDefinitionCreateRequest request = new TaskDefinitionCreateRequest();
         request.setName("legacy");
@@ -211,10 +220,10 @@ class DefaultTaskDefinitionServiceTest {
     void shouldRejectInlineConnectionPassword() {
         TaskDefinitionCreateRequest request = validRequest();
         request.setConfig(Map.of(
-                "source", Map.of("type", "mysql", "table", "orders",
-                        "connection", Map.of("url", "jdbc:mysql://x", "password", "secret")),
-                "target", Map.of("type", "mysql", "table", "orders"),
-                "keys", List.of("id")));
+                "source", cliEndpoint("mysql", "orders",
+                        Map.of("url", "jdbc:mysql://x", "password", "secret")),
+                "target", cliEndpoint("mysql", "orders", Map.of()),
+                "comparison", cliKeys("id")));
 
         assertThrows(IllegalArgumentException.class, () -> service.create(request));
     }
@@ -223,12 +232,11 @@ class DefaultTaskDefinitionServiceTest {
     void shouldRejectSensitiveConnectionProperties() {
         TaskDefinitionCreateRequest request = validRequest();
         request.setConfig(Map.of(
-                "source", Map.of("type", "mysql", "table", "orders",
-                        "connection", Map.of(
-                                "url", "jdbc:mysql://x",
-                                "properties", "useSSL=false&password=secret")),
-                "target", Map.of("type", "mysql", "table", "orders"),
-                "keys", List.of("id")));
+                "source", cliEndpoint("mysql", "orders", Map.of(
+                        "url", "jdbc:mysql://x",
+                        "properties", "useSSL=false&password=secret")),
+                "target", cliEndpoint("mysql", "orders", Map.of()),
+                "comparison", cliKeys("id")));
 
         assertThrows(IllegalArgumentException.class, () -> service.create(request));
     }
@@ -512,9 +520,9 @@ class DefaultTaskDefinitionServiceTest {
         request.setName("orders-check");
         request.setDescription("check orders");
         request.setConfig(Map.of(
-                "source", Map.of("type", "mysql", "table", "orders"),
-                "target", Map.of("type", "mysql", "table", "orders"),
-                "keys", List.of("id")));
+                "source", cliEndpoint("mysql", "orders", Map.of()),
+                "target", cliEndpoint("mysql", "orders", Map.of()),
+                "comparison", cliKeys("id")));
         return request;
     }
 

@@ -31,6 +31,10 @@ comparison:
 strategy:
   mode: join
   algorithm: concat
+  # 显式计划偏好：与 mode=join 的默认推导一致（server-join 且禁止回退），
+  # 便于演示“只跑某条计划、失败就报错”的写法。
+  preferredPlans: [server-join]
+  allowFallback: false
   bisectionFactor: 4
   bisectionThreshold: 5000
   batchSize: 500
