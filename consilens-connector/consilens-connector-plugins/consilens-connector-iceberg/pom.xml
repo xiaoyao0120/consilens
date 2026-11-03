@@ -134,5 +134,16 @@
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
+        <!--
+          orc-core:nohive 会传递 hadoop-client-api:3.3.5，与 hadoop-common:3.3.4 混用后
+          woodstox 的 shaded 类（org.apache.hadoop.shaded.com.ctc.wstx.*）缺失，
+          读 ORC 时抛 NoClassDefFoundError: InputBootstrapper。补齐同版本 shaded 运行时即可（仅测试期需要）。
+        -->
+        <dependency>
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-client-runtime</artifactId>
+            <version>3.3.5</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 </project>
