@@ -74,6 +74,14 @@ import java.util.function.Function;
 public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSupport, com.consilens.connector.api.dataset.DialectProvider {
 
     private static final int DEFAULT_STREAM_FETCH_SIZE = 1000;
+
+    // readRecord 每行调用；下面三份缓存把"每行重建列名映射/解析 key 列/建 key 集合"的开销摊到每段一次。
+    // 20k 行 × 37 列的场景下，仅 foldedFields 重建就是 74 万次 map 写入。
+    private SchemaDescriptor cachedFoldSchema;
+    private Map<String, FieldDescriptor> cachedFoldedFields = Collections.emptyMap();
+    private CompareSegment cachedKeySegment;
+    private List<String> cachedKeyColumns = Collections.emptyList();
+    private Set<String> cachedKeyColumnSet = Collections.emptySet();
     private static final Pattern PARTITION_PATTERN = Pattern.compile("PARTITION\\s+BY\\s+.*?\\(([^\\)]*)\\)",
             Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
@@ -717,16 +725,14 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
                                        List<String> selectColumns,
                                        CompareSegment segment,
                                        SchemaDescriptor schemaDescriptor) throws SQLException {
-        List<String> keyColumns = keyColumns(segment);
+        List<String> keyColumns = keyColumnsCached(segment);
+        Set<String> keyColumnSet = keyColumnSetCached(segment);
         List<Object> keyParts = new ArrayList<>(keyColumns.size());
         Map<String, CanonicalValue> values = new LinkedHashMap<>();
         Map<String, FieldDescriptor> fieldMap = schemaDescriptor.getFieldMap() != null
                 ? schemaDescriptor.getFieldMap()
                 : Collections.emptyMap();
-        Map<String, FieldDescriptor> foldedFields = new LinkedHashMap<>();
-        for (Map.Entry<String, FieldDescriptor> entry : fieldMap.entrySet()) {
-            foldedFields.putIfAbsent(entry.getKey().toLowerCase(Locale.ROOT), entry.getValue());
-        }
+        Map<String, FieldDescriptor> foldedFields = foldedFieldsCached(schemaDescriptor, fieldMap);
         for (int index = 0; index < selectColumns.size(); index++) {
             String column = selectColumns.get(index);
             FieldDescriptor field = fieldMap.get(column);
@@ -741,7 +747,7 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
             Object value = isTemporal(field)
                     ? resultSet.getString(index + 1)
                     : toPortableValue(materializeLob(resultSet.getObject(index + 1)));
-            if (keyColumns.stream().anyMatch(key -> key != null && key.equalsIgnoreCase(column))) {
+            if (keyColumnSet.contains(column.toLowerCase(Locale.ROOT))) {
                 keyParts.add(value);
             }
             values.put(column, CanonicalValue.builder()
@@ -750,6 +756,39 @@ public class JdbcDatasetHandle implements DatasetHandle, RelationalDatasetSuppor
                     .build());
         }
         return new JdbcCanonicalRecord(RecordKey.builder().parts(keyParts).build(), values);
+    }
+
+    private List<String> keyColumnsCached(CompareSegment segment) {
+        if (segment != cachedKeySegment) {
+            cachedKeySegment = segment;
+            cachedKeyColumns = keyColumns(segment);
+            Set<String> folded = new LinkedHashSet<>();
+            for (String key : cachedKeyColumns) {
+                if (key != null) {
+                    folded.add(key.toLowerCase(Locale.ROOT));
+                }
+            }
+            cachedKeyColumnSet = folded;
+        }
+        return cachedKeyColumns;
+    }
+
+    private Set<String> keyColumnSetCached(CompareSegment segment) {
+        keyColumnsCached(segment);
+        return cachedKeyColumnSet;
+    }
+
+    private Map<String, FieldDescriptor> foldedFieldsCached(SchemaDescriptor schema,
+                                                            Map<String, FieldDescriptor> fieldMap) {
+        if (schema != cachedFoldSchema) {
+            cachedFoldSchema = schema;
+            Map<String, FieldDescriptor> folded = new LinkedHashMap<>();
+            for (Map.Entry<String, FieldDescriptor> entry : fieldMap.entrySet()) {
+                folded.putIfAbsent(entry.getKey().toLowerCase(Locale.ROOT), entry.getValue());
+            }
+            cachedFoldedFields = folded;
+        }
+        return cachedFoldedFields;
     }
 
     private boolean isTemporal(FieldDescriptor field) {
