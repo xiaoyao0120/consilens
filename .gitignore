@@ -189,3 +189,5 @@ develop/consilens-test/*.log.*
 .awr/cache/
 .awr/clients/
 .awr/executions/
+# develop/ 整个目录不入库（本地保留；2026-11-05 按要求停止推送）
+/develop/
