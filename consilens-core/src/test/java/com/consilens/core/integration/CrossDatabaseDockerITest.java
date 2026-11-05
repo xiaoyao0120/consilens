@@ -57,7 +57,7 @@ class CrossDatabaseDockerITest {
         postgresAdapter = TestDatabaseHelper.createAdapter(
                 "pg-source",
                 "jdbc:postgresql://127.0.0.1:5432/consilens_demo",
-                "kuanilens", postgresPassword,
+                "consilens", postgresPassword,
                 "postgresql", ChecksumAlgorithm.CONCAT);
 
         // Oracle (port 1521)

@@ -44,9 +44,9 @@ class ClusterSubmitSupportTest {
                 .type("mysql")
                 .table("dq_cmp_alltype_a")
                 .connection(Map.of(
-                        "url", "jdbc:mysql://127.0.0.1:3466/dq_benchmark",
+                        "url", "jdbc:mysql://127.0.0.1:3306/demo",
                         "host", "127.0.0.1",
-                        "port", 3466,
+                        "port", 3306,
                         "username", "root",
                         "password", "p"))
                 .build();
@@ -57,7 +57,7 @@ class ClusterSubmitSupportTest {
         Map<String, Object> yarnConnection = connectionOf(yarn, "source");
         assertThat(yarnConnection.get("host")).isEqualTo("host.docker.internal");
         assertThat(String.valueOf(yarnConnection.get("url")))
-                .contains("host.docker.internal:3466")
+                .contains("host.docker.internal:3306")
                 .doesNotContain("127.0.0.1");
 
         Map<String, Object> k8s = support.buildDescriptor(config, false, "kubernetes");
@@ -83,7 +83,7 @@ class ClusterSubmitSupportTest {
                 .filter("pk_id IS NOT NULL")
                 .readOptions(Map.of("fetchSize", 1000))
                 .connection(Map.of(
-                        "url", "jdbc:mysql://db:3306/dq_benchmark",
+                        "url", "jdbc:mysql://db:3306/demo",
                         "host", "db",
                         "port", 3306,
                         "username", "root",
@@ -147,16 +147,16 @@ class ClusterSubmitSupportTest {
     @Test
     void shouldRewriteLoopbackPortWhenConfigured() {
         ConsilensServerProperties properties = new ConsilensServerProperties();
-        properties.getCluster().getLoopbackHosts().put("yarn", "kuanilens-mysql");
+        properties.getCluster().getLoopbackHosts().put("yarn", "mysql-host");
         properties.getCluster().getLoopbackPorts().put("yarn", 3306);
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()), properties);
         EndpointConfig loopback = EndpointConfig.builder()
                 .type("mysql")
                 .table("t")
                 .connection(Map.of(
-                        "url", "jdbc:mysql://127.0.0.1:3466/dq_benchmark",
+                        "url", "jdbc:mysql://127.0.0.1:3306/demo",
                         "host", "127.0.0.1",
-                        "port", 3466,
+                        "port", 3306,
                         "username", "root",
                         "password", "p"))
                 .build();
@@ -166,24 +166,24 @@ class ClusterSubmitSupportTest {
                 false, "yarn");
 
         Map<String, Object> connection = connectionOf(descriptor, "source");
-        assertThat(connection.get("host")).isEqualTo("kuanilens-mysql");
+        assertThat(connection.get("host")).isEqualTo("mysql-host");
         assertThat(connection.get("port")).isEqualTo(3306);
-        assertThat(String.valueOf(connection.get("url"))).isEqualTo("jdbc:mysql://kuanilens-mysql:3306/dq_benchmark");
+        assertThat(String.valueOf(connection.get("url"))).isEqualTo("jdbc:mysql://mysql-host:3306/demo");
     }
 
     @Test
     void shouldOnlyRewriteAuthorityPortInLoopbackJdbcUrl() {
         ConsilensServerProperties properties = new ConsilensServerProperties();
-        properties.getCluster().getLoopbackHosts().put("yarn", "kuanilens-mysql");
+        properties.getCluster().getLoopbackHosts().put("yarn", "mysql-host");
         properties.getCluster().getLoopbackPorts().put("yarn", 3306);
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()), properties);
         EndpointConfig loopback = EndpointConfig.builder()
                 .type("mysql")
                 .table("t")
                 .connection(Map.of(
-                        "url", "jdbc:mysql://127.0.0.1:3466/dq?connectTimeout=3466&note=:3466",
+                        "url", "jdbc:mysql://127.0.0.1:3306/dq?connectTimeout=4900&note=:4900",
                         "host", "127.0.0.1",
-                        "port", 3466,
+                        "port", 3306,
                         "username", "root",
                         "password", "p"))
                 .build();
@@ -193,13 +193,13 @@ class ClusterSubmitSupportTest {
                 false, "yarn");
 
         assertThat(String.valueOf(connectionOf(descriptor, "source").get("url")))
-                .isEqualTo("jdbc:mysql://kuanilens-mysql:3306/dq?connectTimeout=3466&note=:3466");
+                .isEqualTo("jdbc:mysql://mysql-host:3306/dq?connectTimeout=4900&note=:4900");
     }
 
     @Test
     void shouldRewriteUrlOnlyConnectionHostAndPort() {
         ConsilensServerProperties properties = new ConsilensServerProperties();
-        properties.getCluster().getLoopbackHosts().put("yarn", "kuanilens-mysql");
+        properties.getCluster().getLoopbackHosts().put("yarn", "mysql-host");
         properties.getCluster().getLoopbackPorts().put("yarn", 3306);
         ClusterSubmitSupport support = new ClusterSubmitSupport(new CapturingLocator(yarnSubmitter()), properties);
         // 只写 url、没有 host/port 字段：端口也必须从 URL 里取出来改，否则是半改写
@@ -207,7 +207,7 @@ class ClusterSubmitSupportTest {
                 .type("mysql")
                 .table("t")
                 .connection(Map.of(
-                        "url", "jdbc:mysql://127.0.0.1:3466/dq_benchmark",
+                        "url", "jdbc:mysql://127.0.0.1:3306/demo",
                         "username", "root",
                         "password", "p"))
                 .build();
@@ -218,7 +218,7 @@ class ClusterSubmitSupportTest {
 
         Map<String, Object> connection = connectionOf(descriptor, "source");
         assertThat(String.valueOf(connection.get("url")))
-                .isEqualTo("jdbc:mysql://kuanilens-mysql:3306/dq_benchmark");
+                .isEqualTo("jdbc:mysql://mysql-host:3306/demo");
         assertThat(connection).doesNotContainKey("port");
     }
 
