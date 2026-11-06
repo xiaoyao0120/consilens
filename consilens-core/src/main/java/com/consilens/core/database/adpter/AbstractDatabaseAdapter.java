@@ -625,6 +625,7 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
         return rowHashes;
     }
 
+
     @Override
     public void forEachSegmentRowHash(TableSegment segment, RowHashConsumer consumer) {
         try {
@@ -633,10 +634,17 @@ public abstract class AbstractDatabaseAdapter implements DatabaseAdapter {
             log.debug("Executing row hash query for segment: {}, keys: {}", 
                     segment.getTablePath(), segment.getKeyColumns().size());
 
+            // 行哈希 SQL 不含占位符时用普通语句：Presto 的 prepareStatement 会立刻发一次
+            // 执行取列元数据（0.286 客户端上表现为 Socket closed，见 docs/28 §11）。
+            boolean preparedRowHash = rowHashQuery != null && rowHashQuery.indexOf('?') >= 0;
             try (Connection connection = getConnection();
-                 PreparedStatement statement = connection.prepareStatement(rowHashQuery)) {
+                 Statement statement = preparedRowHash
+                         ? connection.prepareStatement(rowHashQuery)
+                         : connection.createStatement()) {
                 statement.setFetchSize(ROW_HASH_FETCH_SIZE);
-                try (ResultSet resultSet = statement.executeQuery()) {
+                try (ResultSet resultSet = preparedRowHash
+                        ? ((PreparedStatement) statement).executeQuery()
+                        : statement.executeQuery(rowHashQuery)) {
                     int keyColumnCount = segment.getKeyColumns().size();
                     int rowCount = 0;
 
